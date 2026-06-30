@@ -47,6 +47,7 @@ const DashboardsEditPage   = lazy(() => import('@/app/admin/dashboards/edit/page
 const EmailTemplatesPage   = lazy(() => import('@/app/admin/email-templates/page'))
 const EmailEventTypesPage  = lazy(() => import('@/app/admin/email-event-types/page'))
 const ModulesPage          = lazy(() => import('@/app/admin/modules/page'))
+const DashboardModulesPage = lazy(() => import('@/app/admin/dashboard-modules/page'))
 const ModulePermsPage      = lazy(() => import('@/app/admin/module-permissions/page'))
 const SettingsPage         = lazy(() => import('@/app/admin/settings/page'))
 const IdleTimeoutPage      = lazy(() => import('@/app/admin/idle-timeout/page'))
@@ -387,6 +388,7 @@ export default function App() {
           <Route path="/admin/email-templates"            element={<EmailTemplatesPage />} />
           <Route path="/admin/email-event-types"         element={<EmailEventTypesPage />} />
           <Route path="/admin/modules"                    element={<ModulesPage />} />
+          <Route path="/admin/dashboard-modules"          element={<DashboardModulesPage />} />
           <Route path="/admin/module-permissions"         element={<ModulePermsPage />} />
           <Route path="/admin/settings"                   element={<SettingsPage />} />
           <Route path="/admin/idle-timeout"               element={<IdleTimeoutPage />} />

@@ -107,6 +107,11 @@ func main() {
 	mux.Handle("GET /api/admin/modules", adminAuth(admin.Modules))
 	mux.Handle("POST /api/admin/modules", adminAuth(admin.Modules))
 	mux.Handle("PUT /api/admin/modules", adminAuth(admin.Modules))
+
+	mux.Handle("GET /api/admin/dashboard-modules", adminAuth(admin.DashboardModules))
+	mux.Handle("POST /api/admin/dashboard-modules", adminAuth(admin.DashboardModules))
+	mux.Handle("PUT /api/admin/dashboard-modules", adminAuth(admin.DashboardModules))
+	mux.Handle("DELETE /api/admin/dashboard-modules", adminAuth(admin.DashboardModules))
 	mux.Handle("GET /api/admin/module-permissions", adminAuth(admin.ModulePermissions))
 	mux.Handle("POST /api/admin/module-permissions", adminAuth(admin.ModulePermissions))
 	mux.Handle("PUT /api/admin/module-permissions", adminAuth(admin.ModulePermissions))

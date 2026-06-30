@@ -18,7 +18,7 @@ const CONFIG_CARDS = [
     color: '#7C3AED',
   },
   {
-    href:  '/admin/dashboards',
+    href:  '/admin/dashboard-modules',
     icon:  '📊',
     title: 'PowerBI Dashboard Modules',
     desc:  'Manage dashboards like Internet, Social Media, Telegram etc.',

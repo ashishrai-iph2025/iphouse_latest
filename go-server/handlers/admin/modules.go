@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/ip-house/iphouse-api/db"
@@ -37,6 +38,82 @@ func Modules(w http.ResponseWriter, r *http.Request) {
 		db.Exec("UPDATE module_permission SET ModuleName=?, pageName=?, status=? WHERE Id=?",
 			body.ModuleName, body.PageName, body.Status, body.ID)
 		ok(w, map[string]any{"success": true})
+	default:
+		fail(w, 405, "Method not allowed")
+	}
+}
+
+// GET/POST/PUT/DELETE /api/admin/dashboard-modules — CRUD for the dcp_module table
+// (the PowerBI dashboard module catalog: Internet, Social Media, Telegram, etc.).
+func DashboardModules(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		showDeleted := r.URL.Query().Get("showDeleted") == "1"
+		q := "SELECT moduleId, moduleName, moduleIcon, deleted FROM dcp_module"
+		if !showDeleted {
+			q += " WHERE deleted = 0"
+		}
+		q += " ORDER BY moduleId ASC"
+		rows, err := db.Query(q)
+		if err != nil {
+			log.Printf("[dashboard-modules] query failed: %v", err)
+			fail(w, 500, "Database error: "+err.Error()); return
+		}
+		if rows == nil {
+			rows = []map[string]any{}
+		}
+		log.Printf("[dashboard-modules] returned %d rows", len(rows))
+		ok(w, map[string]any{"success": true, "modules": rows})
+
+	case http.MethodPost:
+		var body struct {
+			ModuleName string `json:"moduleName"`
+			ModuleIcon string `json:"moduleIcon"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if body.ModuleName == "" {
+			fail(w, 422, "moduleName required"); return
+		}
+		_, _, err := db.Exec("INSERT INTO dcp_module (moduleName, moduleIcon, deleted) VALUES (?, ?, 0)",
+			body.ModuleName, nullStr(body.ModuleIcon))
+		if err != nil {
+			fail(w, 500, "Could not create module"); return
+		}
+		ok(w, map[string]any{"success": true})
+
+	case http.MethodPut:
+		var body struct {
+			ModuleID   int64  `json:"moduleId"`
+			ModuleName string `json:"moduleName"`
+			ModuleIcon string `json:"moduleIcon"`
+			Restore    bool   `json:"restore"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if body.ModuleID == 0 {
+			fail(w, 422, "moduleId required"); return
+		}
+		if body.Restore {
+			db.Exec("UPDATE dcp_module SET deleted = 0 WHERE moduleId = ?", body.ModuleID)
+		} else {
+			if body.ModuleName == "" {
+				fail(w, 422, "moduleName required"); return
+			}
+			db.Exec("UPDATE dcp_module SET moduleName = ?, moduleIcon = ? WHERE moduleId = ?",
+				body.ModuleName, nullStr(body.ModuleIcon), body.ModuleID)
+		}
+		ok(w, map[string]any{"success": true})
+
+	case http.MethodDelete:
+		var body struct {
+			ModuleID int64 `json:"moduleId"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if body.ModuleID == 0 {
+			fail(w, 422, "moduleId required"); return
+		}
+		db.Exec("UPDATE dcp_module SET deleted = 1 WHERE moduleId = ?", body.ModuleID)
+		ok(w, map[string]any{"success": true})
+
 	default:
 		fail(w, 405, "Method not allowed")
 	}

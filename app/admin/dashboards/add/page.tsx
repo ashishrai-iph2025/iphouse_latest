@@ -13,8 +13,8 @@ export default function AddDashboardPage() {
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    fetch('/api/admin/clients?list=1', { credentials: 'include' }).then(r => r.json()).then(d => { if (d.success) setClients(d.items) })
-    fetch('/api/admin/dashboards', { credentials: 'include' }).then(r => r.json()).then(d => { if (d.success) setModules(d.modules) })
+    fetch('/api/admin/clients?list=1', { credentials: 'include' }).then(r => r.json()).then(d => { if (d.success) setClients(d.items ?? []) })
+    fetch('/api/admin/dashboards?modules=1', { credentials: 'include' }).then(r => r.json()).then(d => { if (d.success) setModules(d.modules ?? []) })
   }, [])
 
   async function handleSubmit(e: React.FormEvent) {
