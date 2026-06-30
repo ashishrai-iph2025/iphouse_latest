@@ -9,6 +9,9 @@ node_modules/
 # Build output
 dist/
 
+# Local docker overrides (e.g. host port mapping on EC2) — keep deploy box clean
+docker-compose.override.yml
+
 # Go binaries
 go-server/iphouse-api
 go-server/iphouse-api.exe

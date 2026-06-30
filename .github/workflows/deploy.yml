@@ -1,0 +1,31 @@
+name: Deploy to EC2
+
+# Auto-deploy on every push to main. Can also be run manually from the
+# Actions tab via "Run workflow".
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Avoid overlapping deploys if two pushes land close together.
+concurrency:
+  group: ec2-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host:     ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key:      ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/iphouse_latest
+            git fetch origin main
+            git reset --hard origin/main      # deterministic; never conflicts
+            docker compose up -d --build
+            docker image prune -f             # reclaim space from old images
