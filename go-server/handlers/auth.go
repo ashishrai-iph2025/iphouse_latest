@@ -209,19 +209,24 @@ func SendOTP(w http.ResponseWriter, r *http.Request) {
 	// The recipient must be the exact login the user entered — a single client
 	// (userId) can own several login accounts, so a userId-only lookup may pick
 	// the wrong address. Prefer body.Email, validating it belongs to this user.
+	// We also pull the login's own first/last name so the OTP greets the person
+	// signing in, not the client/company account name.
 	recipient := ""
+	loginName := ""
 	if body.Email != "" {
-		vr, _ := db.QueryOne("SELECT login_username FROM dcp_user_login WHERE login_username = ? AND userId = ? AND is_active = 1 LIMIT 1", body.Email, body.UserID)
+		vr, _ := db.QueryOne("SELECT login_username, first_name, last_name FROM dcp_user_login WHERE login_username = ? AND userId = ? AND is_active = 1 LIMIT 1", body.Email, body.UserID)
 		if vr != nil {
 			recipient = strFromAny(vr["login_username"])
+			loginName = strings.TrimSpace(strFromAny(vr["first_name"]) + " " + strFromAny(vr["last_name"]))
 		}
 	}
 	if recipient == "" {
-		loginRow, _ := db.QueryOne("SELECT login_username FROM dcp_user_login WHERE userId = ? AND is_active = 1 LIMIT 1", body.UserID)
+		loginRow, _ := db.QueryOne("SELECT login_username, first_name, last_name FROM dcp_user_login WHERE userId = ? AND is_active = 1 LIMIT 1", body.UserID)
 		if loginRow == nil {
 			Fail(w, 404, "Login not found"); return
 		}
 		recipient = strFromAny(loginRow["login_username"])
+		loginName = strings.TrimSpace(strFromAny(loginRow["first_name"]) + " " + strFromAny(loginRow["last_name"]))
 	}
 
 	code := randHex(3) // 6 hex chars = numeric-ish
@@ -240,7 +245,15 @@ func SendOTP(w http.ResponseWriter, r *http.Request) {
 	// (the driver uses loc=Asia/Kolkata; mixing Go UTC strings caused false expiries).
 	db.Exec("UPDATE dcp_user SET twofa_code = ?, twofa_code_expires = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE userId = ?", digits, body.UserID)
 
-	name, _ := user["name"].(string)
+	// Greet the person signing in (login first/last name). Fall back to the email
+	// address, then the client/company name, if no personal name is on the login.
+	name := loginName
+	if name == "" {
+		name = recipient
+	}
+	if name == "" {
+		name, _ = user["name"].(string)
+	}
 
 	// Send synchronously so SMTP/configuration failures surface to the user
 	// instead of being silently swallowed in a goroutine.
