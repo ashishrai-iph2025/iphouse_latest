@@ -1,0 +1,18 @@
+node_modules
+dist
+.git
+.claude
+
+# Secrets — never copy into the build context/layers (runtime uses env_file instead)
+.env
+.env.*
+!.env.example
+go-server/iphouse-api
+go-server/server.exe
+go-server/iphouse-api.exe
+go-server/iphouse-api.exe~
+go-server/server.log
+go-server/server_err.log
+go-server/*.log
+go-server/start.bat
+*.log

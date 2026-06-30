@@ -1,0 +1,46 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": ["src", "app", "components", "lib"],
+  "exclude": [
+    "lib/auth.ts",
+    "lib/db.ts",
+    "lib/email.ts",
+    "lib/resolveApiToken.ts",
+    "lib/activity.ts",
+    "lib/crypto.ts",
+    "lib/tempTokenStore.ts",
+    "lib/apiTokenCache.ts",
+    "lib/masterDataCache.ts",
+    "lib/fetchWithoutSSL.ts",
+    "app/layout.tsx",
+    "app/error.tsx",
+    "app/page.tsx",
+    "app/providers.tsx",
+    "app/admin/layout.tsx",
+    "app/admin/error.tsx",
+    "instrumentation.ts",
+    "node_modules",
+    "dist",
+    "go-server"
+  ]
+}

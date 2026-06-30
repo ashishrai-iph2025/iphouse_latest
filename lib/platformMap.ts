@@ -1,0 +1,22 @@
+// Shared client+server platform slug map
+export const PLATFORM_PAGE_MAP: Record<string, string> = {
+  'facebook':                   'facebook',
+  'internet':                   'internet',
+  'youtube':                    'youtube',
+  'instagram':                  'instagram',
+  'twitter':                    'twitter',
+  'telegram':                   'telegram',
+  'tiktok':                     'tiktok',
+  'vk':                         'vk',
+  'ok':                         'ok',
+  'sharechat':                  'sharechat',
+  'dailymotion':                'dailymotion',
+  'bilibili':                   'bilibili',
+  'chomikuj':                   'chomikuj',
+  'ugc and other social media': 'ugc-sm',
+  'i-tunes':                    'itunes',
+  'play store':                 'play-store',
+  'third party app':            'third-party-app',
+  'third party mobile app':     'third-party-mobile-app',
+  'torrent':                    'torrent',
+}

@@ -1,0 +1,13 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env.local
+    environment:
+      - STATIC_DIR=/app/dist
+      - GO_PORT=8080
+    restart: unless-stopped

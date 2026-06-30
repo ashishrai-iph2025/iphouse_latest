@@ -1,0 +1,32 @@
+# Environment & secrets
+.env.local
+.env*.local
+.env
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Go binaries
+go-server/iphouse-api
+go-server/iphouse-api.exe
+go-server/iphouse-api.exe~
+go-server/server.exe
+go-server/*.log
+go-server/start.bat
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Claude
+.claude/
