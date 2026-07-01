@@ -249,28 +249,6 @@ func SendOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 
-	// Portal-staff accounts (Admin/Super Admin) live in dcp_super_admin and use
-	// their own OTP storage, checked first (matches Login's precedence: a
-	// dcp_super_admin email always wins over a same-address client login).
-	if body.Email != "" {
-		if sa := superAdminByEmail(body.Email); sa != nil {
-			digits := genOTPDigits()
-			db.Exec("UPDATE dcp_super_admin SET twofa_code = ?, twofa_code_expires = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE id = ?", digits, sa["id"])
-			name := strFromAny(sa["name"])
-			if name == "" {
-				name = body.Email
-			}
-			if err := email.SendOTP(body.Email, digits, name); err != nil {
-				log.Printf("[send-otp] failed to email %s (portal staff): %v", body.Email, err)
-				Fail(w, 502, "Could not send the verification email. Please check email settings or try again.")
-				return
-			}
-			log.Printf("[send-otp] OTP sent to %s (portal staff id=%d)", body.Email, intFromAny(sa["id"]))
-			OK(w, map[string]any{"success": true, "userId": intFromAny(sa["id"])})
-			return
-		}
-	}
-
 	// Email-based resolution always wins so send/verify target the same row.
 	body.UserID = otpUserID(body.Email, body.UserID)
 	if body.UserID == 0 {
@@ -342,47 +320,6 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		Code   string `json:"code"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
-
-	// Portal-staff accounts verify against dcp_super_admin's own OTP columns.
-	// Unlike the client flow below (which needs an extra account-selection
-	// step), an email in dcp_super_admin maps 1:1 to a login, so a correct
-	// code signs the JWT and finishes the login right here.
-	if body.Email != "" {
-		if sa := superAdminByEmail(body.Email); sa != nil {
-			exp, _ := db.QueryOne(`
-				SELECT twofa_code, (twofa_code_expires IS NOT NULL AND twofa_code_expires > NOW()) AS not_expired
-				FROM dcp_super_admin WHERE id = ? LIMIT 1`, sa["id"])
-			storedCode := ""
-			notExpired := int64(0)
-			if exp != nil {
-				storedCode = strFromAny(exp["twofa_code"])
-				notExpired = intFromAny(exp["not_expired"])
-			}
-			if body.Code == "" || storedCode == "" {
-				OK(w, map[string]any{"success": false, "error": "No active code"}); return
-			}
-			if storedCode != body.Code {
-				OK(w, map[string]any{"success": false, "error": "Incorrect code"}); return
-			}
-			if notExpired == 0 {
-				OK(w, map[string]any{"success": false, "error": "Code has expired"}); return
-			}
-			id := intFromAny(sa["id"])
-			db.Exec("UPDATE dcp_super_admin SET twofa_code = NULL, twofa_code_expires = NULL WHERE id = ?", id)
-
-			claims := claimsForSuperAdminRow(sa)
-			tok, err := ipauth.SignToken(claims)
-			if err != nil {
-				Fail(w, 500, "Token error"); return
-			}
-			go db.Exec("UPDATE dcp_super_admin SET last_login = NOW() WHERE id = ?", id)
-			go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (?, ?, NOW())", claims.UserID, claims.LoginID)
-			go activity.Log(claims.LoginID, "login", "auth/verify-otp", activity.GetIP(r), activity.GetUA(r), map[string]any{"method": "otp"})
-			SetTokenCookie(w, tok)
-			OK(w, map[string]any{"success": true, "authenticated": true, "token": tok, "user": sanitizeClaims(claims)})
-			return
-		}
-	}
 
 	// Resolve the same canonical userId the OTP was stored against.
 	body.UserID = otpUserID(body.Email, body.UserID)

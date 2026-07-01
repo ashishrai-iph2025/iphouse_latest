@@ -16,7 +16,6 @@ function LoginForm() {
   const [error,      setError]      = useState('')
   const [loading,    setLoading]    = useState(false)
   const [idleBanner, setIdleBanner] = useState(false)
-  const [mode,       setMode]       = useState<'password' | 'otp'>('password')
 
   useEffect(() => {
     if (params.get('reason') === 'idle') setIdleBanner(true)
@@ -78,36 +77,6 @@ function LoginForm() {
         sessionStorage.removeItem('pending_login_rows')
         await update()
       }
-    } catch {
-      setError('An unexpected error occurred. Please try again.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // Passwordless alternative: request an emailed one-time code directly,
-  // without checking a password at all. This is the "OTP or password" path
-  // for Admin/Super Admin portal-staff accounts (dcp_super_admin) — the
-  // password-based flow above still works for them exactly as before.
-  async function handleOtpRequest(e: React.FormEvent) {
-    e.preventDefault()
-    setError('')
-    setLoading(true)
-    try {
-      const res  = await fetch('/api/auth/send-otp', {
-        credentials: 'include',
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ email: username }),
-      })
-      const data = await res.json()
-      if (!data.success) { setError(data.error || 'Failed to send verification code'); return }
-
-      sessionStorage.setItem('pending_otp_email',    username)
-      sessionStorage.setItem('pending_otp_userId',   String(data.userId ?? ''))
-      sessionStorage.setItem('pending_otp_username', username)
-      sessionStorage.setItem('pending_login_rows',   '[]')
-      router.push('/verify-email')
     } catch {
       setError('An unexpected error occurred. Please try again.')
     } finally {
@@ -615,7 +584,7 @@ function LoginForm() {
               </div>
             )}
 
-            <form onSubmit={mode === 'password' ? handleSubmit : handleOtpRequest} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div>
                 <label className="lp-label">Username</label>
                 <div className="lp-input-wrap">
@@ -628,49 +597,36 @@ function LoginForm() {
                 </div>
               </div>
 
-              {mode === 'password' ? (
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <label className="lp-label" style={{ marginBottom: 0 }}>Password</label>
-                    <Link to="/forgot-password" style={{ fontSize: 11.5, color: '#14254A', fontWeight: 600, textDecoration: 'none', opacity: 0.6 }}>
-                      Forgot password?
-                    </Link>
-                  </div>
-                  <div className="lp-input-wrap">
-                    <div className="lp-input-icon">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                    </div>
-                    <input type={showPw ? 'text' : 'password'} className="lp-input"
-                      style={{ paddingRight: 42 }} placeholder="••••••••••"
-                      value={password} onChange={e => setPassword(e.target.value)}
-                      required autoComplete="off" />
-                    <button type="button" className="lp-eye" onClick={() => setShowPw(v => !v)}>
-                      {showPw
-                        ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-                        : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                      }
-                    </button>
-                  </div>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <label className="lp-label" style={{ marginBottom: 0 }}>Password</label>
+                  <Link to="/forgot-password" style={{ fontSize: 11.5, color: '#14254A', fontWeight: 600, textDecoration: 'none', opacity: 0.6 }}>
+                    Forgot password?
+                  </Link>
                 </div>
-              ) : (
-                <p style={{ fontSize: 12, color: '#64748b', margin: '-4px 0 0', lineHeight: 1.5 }}>
-                  We'll email a 6-digit one-time code to this address instead of checking a password.
-                </p>
-              )}
+                <div className="lp-input-wrap">
+                  <div className="lp-input-icon">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  </div>
+                  <input type={showPw ? 'text' : 'password'} className="lp-input"
+                    style={{ paddingRight: 42 }} placeholder="••••••••••"
+                    value={password} onChange={e => setPassword(e.target.value)}
+                    required autoComplete="off" />
+                  <button type="button" className="lp-eye" onClick={() => setShowPw(v => !v)}>
+                    {showPw
+                      ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                      : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    }
+                  </button>
+                </div>
+              </div>
 
               <button type="submit" disabled={loading} className="lp-btn"
                 style={{ opacity: loading ? 0.72 : 1, cursor: loading ? 'not-allowed' : 'pointer' }}>
                 {loading
-                  ? <><span className="lp-spin" /> {mode === 'password' ? 'Signing in…' : 'Sending code…'}</>
-                  : mode === 'password'
-                    ? <>Sign in <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg></>
-                    : <>Email me a code <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg></>
+                  ? <><span className="lp-spin" /> Signing in…</>
+                  : <>Sign in <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg></>
                 }
-              </button>
-
-              <button type="button" onClick={() => { setError(''); setMode(m => m === 'password' ? 'otp' : 'password') }}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12.5, fontWeight: 600, color: '#14254A', opacity: 0.65, textAlign: 'center', padding: 0 }}>
-                {mode === 'password' ? '⚡ Sign in with a one-time code instead' : '← Back to password sign-in'}
               </button>
             </form>
 
