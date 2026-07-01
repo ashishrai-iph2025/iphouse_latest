@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import AdminPageHeader from './AdminPageHeader'
+import { CONFIG_MODULES } from '@/lib/configModules'
 
 interface UserRow {
   loginId:        number
@@ -70,7 +71,7 @@ function Pagination({
 }
 
 export default function SuperAdminClient() {
-  const [tab, setTab] = useState<'access' | 'permissions' | 'sessions'>('access')
+  const [tab, setTab] = useState<'access' | 'permissions' | 'config' | 'sessions'>('access')
 
   return (
     <div className="p-6 fade-in">
@@ -83,8 +84,9 @@ export default function SuperAdminClient() {
       {/* Tab switcher */}
       <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit mb-6">
         {[
-          { key: 'access',      label: '🛡️ Access Control'     },
+          { key: 'access',      label: '🛡️ Access Control'      },
           { key: 'permissions', label: '🔐 Module Permissions'  },
+          { key: 'config',      label: '⚙️ Configuration Access' },
           { key: 'sessions',    label: '🟢 Active Sessions'     },
         ].map(t => (
           <button key={t.key} onClick={() => setTab(t.key as any)}
@@ -96,6 +98,7 @@ export default function SuperAdminClient() {
 
       {tab === 'access'      && <AccessControlTab />}
       {tab === 'permissions' && <ModulePermissionsTab />}
+      {tab === 'config'      && <ConfigAccessTab />}
       {tab === 'sessions'    && <ActiveSessionsTab />}
     </div>
   )
@@ -119,7 +122,7 @@ function AccessControlTab() {
     try {
       const res  = await fetch('/api/admin/super-admin/permissions', { credentials: 'include' })
       const data = await res.json()
-      if (data.success) setUsers(data.users)
+      if (data.success) setUsers(data.users || [])
     } catch (e) {
       console.error('[SuperAdmin] fetch error:', e)
     } finally {
@@ -333,7 +336,7 @@ function ModulePermissionsTab() {
   useEffect(() => {
     fetch('/api/admin/super-admin/permissions', { credentials: 'include' })
       .then(r => r.json())
-      .then(d => { if (d.success) setUsers(d.users) })
+      .then(d => { if (d.success) setUsers(d.users || []) })
       .catch(() => {})
       .finally(() => setLoadingUsers(false))
   }, [])
@@ -342,9 +345,9 @@ function ModulePermissionsTab() {
     setSelected(u)
     setModules([])
     setLoadingModules(true)
-    const res  = await fetch(`/api/admin/super-admin/permissions?userId=${u.userId}`)
+    const res  = await fetch(`/api/admin/super-admin/permissions?userId=${u.userId}`, { credentials: 'include' })
     const data = await res.json()
-    if (data.success) setModules(data.modules)
+    if (data.success) setModules(data.modules || [])
     setLoadingModules(false)
   }
 
@@ -525,7 +528,261 @@ function ModulePermissionsTab() {
   )
 }
 
-/* ── Tab 3: Active Sessions ────────────────────────────────────────────── */
+/* ── Tab 3: Configuration Access ───────────────────────────────────────── */
+interface AdminRow {
+  loginId:        number
+  login_username: string
+  first_name?:    string
+  last_name?:     string
+  userId:         number
+  company?:       string
+  email?:         string
+  role:           number | null
+}
+
+const adminName = (a: AdminRow) =>
+  `${a.first_name || ''} ${a.last_name || ''}`.trim() || a.login_username || a.email || 'Admin'
+
+const CFG_PER_PAGE = 10
+
+function ConfigAccessTab() {
+  const [admins,   setAdmins]   = useState<AdminRow[]>([])
+  const [selected, setSelected] = useState<AdminRow | null>(null)
+  const [granted,  setGranted]  = useState<Set<string>>(new Set())
+  const [busy,     setBusy]     = useState<string | null>(null)
+  const [search,   setSearch]   = useState('')
+  const [toast,    setToast]    = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
+  const [loadingAdmins, setLoadingAdmins] = useState(true)
+  const [loadingAccess, setLoadingAccess] = useState(false)
+  const [page,     setPage]     = useState(1)
+
+  useEffect(() => {
+    fetch('/api/admin/super-admin/config-access', { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => { if (d.success) setAdmins(d.admins) })
+      .catch(() => {})
+      .finally(() => setLoadingAdmins(false))
+  }, [])
+
+  function showToast(msg: string, type: 'success' | 'error' = 'success') {
+    setToast({ msg, type })
+    setTimeout(() => setToast(null), 3000)
+  }
+
+  async function selectAdmin(a: AdminRow) {
+    setSelected(a)
+    setGranted(new Set())
+    setLoadingAccess(true)
+    try {
+      const res  = await fetch(`/api/admin/super-admin/config-access?loginId=${a.loginId}`, { credentials: 'include' })
+      const data = await res.json()
+      if (data.success) setGranted(new Set<string>(data.granted || []))
+    } catch { /* ignore */ }
+    setLoadingAccess(false)
+  }
+
+  async function toggleModule(key: string) {
+    if (!selected) return
+    const grant = !granted.has(key) // currently not shared → we are sharing
+    setBusy(key)
+    try {
+      const res  = await fetch('/api/admin/super-admin/config-access', {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body:    JSON.stringify({ loginId: selected.loginId, moduleKey: key, grant }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setGranted(prev => {
+          const next = new Set(prev)
+          if (grant) next.add(key); else next.delete(key)
+          return next
+        })
+      } else {
+        showToast(data.error || 'Failed', 'error')
+      }
+    } catch {
+      showToast('Network error', 'error')
+    }
+    setBusy(null)
+  }
+
+  async function setAll(grantAll: boolean) {
+    if (!selected) return
+    setBusy('__all__')
+    const targets = grantAll
+      ? CONFIG_MODULES.filter(m => !granted.has(m.key)).map(m => m.key)
+      : CONFIG_MODULES.filter(m =>  granted.has(m.key)).map(m => m.key)
+    await Promise.all(targets.map(key =>
+      fetch('/api/admin/super-admin/config-access', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ loginId: selected.loginId, moduleKey: key, grant: grantAll }),
+      })
+    ))
+    setGranted(grantAll ? new Set(CONFIG_MODULES.map(m => m.key)) : new Set())
+    showToast(grantAll ? 'All modules shared' : 'All modules unshared')
+    setBusy(null)
+  }
+
+  const filtered = admins.filter(a => {
+    if (!search) return true
+    const q = search.toLowerCase()
+    return adminName(a).toLowerCase().includes(q)
+        || (a.email || '').toLowerCase().includes(q)
+        || (a.login_username || '').toLowerCase().includes(q)
+        || (a.company || '').toLowerCase().includes(q)
+  })
+  const totalPages = Math.ceil(filtered.length / CFG_PER_PAGE)
+  const safePage   = Math.min(page, Math.max(1, totalPages))
+  const paged      = filtered.slice((safePage - 1) * CFG_PER_PAGE, safePage * CFG_PER_PAGE)
+  useEffect(() => { setPage(1) }, [search])
+
+  const isSuper      = (a: AdminRow) => (a.role ?? 0) >= 2
+  const enabledCount = granted.size
+
+  return (
+    <>
+      {toast && (
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl text-white text-sm font-semibold shadow-xl ${toast.type === 'success' ? 'bg-emerald-600' : 'bg-red-500'}`}>
+          {toast.type === 'success' ? '✓' : '✕'} {toast.msg}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5">
+
+        {/* Admin list panel */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-card overflow-hidden flex flex-col">
+          <div className="px-4 py-3 border-b border-gray-100 flex-shrink-0">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+              Select Admin <span className="text-gray-300 font-normal normal-case">({filtered.length})</span>
+            </p>
+            <input autoComplete="off" value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search admins by name or email…"
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-[#14254A]/20" />
+          </div>
+
+          <div className="flex-1 overflow-y-auto divide-y divide-gray-50">
+            {loadingAdmins ? (
+              <p className="text-center py-8 text-xs text-gray-400">Loading…</p>
+            ) : admins.length === 0 ? (
+              <div className="px-4 py-8 text-center">
+                <p className="text-xs text-gray-500 font-medium mb-1">No admin users yet.</p>
+                <p className="text-[11px] text-gray-400 leading-relaxed">
+                  Grant admin access to a user from the <span className="font-semibold text-[#14254A]">Access Control</span> tab, then they'll appear here to share Configuration modules with.
+                </p>
+              </div>
+            ) : paged.length === 0 ? (
+              <p className="text-center py-8 text-xs text-gray-400">No admins match your search.</p>
+            ) : paged.map(a => {
+              const active = selected?.loginId === a.loginId
+              const ri = ROLE_LABEL[a.role ?? 0] ?? ROLE_LABEL[0]
+              return (
+                <button key={a.loginId} onClick={() => selectAdmin(a)}
+                  className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${active ? 'bg-[#14254A]' : 'hover:bg-gray-50'}`}>
+                  <div className="w-8 h-8 rounded-xl flex items-center justify-center text-xs font-bold flex-shrink-0"
+                    style={{ background: active ? 'rgba(255,255,255,0.2)' : `${ri.color}15`, color: active ? '#fff' : ri.color }}>
+                    {adminName(a).charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className={`text-xs font-semibold truncate ${active ? 'text-white' : 'text-gray-800'}`}>{adminName(a)}</p>
+                    <p className={`text-[10px] truncate ${active ? 'text-white/60' : 'text-gray-400'}`}>{a.login_username || a.email}</p>
+                  </div>
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0"
+                    style={active ? { background: 'rgba(255,255,255,0.2)', color: '#fff' } : { background: `${ri.color}15`, color: ri.color }}>
+                    {ri.label}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+
+          {totalPages > 1 && (
+            <div className="border-t border-gray-50 flex items-center justify-between px-4 py-2 flex-shrink-0">
+              <span className="text-[10px] text-gray-400">{safePage}/{totalPages}</span>
+              <div className="flex gap-1">
+                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={safePage === 1}
+                  className="px-2 py-0.5 text-xs rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-30">‹</button>
+                <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}
+                  className="px-2 py-0.5 text-xs rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-30">›</button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Module grid panel */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-card overflow-hidden flex flex-col">
+          {!selected ? (
+            <div className="flex-1 flex items-center justify-center flex-col gap-3 py-20 text-gray-400">
+              <span className="text-4xl">👈</span>
+              <p className="text-sm font-medium">Select an admin to control their Configuration access</p>
+            </div>
+          ) : (
+            <>
+              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <p className="font-semibold text-[#14254A] text-sm">{adminName(selected)}</p>
+                  <p className="text-xs text-gray-400">{selected.login_username || selected.email}{selected.company ? ` · ${selected.company}` : ''}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    {enabledCount} / {CONFIG_MODULES.length} shared
+                  </span>
+                  <button onClick={() => setAll(true)}  disabled={busy !== null}
+                    className="text-xs px-2.5 py-1 rounded-lg border border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-40 font-semibold">Share all</button>
+                  <button onClick={() => setAll(false)} disabled={busy !== null}
+                    className="text-xs px-2.5 py-1 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-40 font-semibold">Unshare all</button>
+                </div>
+              </div>
+
+              {isSuper(selected) && (
+                <div className="mx-5 mt-4 bg-violet-50 border border-violet-200 rounded-xl px-4 py-2.5 text-xs text-violet-700">
+                  ⚡ Super Admins always have full access — changes here have no effect.
+                </div>
+              )}
+
+              <div className="flex-1 overflow-y-auto p-5">
+                {loadingAccess ? (
+                  <div className="flex items-center justify-center py-16">
+                    <span className="w-6 h-6 border-2 border-[#14254A] border-t-transparent rounded-full animate-spin" />
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                    {CONFIG_MODULES.map(mod => {
+                      const enabled = granted.has(mod.key)
+                      const isBusy  = busy === mod.key || busy === '__all__'
+                      return (
+                        <button key={mod.key} onClick={() => toggleModule(mod.key)} disabled={isBusy}
+                          className={`relative flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all text-center disabled:opacity-60 ${
+                            enabled ? 'border-emerald-400 bg-emerald-50 shadow-sm' : 'border-gray-200 bg-gray-50 hover:border-gray-300'
+                          }`}>
+                          {busy === mod.key && (
+                            <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-white/70">
+                              <span className="w-4 h-4 border-2 border-[#14254A] border-t-transparent rounded-full animate-spin" />
+                            </div>
+                          )}
+                          <span className="text-2xl">{mod.icon}</span>
+                          <p className={`text-xs font-semibold leading-tight ${enabled ? 'text-emerald-700' : 'text-gray-500'}`}>
+                            {mod.title}
+                          </p>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${enabled ? 'bg-emerald-500 text-white' : 'bg-gray-200 text-gray-500'}`}>
+                            {enabled ? 'Shared' : 'Not shared'}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </>
+  )
+}
+
+/* ── Tab 4: Active Sessions ────────────────────────────────────────────── */
 interface ActiveSession {
   loginId:        number
   userId:         number

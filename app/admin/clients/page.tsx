@@ -20,12 +20,10 @@ export default function ClientsPage() {
 
     fetch('/api/admin/dashboards', { credentials: 'include' })
       .then(r => r.json())
-      .then(d => setTotalDash((d.dashboards || []).length))
-      .catch(() => {})
-
-    fetch('/api/admin/modules', { credentials: 'include' })
-      .then(r => r.json())
-      .then(d => setTotalModules((d.modules || []).length))
+      .then(d => {
+        setTotalDash(d.totalDashboards || 0)
+        setTotalModules(d.totalModules || 0)
+      })
       .catch(() => {})
   }, [])
 

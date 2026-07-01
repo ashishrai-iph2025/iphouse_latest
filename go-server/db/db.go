@@ -97,6 +97,31 @@ func Migrate() {
 	} else {
 		log.Printf("[db] migrate: dcp_password_resets OK")
 	}
+
+	// Per-admin-login Configuration-module access. Grant-based (default deny):
+	// only shared modules (granted = 1) are stored, so an admin login sees only
+	// the modules a Super Admin explicitly shares with it. Keyed by loginId so
+	// separate logins under the same account can have different access.
+	_, _, err = Exec(`CREATE TABLE IF NOT EXISTS dcp_admin_config_access (
+		id         INT AUTO_INCREMENT PRIMARY KEY,
+		loginId    INT          NOT NULL,
+		module_key VARCHAR(64)  NOT NULL,
+		granted    TINYINT(1)   NOT NULL DEFAULT 1,
+		updated_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE KEY uniq_login_module (loginId, module_key),
+		INDEX idx_loginId (loginId)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+	if err != nil {
+		log.Printf("[db] migrate dcp_admin_config_access: %v", err)
+	} else {
+		log.Printf("[db] migrate: dcp_admin_config_access OK")
+	}
+	// Transitional: the first version of this table keyed on userId. Rename the
+	// column to loginId if that older shape is present (errors harmlessly once
+	// already renamed or on a fresh install).
+	if _, _, aerr := Exec("ALTER TABLE dcp_admin_config_access CHANGE COLUMN userId loginId INT NOT NULL"); aerr == nil {
+		log.Printf("[db] migrate: dcp_admin_config_access userId→loginId renamed")
+	}
 }
 
 func scanRows(rows *sql.Rows) ([]map[string]any, error) {

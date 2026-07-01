@@ -176,6 +176,8 @@ func main() {
 	mux.Handle("GET /api/admin/tracking/analytics", adminAuth(admin.TrackingAnalytics))
 	mux.Handle("GET /api/admin/home-analytics", adminAuth(admin.HomeAnalytics))
 
+	mux.Handle("GET /api/admin/my-config-access", adminAuth(admin.MyConfigAccess))
+
 	mux.Handle("GET /api/admin/registrations", adminAuth(admin.Registrations))
 	mux.Handle("PUT /api/admin/registrations", adminAuth(admin.Registrations))
 	mux.Handle("GET /api/admin/registration-requests", adminAuth(admin.RegistrationRequests))
@@ -193,6 +195,8 @@ func main() {
 	mux.Handle("POST /api/admin/super-admin/force-logout", saAuth(admin.ForceLogout))
 	mux.Handle("GET /api/admin/super-admin/permissions", saAuth(admin.SuperAdminPermissions))
 	mux.Handle("PUT /api/admin/super-admin/permissions", saAuth(admin.SuperAdminPermissions))
+	mux.Handle("GET /api/admin/super-admin/config-access", saAuth(admin.SuperAdminConfigAccess))
+	mux.Handle("PUT /api/admin/super-admin/config-access", saAuth(admin.SuperAdminConfigAccess))
 
 	// ── Serve Vite static build (SPA fallback) ───────────────────────────────
 	distDir := "../dist"

@@ -74,7 +74,12 @@ func Dashboards(w http.ResponseWriter, r *http.Request) {
 		if dashboards == nil { dashboards = []map[string]any{} }
 
 		totalClients, _ := db.QueryOne("SELECT COUNT(*) AS c FROM dcp_user WHERE deleted = 0 AND (role IS NULL OR role != 1)")
-		totalDashboards, _ := db.QueryOne("SELECT COUNT(*) AS c FROM dcp_user_module_map WHERE link IS NOT NULL")
+		totalDashboards, _ := db.QueryOne(`
+			SELECT COUNT(*) AS c
+			FROM dcp_user u
+			JOIN dcp_user_module_map mp ON u.userId = mp.userId
+			JOIN dcp_module m ON m.moduleId = mp.moduleId
+			WHERE mp.link IS NOT NULL AND u.deleted = 0`)
 		totalModules, _ := db.QueryOne("SELECT COUNT(*) AS c FROM dcp_module WHERE deleted = 0")
 
 		tc := int64(0); if totalClients != nil { tc = intVal(totalClients["c"]) }

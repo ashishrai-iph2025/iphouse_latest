@@ -1,116 +1,30 @@
-﻿import { Link } from 'react-router-dom'
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import AdminPageHeader from '@/components/admin/AdminPageHeader'
-
-
-const CONFIG_CARDS = [
-  {
-    href:  '/admin/modules',
-    icon:  '🔐',
-    title: 'API Modules',
-    desc:  'Create, update and delete API modules.',
-    color: '#0078D4',
-  },
-  {
-    href:  '/admin/api-credentials',
-    icon:  '🔑',
-    title: 'Manage API Credentials',
-    desc:  'Manage API credentials to access real-time data for clients.',
-    color: '#7C3AED',
-  },
-  {
-    href:  '/admin/dashboard-modules',
-    icon:  '📊',
-    title: 'PowerBI Dashboard Modules',
-    desc:  'Manage dashboards like Internet, Social Media, Telegram etc.',
-    color: '#F59E0B',
-  },
-  {
-    href:  '/admin/module-permissions',
-    icon:  '🛡️',
-    title: 'API Module Permissions',
-    desc:  'Grant and revoke API module access from/to clients.',
-    color: '#10B981',
-  },
-  {
-    href:  '/admin/master-api',
-    icon:  '🌐',
-    title: 'Manage API Methods',
-    desc:  'Manage API URLs and endpoint methods.',
-    color: '#EC4899',
-  },
-  {
-    href:  '/admin/powerbi-creds',
-    icon:  '📈',
-    title: 'PowerBI API Credentials',
-    desc:  'Configure PowerBI API credentials.',
-    color: '#F97316',
-  },
-  {
-    href:  '/admin/powerbi-workspace',
-    icon:  '🗃️',
-    title: 'PowerBI Workspace',
-    desc:  'View reports, datasets, refresh schedules and refresh history from your PowerBI workspace.',
-    color: '#F59E0B',
-  },
-  {
-    href:  '/admin/settings',
-    icon:  '📧',
-    title: 'Email Credentials',
-    desc:  'Manage SMTP/email credentials and configuration.',
-    color: '#0078D4',
-  },
-  {
-    href:  '/admin/idle-timeout',
-    icon:  '⏱️',
-    title: "Client's Session Timeout",
-    desc:  'Manage client-wise idle timeout and auto-logout settings.',
-    color: '#6366F1',
-  },
-  {
-    href:  '/admin/registration-requests',
-    icon:  '📋',
-    title: 'User Registration Requests',
-    desc:  'Review and approve user registration requests.',
-    color: '#14B8A6',
-  },
-  {
-    href:  '/admin/tracking',
-    icon:  '📡',
-    title: 'Tracking Report',
-    desc:  'Application tracking and activity monitoring.',
-    color: '#8B5CF6',
-  },
-  {
-    href:  '/admin/asset-access',
-    icon:  '🗂️',
-    title: 'Asset Based Access',
-    desc:  'Manage access based on required asset permissions.',
-    color: '#EF4444',
-  },
-  {
-    href:  '/admin/email-templates',
-    icon:  '✉️',
-    title: 'Email Templates',
-    desc:  'Manage and customise system email templates.',
-    color: '#0891B2',
-  },
-  {
-    href:  '/admin/email-event-types',
-    icon:  '🔔',
-    title: 'Email Event Types',
-    desc:  'Configure the event types that trigger system emails and manage their variables.',
-    color: '#0891B2',
-  },
-  {
-    href:  '/admin/api-playground',
-    icon:  '🧪',
-    title: 'API Playground',
-    desc:  'Browse and test every API endpoint used across the platform.',
-    color: '#14254A',
-  },
-]
+import { CONFIG_MODULES } from '@/lib/configModules'
 
 export default function ConfigurationPage() {
+  // Modules the current admin is allowed to see (grant-based: default deny).
+  // A Super Admin shares specific modules; an admin sees only those.
+  const [granted, setGranted] = useState<Set<string> | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch('/api/admin/my-config-access', { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success && Array.isArray(d.granted)) setGranted(new Set(d.granted))
+        else setGranted(new Set())
+      })
+      .catch(() => setGranted(new Set()))
+      .finally(() => setLoading(false))
+  }, [])
+
+  // Until access loads, show nothing (avoids flashing cards the admin can't open).
+  const cards = granted ? CONFIG_MODULES.filter(c => granted.has(c.key)) : []
+
   return (
     <div className="p-6 fade-in">
 
@@ -122,7 +36,7 @@ export default function ConfigurationPage() {
 
       {/* Cards grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {CONFIG_CARDS.map(card => (
+        {cards.map(card => (
           <Link
             key={card.href}
             to={card.href}
@@ -148,6 +62,12 @@ export default function ConfigurationPage() {
           </Link>
         ))}
       </div>
+
+      {!loading && cards.length === 0 && (
+        <div className="mt-6 bg-white rounded-2xl border border-gray-100 shadow-card p-10 text-center text-gray-400 text-sm">
+          You don't have access to any configuration modules. Contact a Super Admin to request access.
+        </div>
+      )}
 
     </div>
   )
