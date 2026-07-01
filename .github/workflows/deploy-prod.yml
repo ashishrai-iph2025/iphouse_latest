@@ -1,0 +1,37 @@
+name: Deploy to Production (EC2 Mumbai)
+
+# Deploys ONLY on push to the `production` branch — never on `main`.
+# Promotion to prod is a deliberate act: merge/fast-forward main into
+# production once a change is verified on staging, e.g.
+#   git push origin main:production
+on:
+  push:
+    branches: [production]
+  workflow_dispatch:
+
+# Separate concurrency group from the staging workflow so a prod deploy
+# never queues behind (or blocks) a staging deploy.
+concurrency:
+  group: ec2-deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Requires a "production" Environment configured in repo settings.
+    # Add required reviewers there to gate every deploy behind manual approval.
+    environment: production
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host:     ${{ secrets.PROD_EC2_HOST }}
+          username: ${{ secrets.PROD_EC2_USER }}
+          key:      ${{ secrets.PROD_EC2_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/iphouse_latest
+            git fetch origin production
+            git reset --hard origin/production   # deterministic; never conflicts
+            docker compose up -d --build
+            docker image prune -f                # reclaim space from old images
