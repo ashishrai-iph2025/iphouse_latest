@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/ip-house/iphouse-api/db"
 )
@@ -21,12 +22,17 @@ func SuperAdmin(w http.ResponseWriter, r *http.Request) {
 }
 
 func superAdminList(w http.ResponseWriter, r *http.Request) {
+	// dcp_user.role is kept in sync (0/1/2) whenever an account is granted
+	// Admin/Super Admin, so it alone reflects the effective role — the
+	// mirrored dcp_super_admin row is only appended for the original,
+	// hand-seeded root Super Admin (no backing dcp_user account at all).
 	users, _ := db.Query(`
 		SELECT userId, name, email, COALESCE(role, 0) AS role, is_active, 'user' AS source
 		FROM dcp_user WHERE deleted = 0
 		UNION ALL
 		SELECT id AS userId, name, email, 2 AS role, is_active, 'super_admin' AS source
 		FROM dcp_super_admin
+		WHERE userId IS NULL
 		ORDER BY role DESC, name ASC`)
 	if users == nil {
 		users = []map[string]any{}
@@ -34,31 +40,124 @@ func superAdminList(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{"success": true, "users": users})
 }
 
+// superAdminUpdate changes a role to client/admin/superadmin, either for a
+// single staff account (by userId) or for the PERSON behind a shared login
+// (by loginUsername — see superAdminUpdateByLogin). Granting Admin or Super
+// Admin mirrors into dcp_super_admin (role = 'Admin' | 'SuperAdmin',
+// is_active = 1), reusing the existing password hash, so dcp_super_admin is
+// the single table the login flow checks for any elevated-privilege account —
+// supporting both password and OTP login uniformly.
 func superAdminUpdate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		UserID     int64  `json:"userId"`
-		GrantAdmin bool   `json:"grantAdmin"`
-		Source     string `json:"source"`
+		UserID        int64  `json:"userId"`
+		LoginUsername string `json:"loginUsername"` // shared-login/person-based grant — takes precedence over userId
+		GrantAdmin    bool   `json:"grantAdmin"`     // legacy: true→admin, false→client (used when Role is empty)
+		Role          string `json:"role"`           // "client" | "admin" | "superadmin" — takes precedence over grantAdmin
+		Source        string `json:"source"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
-	if body.UserID == 0 {
-		fail(w, 422, "userId required"); return
-	}
 	if body.Source == "super_admin" {
-		fail(w, 403, "Cannot modify super admin"); return
+		fail(w, 403, "Cannot modify the root super admin"); return
 	}
-	target, _ := db.QueryOne("SELECT COALESCE(role,0) AS role FROM dcp_user WHERE userId = ?", body.UserID)
+
+	role := strings.ToLower(strings.TrimSpace(body.Role))
+	if role == "" {
+		if body.GrantAdmin {
+			role = "admin"
+		} else {
+			role = "client"
+		}
+	}
+	if role != "client" && role != "admin" && role != "superadmin" {
+		fail(w, 422, "role must be client, admin or superadmin"); return
+	}
+
+	if body.LoginUsername != "" {
+		superAdminUpdateByLogin(w, body.LoginUsername, role)
+		return
+	}
+
+	if body.UserID == 0 {
+		fail(w, 422, "userId or loginUsername required"); return
+	}
+	target, _ := db.QueryOne("SELECT userId FROM dcp_user WHERE userId = ? AND deleted = 0", body.UserID)
 	if target == nil {
 		fail(w, 404, "User not found"); return
 	}
-	if intVal(target["role"]) == 2 {
-		fail(w, 403, "Cannot modify super admin"); return
+
+	dcpRole := map[string]int{"client": 0, "admin": 1, "superadmin": 2}[role]
+	db.Exec("UPDATE dcp_user SET role = ? WHERE userId = ?", dcpRole, body.UserID)
+
+	if role == "client" {
+		db.Exec("DELETE FROM dcp_super_admin WHERE userId = ?", body.UserID)
+		ok(w, map[string]any{"success": true}); return
 	}
-	newRole := 0
-	if body.GrantAdmin {
-		newRole = 1
+
+	login, _ := db.QueryOne(`
+		SELECT loginId, login_username, login_password, first_name, last_name
+		FROM dcp_user_login WHERE userId = ? AND is_active = 1 ORDER BY loginId ASC LIMIT 1`, body.UserID)
+	if login == nil {
+		fail(w, 422, "This user has no active login to grant portal access through"); return
 	}
-	db.Exec("UPDATE dcp_user SET role = ? WHERE userId = ?", newRole, body.UserID)
+	name := strings.TrimSpace(strVal(login["first_name"]) + " " + strVal(login["last_name"]))
+	if name == "" {
+		if u, _ := db.QueryOne("SELECT name FROM dcp_user WHERE userId = ?", body.UserID); u != nil {
+			name = strVal(u["name"])
+		}
+	}
+	roleLabel := "Admin"
+	if role == "superadmin" {
+		roleLabel = "SuperAdmin"
+	}
+	_, _, err := db.Exec(`
+		INSERT INTO dcp_super_admin (name, email, password_hash, is_active, role, userId, loginId)
+		VALUES (?, ?, ?, 1, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE
+			name = VALUES(name), password_hash = VALUES(password_hash),
+			is_active = 1, role = VALUES(role), userId = VALUES(userId), loginId = VALUES(loginId)`,
+		name, strVal(login["login_username"]), strVal(login["login_password"]), roleLabel, body.UserID, intVal(login["loginId"]))
+	if err != nil {
+		fail(w, 500, "Failed to grant portal access"); return
+	}
+
+	ok(w, map[string]any{"success": true})
+}
+
+// superAdminUpdateByLogin grants/revokes portal-staff access to the PERSON
+// behind a shared login (identified by login_username/email), independent of
+// dcp_user.role. Shared logins can be assigned to many client companies at
+// once, so there is no single "owning" company whose role should flip —
+// unlike the per-userId path above, this never touches dcp_user at all.
+func superAdminUpdateByLogin(w http.ResponseWriter, loginUsername, role string) {
+	if role == "client" {
+		db.Exec("DELETE FROM dcp_super_admin WHERE email = ? AND userId IS NULL", loginUsername)
+		ok(w, map[string]any{"success": true}); return
+	}
+
+	login, _ := db.QueryOne(`
+		SELECT login_username, login_password, first_name, last_name
+		FROM dcp_user_login WHERE login_username = ? AND is_active = 1 LIMIT 1`, loginUsername)
+	if login == nil {
+		fail(w, 404, "No active login found for this username"); return
+	}
+	name := strings.TrimSpace(strVal(login["first_name"]) + " " + strVal(login["last_name"]))
+	if name == "" {
+		name = loginUsername
+	}
+	roleLabel := "Admin"
+	if role == "superadmin" {
+		roleLabel = "SuperAdmin"
+	}
+	_, _, err := db.Exec(`
+		INSERT INTO dcp_super_admin (name, email, password_hash, is_active, role, userId, loginId)
+		VALUES (?, ?, ?, 1, ?, NULL, NULL)
+		ON DUPLICATE KEY UPDATE
+			name = VALUES(name), password_hash = VALUES(password_hash),
+			is_active = 1, role = VALUES(role)`,
+		name, loginUsername, strVal(login["login_password"]), roleLabel)
+	if err != nil {
+		fail(w, 500, "Failed to grant portal access"); return
+	}
 	ok(w, map[string]any{"success": true})
 }
 

@@ -71,25 +71,40 @@ func MyConfigAccess(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET/PUT /api/admin/super-admin/config-access  (super admin only)
-//   GET                 → { admins: [...] }              admin logins (role >= 1)
-//   GET ?loginId=<id>   → { granted: [keys] }            modules currently shared with that login
-//   PUT {loginId,moduleKey,grant} → share / unshare one module with an admin login
+//
+// Identity here is always dcp_super_admin.id — the SAME id that becomes
+// claims.LoginID at login time for anyone authenticated via that table
+// (handlers.claimsForSuperAdminRow). Earlier this validated against
+// dcp_user_login.loginId instead, which breaks for a person granted through
+// a shared login (they have many dcp_user_login rows, one per company, but
+// only one dcp_super_admin row/id) — that mismatch is fixed here.
+//
+//   GET                       → { admins: [...] }        every Admin/SuperAdmin (from dcp_super_admin)
+//   GET ?loginId=<sa.id>      → { granted: [keys] }       modules currently shared with that person
+//   GET ?loginUsername=<email> → { id, role, granted }    resolve a person by email in one call
+//   PUT {loginId,moduleKey,grant} → share / unshare one module with that person
 func SuperAdminConfigAccess(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		if lu := r.URL.Query().Get("loginUsername"); lu != "" {
+			sa := superAdminByEmailPublic(lu)
+			if sa == nil {
+				ok(w, map[string]any{"success": true, "id": nil, "role": 0, "granted": []string{}}); return
+			}
+			role := int64(1)
+			if strVal(sa["role"]) == "SuperAdmin" {
+				role = 2
+			}
+			ok(w, map[string]any{"success": true, "id": intVal(sa["id"]), "role": role, "granted": grantedKeys(intVal(sa["id"]))}); return
+		}
 		if lid := r.URL.Query().Get("loginId"); lid != "" {
 			ok(w, map[string]any{"success": true, "granted": grantedKeys(lid)}); return
 		}
-		// One row per admin login, so separate logins under the same account
-		// are controlled independently (mirrors the Access Control tab).
 		admins, _ := db.Query(`
-			SELECT l.loginId, l.login_username, l.first_name, l.last_name,
-			       u.userId, u.name AS company, u.email,
-			       COALESCE(u.role, 0) AS role
-			FROM dcp_user_login l
-			INNER JOIN dcp_user u ON u.userId = l.userId
-			WHERE u.deleted = 0 AND COALESCE(u.role, 0) >= 1
-			ORDER BY u.role DESC, l.login_username ASC`)
+			SELECT id AS loginId, name, email AS login_username, role
+			FROM dcp_super_admin
+			WHERE is_active = 1
+			ORDER BY role DESC, name ASC`)
 		if admins == nil {
 			admins = []map[string]any{}
 		}
@@ -108,17 +123,9 @@ func SuperAdminConfigAccess(w http.ResponseWriter, r *http.Request) {
 		if !isConfigModuleKey(body.ModuleKey) {
 			fail(w, 422, "Unknown module key"); return
 		}
-		// Confirm the login belongs to an admin account.
-		target, _ := db.QueryOne(`
-			SELECT COALESCE(u.role, 0) AS role
-			FROM dcp_user_login l
-			INNER JOIN dcp_user u ON u.userId = l.userId
-			WHERE l.loginId = ? AND u.deleted = 0`, body.LoginID)
+		target, _ := db.QueryOne("SELECT id FROM dcp_super_admin WHERE id = ? AND is_active = 1", body.LoginID)
 		if target == nil {
-			fail(w, 404, "Admin login not found"); return
-		}
-		if intVal(target["role"]) < 1 {
-			fail(w, 422, "Login is not an admin"); return
+			fail(w, 404, "Admin not found"); return
 		}
 		if body.Grant {
 			db.Exec(`INSERT INTO dcp_admin_config_access (loginId, module_key, granted, updated_at)
@@ -132,4 +139,13 @@ func SuperAdminConfigAccess(w http.ResponseWriter, r *http.Request) {
 	default:
 		fail(w, 405, "Method not allowed")
 	}
+}
+
+// superAdminByEmailPublic is a small local wrapper so this file doesn't need
+// to import the handlers package just for its unexported superAdminByEmail.
+func superAdminByEmailPublic(email string) map[string]any {
+	row, _ := db.QueryOne(`
+		SELECT id, name, email, role, is_active
+		FROM dcp_super_admin WHERE email = ? AND is_active = 1 LIMIT 1`, email)
+	return row
 }

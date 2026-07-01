@@ -24,19 +24,35 @@ func Users(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// roleSelect computes the EFFECTIVE role for a login: dcp_super_admin (matched
+// by email) wins if present, exactly mirroring the login precedence in
+// handlers.Login/CheckMultipleLogins/SendOTP/VerifyOTP — so what this page
+// shows is what actually determines that person's access. Falls back to the
+// legacy company-level dcp_user.role when no dcp_super_admin row exists.
+// Collation is normalized because dcp_super_admin.email and
+// dcp_user_login.login_username were created independently and may not share
+// a collation, which otherwise throws "Illegal mix of collations" on join.
+const roleSelect = "COALESCE(CASE sa.role WHEN 'SuperAdmin' THEN 2 WHEN 'Admin' THEN 1 END, u.role, 0) AS role"
+const roleJoin = `LEFT JOIN dcp_super_admin sa
+		ON CONVERT(sa.email USING utf8mb4) COLLATE utf8mb4_general_ci
+		 = CONVERT(l.login_username USING utf8mb4) COLLATE utf8mb4_general_ci
+		AND sa.is_active = 1`
+
 func usersList(w http.ResponseWriter, r *http.Request) {
 	uid := r.URL.Query().Get("userId")
 	var rows []map[string]any
 	var err error
 	if uid != "" {
 		rows, err = db.Query(`SELECT l.loginId, l.userId, l.first_name, l.last_name, l.login_username,
-			l.login_type, l.is_active, u.name AS user_name, u.email AS user_email, u.role
+			l.login_type, l.is_active, u.name AS user_name, u.email AS user_email, `+roleSelect+`
 			FROM dcp_user_login l INNER JOIN dcp_user u ON u.userId = l.userId
+			`+roleJoin+`
 			WHERE u.deleted = 0 AND l.userId = ? ORDER BY l.loginId DESC`, uid)
 	} else {
 		rows, err = db.Query(`SELECT l.loginId, l.userId, l.first_name, l.last_name, l.login_username,
-			l.login_type, l.is_active, u.name AS user_name, u.email AS user_email, u.role
+			l.login_type, l.is_active, u.name AS user_name, u.email AS user_email, `+roleSelect+`
 			FROM dcp_user_login l INNER JOIN dcp_user u ON u.userId = l.userId
+			`+roleJoin+`
 			WHERE u.deleted = 0 ORDER BY l.loginId DESC`)
 	}
 	if err != nil {

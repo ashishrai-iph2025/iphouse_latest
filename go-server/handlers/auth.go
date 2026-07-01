@@ -74,6 +74,60 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
+// genOTPDigits returns a random 6-digit numeric code.
+func genOTPDigits() string {
+	var digits string
+	for len(digits) < 6 {
+		b := make([]byte, 3)
+		rand.Read(b)
+		for _, c := range b {
+			digits += string(rune('0' + int(c)%10))
+		}
+	}
+	return digits[:6]
+}
+
+// superAdminByEmail returns an active dcp_super_admin row (Admin or SuperAdmin
+// tier) for an email, or nil if none exists. Checked first by Login/OTP so a
+// portal-staff email always takes precedence over a matching client login.
+func superAdminByEmail(email string) map[string]any {
+	row, _ := db.QueryOne(`
+		SELECT id, name, email, password_hash, is_active, role, userId, loginId
+		FROM dcp_super_admin WHERE email = ? AND is_active = 1 LIMIT 1`, email)
+	return row
+}
+
+// claimsForSuperAdminRow builds JWT claims for a dcp_super_admin row. Admin-tier
+// rows carry the real loginId/userId of the account they were granted through
+// (so loginId-keyed features like Configuration Access keep working); the
+// root Super Admin has neither, so its own id doubles as both.
+func claimsForSuperAdminRow(sa map[string]any) ipauth.Claims {
+	role := int64(2)
+	if strFromAny(sa["role"]) == "Admin" {
+		role = 1
+	}
+	id := intFromAny(sa["id"])
+	loginID := intFromAny(sa["loginId"])
+	if loginID == 0 {
+		loginID = id
+	}
+	userID := intFromAny(sa["userId"])
+	if userID == 0 {
+		userID = id
+	}
+	fullName := strFromAny(sa["name"])
+	first, last := fullName, ""
+	if i := strings.IndexByte(fullName, ' '); i >= 0 {
+		first, last = fullName[:i], strings.TrimSpace(fullName[i+1:])
+	}
+	return ipauth.Claims{
+		LoginID: loginID, UserID: userID, Role: &role, LoginType: 2,
+		LoginUsername:  strFromAny(sa["email"]),
+		LoginFirstName: first, LoginLastName: last,
+		ClientName: fullName,
+	}
+}
+
 // hashResetToken returns the SHA-256 hex of a reset token. Only the hash is
 // stored in the DB, so a leaked database row cannot be used to reset a password
 // (the raw token exists only in the user's email).
@@ -113,17 +167,17 @@ func CheckMultipleLogins(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 400, "Missing credentials"); return
 	}
 
-	// Super admin check
-	sa, _ := db.QueryOne("SELECT id, name, email, password_hash, is_active FROM dcp_super_admin WHERE email = ? AND is_active = 1 LIMIT 1", body.Username)
-	if sa != nil {
+	// Portal-staff check (Admin or Super Admin — unified in dcp_super_admin)
+	if sa := superAdminByEmail(body.Username); sa != nil {
 		hash, _ := sa["password_hash"].(string)
 		if !ipauth.VerifyPassword(body.Password, hash) {
 			OK(w, map[string]any{"success": false, "error": "Invalid username or password"}); return
 		}
 		upgradeLegacyHash(body.Password, hash, "UPDATE dcp_super_admin SET password_hash = ? WHERE id = ?", intFromAny(sa["id"]))
+		claims := claimsForSuperAdminRow(sa)
 		OK(w, map[string]any{
-			"success": true, "userId": intFromAny(sa["id"]),
-			"email": sa["email"], "login_type": 2, "role": 2,
+			"success": true, "userId": claims.UserID,
+			"email": sa["email"], "login_type": 2, "role": *claims.Role,
 			"multipleLogins": false, "rows": []any{},
 		}); return
 	}
@@ -195,6 +249,28 @@ func SendOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 
+	// Portal-staff accounts (Admin/Super Admin) live in dcp_super_admin and use
+	// their own OTP storage, checked first (matches Login's precedence: a
+	// dcp_super_admin email always wins over a same-address client login).
+	if body.Email != "" {
+		if sa := superAdminByEmail(body.Email); sa != nil {
+			digits := genOTPDigits()
+			db.Exec("UPDATE dcp_super_admin SET twofa_code = ?, twofa_code_expires = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE id = ?", digits, sa["id"])
+			name := strFromAny(sa["name"])
+			if name == "" {
+				name = body.Email
+			}
+			if err := email.SendOTP(body.Email, digits, name); err != nil {
+				log.Printf("[send-otp] failed to email %s (portal staff): %v", body.Email, err)
+				Fail(w, 502, "Could not send the verification email. Please check email settings or try again.")
+				return
+			}
+			log.Printf("[send-otp] OTP sent to %s (portal staff id=%d)", body.Email, intFromAny(sa["id"]))
+			OK(w, map[string]any{"success": true, "userId": intFromAny(sa["id"])})
+			return
+		}
+	}
+
 	// Email-based resolution always wins so send/verify target the same row.
 	body.UserID = otpUserID(body.Email, body.UserID)
 	if body.UserID == 0 {
@@ -229,17 +305,7 @@ func SendOTP(w http.ResponseWriter, r *http.Request) {
 		loginName = strings.TrimSpace(strFromAny(loginRow["first_name"]) + " " + strFromAny(loginRow["last_name"]))
 	}
 
-	code := randHex(3) // 6 hex chars = numeric-ish
-	// Make it 6 digits
-	var digits string
-	for len(digits) < 6 {
-		b := make([]byte, 3)
-		rand.Read(b)
-		for _, c := range b {
-			digits += string(rune('0' + int(c)%10))
-		}
-	}
-	digits = digits[:6]
+	digits := genOTPDigits()
 
 	// Use MySQL's own clock for the expiry so verification is timezone-agnostic
 	// (the driver uses loc=Asia/Kolkata; mixing Go UTC strings caused false expiries).
@@ -265,7 +331,6 @@ func SendOTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[send-otp] OTP sent to %s (userId=%d)", recipient, body.UserID)
 
 	OK(w, map[string]any{"success": true, "userId": body.UserID})
-	_ = code
 }
 
 // ── POST /api/auth/verify-otp ─────────────────────────────────────────────────
@@ -277,6 +342,48 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		Code   string `json:"code"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
+
+	// Portal-staff accounts verify against dcp_super_admin's own OTP columns.
+	// Unlike the client flow below (which needs an extra account-selection
+	// step), an email in dcp_super_admin maps 1:1 to a login, so a correct
+	// code signs the JWT and finishes the login right here.
+	if body.Email != "" {
+		if sa := superAdminByEmail(body.Email); sa != nil {
+			exp, _ := db.QueryOne(`
+				SELECT twofa_code, (twofa_code_expires IS NOT NULL AND twofa_code_expires > NOW()) AS not_expired
+				FROM dcp_super_admin WHERE id = ? LIMIT 1`, sa["id"])
+			storedCode := ""
+			notExpired := int64(0)
+			if exp != nil {
+				storedCode = strFromAny(exp["twofa_code"])
+				notExpired = intFromAny(exp["not_expired"])
+			}
+			if body.Code == "" || storedCode == "" {
+				OK(w, map[string]any{"success": false, "error": "No active code"}); return
+			}
+			if storedCode != body.Code {
+				OK(w, map[string]any{"success": false, "error": "Incorrect code"}); return
+			}
+			if notExpired == 0 {
+				OK(w, map[string]any{"success": false, "error": "Code has expired"}); return
+			}
+			id := intFromAny(sa["id"])
+			db.Exec("UPDATE dcp_super_admin SET twofa_code = NULL, twofa_code_expires = NULL WHERE id = ?", id)
+
+			claims := claimsForSuperAdminRow(sa)
+			tok, err := ipauth.SignToken(claims)
+			if err != nil {
+				Fail(w, 500, "Token error"); return
+			}
+			go db.Exec("UPDATE dcp_super_admin SET last_login = NOW() WHERE id = ?", id)
+			go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (?, ?, NOW())", claims.UserID, claims.LoginID)
+			go activity.Log(claims.LoginID, "login", "auth/verify-otp", activity.GetIP(r), activity.GetUA(r), map[string]any{"method": "otp"})
+			SetTokenCookie(w, tok)
+			OK(w, map[string]any{"success": true, "authenticated": true, "token": tok, "user": sanitizeClaims(claims)})
+			return
+		}
+	}
+
 	// Resolve the same canonical userId the OTP was stored against.
 	body.UserID = otpUserID(body.Email, body.UserID)
 	if body.UserID == 0 || body.Code == "" {
@@ -474,22 +581,18 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 400, "Missing credentials"); return
 	}
 
-	// Super admin
-	sa, _ := db.QueryOne("SELECT id, name, email, password_hash, is_active FROM dcp_super_admin WHERE email = ? AND is_active = 1 LIMIT 1", body.Username)
-	if sa != nil {
+	// Portal-staff login (Admin or Super Admin — unified in dcp_super_admin)
+	if sa := superAdminByEmail(body.Username); sa != nil {
 		hash, _ := sa["password_hash"].(string)
 		if !ipauth.VerifyPassword(body.Password, hash) {
 			Fail(w, 401, "Invalid credentials"); return
 		}
 		id := intFromAny(sa["id"])
 		upgradeLegacyHash(body.Password, hash, "UPDATE dcp_super_admin SET password_hash = ? WHERE id = ?", id)
-		role := int64(2)
-		claims := ipauth.Claims{
-			LoginID: id, UserID: id, Role: &role, LoginType: 2,
-			LoginUsername: strFromAny(sa["email"]),
-		}
+		claims := claimsForSuperAdminRow(sa)
 		go db.Exec("UPDATE dcp_super_admin SET last_login = NOW() WHERE id = ?", id)
-		go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (0, ?, NOW())", id)
+		go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (?, ?, NOW())", claims.UserID, claims.LoginID)
+		go activity.Log(claims.LoginID, "login", "auth/login", activity.GetIP(r), activity.GetUA(r), map[string]any{"method": "password"})
 		tok, _ := ipauth.SignToken(claims)
 		SetTokenCookie(w, tok)
 		OK(w, map[string]any{"success": true, "token": tok, "user": sanitizeClaims(claims)})

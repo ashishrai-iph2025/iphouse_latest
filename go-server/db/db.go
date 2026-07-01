@@ -122,6 +122,76 @@ func Migrate() {
 	if _, _, aerr := Exec("ALTER TABLE dcp_admin_config_access CHANGE COLUMN userId loginId INT NOT NULL"); aerr == nil {
 		log.Printf("[db] migrate: dcp_admin_config_access userId→loginId renamed")
 	}
+
+	// Unify dcp_super_admin into the master portal-staff table: an "Admin" or
+	// "SuperAdmin" tier is stored here (not just the original hand-seeded
+	// Super Admin row). userId/loginId link a mirrored row back to the real
+	// dcp_user / dcp_user_login account so existing loginId-keyed features
+	// (e.g. Configuration Access) keep working when that person logs in
+	// through this table. twofa_code(_expires) let these accounts use OTP
+	// login the same way client accounts already do.
+	addColumnIfMissing("dcp_super_admin", "role", "VARCHAR(20) NOT NULL DEFAULT 'SuperAdmin'")
+	addColumnIfMissing("dcp_super_admin", "userId", "INT NULL")
+	addColumnIfMissing("dcp_super_admin", "loginId", "INT NULL")
+	addColumnIfMissing("dcp_super_admin", "twofa_code", "VARCHAR(10) NULL")
+	addColumnIfMissing("dcp_super_admin", "twofa_code_expires", "DATETIME NULL")
+	addIndexIfMissing("dcp_super_admin", "idx_super_admin_userId", "INDEX idx_super_admin_userId (userId)")
+	addIndexIfMissing("dcp_super_admin", "uniq_super_admin_email", "UNIQUE KEY uniq_super_admin_email (email)")
+}
+
+// addColumnIfMissing runs an ALTER TABLE ADD COLUMN only when the column does
+// not already exist, so Migrate stays idempotent across every server restart
+// without relying on "ADD COLUMN IF NOT EXISTS" (not supported on all MySQL
+// versions this app may run against).
+func addColumnIfMissing(table, column, ddl string) {
+	row, err := QueryOne(`
+		SELECT COUNT(*) AS c FROM information_schema.columns
+		WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`, table, column)
+	if err != nil {
+		log.Printf("[db] migrate: check column %s.%s failed: %v", table, column, err)
+		return
+	}
+	if row != nil && countVal(row["c"]) > 0 {
+		return
+	}
+	if _, _, err := Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + ddl); err != nil {
+		log.Printf("[db] migrate: add column %s.%s failed: %v", table, column, err)
+		return
+	}
+	log.Printf("[db] migrate: %s.%s added", table, column)
+}
+
+// addIndexIfMissing mirrors addColumnIfMissing for indexes/unique keys.
+func addIndexIfMissing(table, indexName, ddl string) {
+	row, err := QueryOne(`
+		SELECT COUNT(*) AS c FROM information_schema.statistics
+		WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?`, table, indexName)
+	if err != nil {
+		log.Printf("[db] migrate: check index %s.%s failed: %v", table, indexName, err)
+		return
+	}
+	if row != nil && countVal(row["c"]) > 0 {
+		return
+	}
+	if _, _, err := Exec("ALTER TABLE " + table + " ADD " + ddl); err != nil {
+		log.Printf("[db] migrate: add index %s.%s failed: %v", table, indexName, err)
+		return
+	}
+	log.Printf("[db] migrate: %s.%s added", table, indexName)
+}
+
+// countVal reads a COUNT(*) result regardless of which numeric Go type the
+// MySQL driver chose to represent it as.
+func countVal(v any) int64 {
+	switch t := v.(type) {
+	case int64:
+		return t
+	case float64:
+		return int64(t)
+	case int:
+		return int64(t)
+	}
+	return 0
 }
 
 func scanRows(rows *sql.Rows) ([]map[string]any, error) {

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -900,7 +901,10 @@ func RegistrationRequests(w http.ResponseWriter, r *http.Request) {
 func SharedLogins(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		logins, _ := db.Query(`
+		// portal_role reflects the PERSON behind this shared login (one row in
+		// dcp_super_admin keyed by login_username/email), independent of any of
+		// the client companies they happen to be assigned to view.
+		logins, err := db.Query(`
 			SELECT
 				MAX(ul.loginId)                                              AS loginId,
 				ul.login_username,
@@ -910,12 +914,20 @@ func SharedLogins(w http.ResponseWriter, r *http.Request) {
 				MAX(ul.last_name)                                            AS last_name,
 				MAX(ul.designation)                                          AS designation,
 				GROUP_CONCAT(DISTINCT ul.userId)                             AS allUserIds,
-				GROUP_CONCAT(DISTINCT u.name ORDER BY u.name SEPARATOR ', ') AS master_names
+				GROUP_CONCAT(DISTINCT u.name ORDER BY u.name SEPARATOR ', ') AS master_names,
+				MAX(sa.role)                                                 AS portal_role
 			FROM dcp_user_login ul
 			LEFT JOIN dcp_user u ON u.userId = ul.userId AND u.deleted = 0
+			LEFT JOIN dcp_super_admin sa
+				ON CONVERT(sa.email USING utf8mb4) COLLATE utf8mb4_general_ci
+				 = CONVERT(ul.login_username USING utf8mb4) COLLATE utf8mb4_general_ci
+				AND sa.is_active = 1
 			WHERE ul.is_active = 1
 			GROUP BY ul.login_username
 			ORDER BY loginId DESC`)
+		if err != nil {
+			log.Printf("[shared-logins] query failed: %v", err)
+		}
 		if logins == nil {
 			logins = []map[string]any{}
 		}

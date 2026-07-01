@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { useSession } from '@/lib/auth-client'
+import ManageAccessModal from './ManageAccessModal'
 
 interface LoginGroup {
   loginId: number
@@ -13,6 +15,21 @@ interface LoginGroup {
   designation: string | null
   allUserIds: string   // "1,2,3"
   master_names: string
+  portal_role: string | null   // 'Admin' | 'SuperAdmin' | null — role of the PERSON, not any one client company
+}
+
+// portal_role is granted to the shared login (the person) itself, independent
+// of dcp_user.role for any of the client companies they're assigned to.
+function portalRoleNum(r: string | null): 0 | 1 | 2 {
+  if (r === 'SuperAdmin') return 2
+  if (r === 'Admin') return 1
+  return 0
+}
+
+const PORTAL_ROLE_LABEL: Record<number, { label: string; color: string; bg: string }> = {
+  2: { label: 'Super Admin', color: '#7C3AED', bg: 'rgba(124,58,237,0.08)' },
+  1: { label: 'Admin',       color: '#0078D4', bg: 'rgba(0,120,212,0.08)'  },
+  0: { label: 'Client',      color: '#6b7280', bg: 'rgba(107,114,128,0.08)'},
 }
 
 interface MasterUser {
@@ -86,11 +103,19 @@ function UserPicker({
 }
 
 export default function SharedLoginsClient() {
+  const { data: session } = useSession()
+  const isSuperAdmin = (session?.user as any)?.role === 2
+
   const [logins,      setLogins]      = useState<LoginGroup[]>([])
   const [masterUsers, setMasterUsers] = useState<MasterUser[]>([])
   const [loading,     setLoading]     = useState(true)
   const [error,       setError]       = useState('')
   const [search,      setSearch]      = useState('')
+
+  // Manage Access (Super Admin only) — one modal covers Role + Configuration
+  // module access for the PERSON behind a shared login (same component used
+  // on /admin/users), independent of any client company's role.
+  const [accessRow, setAccessRow] = useState<LoginGroup | null>(null)
 
   const [modal,       setModal]       = useState<'add' | 'edit' | 'delete' | null>(null)
   const [form,        setForm]        = useState({ ...BLANK_FORM })
@@ -311,6 +336,7 @@ export default function SharedLoginsClient() {
     <div className="p-6 fade-in">
 
       {/* Header */}
+
       <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-[#14254A]">Shared Login Accounts</h1>
@@ -354,12 +380,13 @@ export default function SharedLoginsClient() {
                   <th className="cursor-pointer select-none" onClick={() => handleSort('login_type')}>Login Type<>{si('login_type')}</></th>
                   <th>TOTP Secret</th>
                   <th className="cursor-pointer select-none" onClick={() => handleSort('master_names')}>Assigned Users<>{si('master_names')}</></th>
+                  {isSuperAdmin && <th>Portal Access</th>}
                   <th className="text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {paginated.length === 0 ? (
-                  <tr><td colSpan={8} className="text-center py-10 text-brand-muted">No login accounts found</td></tr>
+                  <tr><td colSpan={isSuperAdmin ? 9 : 8} className="text-center py-10 text-brand-muted">No login accounts found</td></tr>
                 ) : paginated.map((row, i) => {
                   const lt = typeInfo(row.login_type)
                   return (
@@ -390,6 +417,25 @@ export default function SharedLoginsClient() {
                       <td className="text-sm text-gray-600 max-w-[200px]">
                         <span className="truncate block" title={row.master_names}>{row.master_names || '—'}</span>
                       </td>
+                      {isSuperAdmin && (() => {
+                        const pr = portalRoleNum(row.portal_role)
+                        const ri = PORTAL_ROLE_LABEL[pr]
+                        return (
+                          <td>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold"
+                                style={{ color: ri.color, background: ri.bg }}>
+                                <span className="w-1.5 h-1.5 rounded-full" style={{ background: ri.color }} />
+                                {ri.label}
+                              </span>
+                              <button onClick={() => setAccessRow(row)}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-gray-50 text-[#14254A] border border-gray-200 hover:bg-gray-100">
+                                🔑 Manage
+                              </button>
+                            </div>
+                          </td>
+                        )
+                      })()}
                       <td className="text-right">
                         <div className="flex items-center justify-end gap-2">
                           <button onClick={() => openEdit(row)}
@@ -514,6 +560,18 @@ export default function SharedLoginsClient() {
             </div>
           </div>,
         document.body
+      )}
+
+      {/* ── MANAGE ACCESS MODAL (Super Admin only) ── */}
+      {accessRow && (
+        <ManageAccessModal
+          loginUsername={accessRow.login_username}
+          displayName={[accessRow.first_name, accessRow.last_name].filter(Boolean).join(' ') || accessRow.login_username}
+          companiesLabel={accessRow.master_names ? `Shared with: ${accessRow.master_names}` : undefined}
+          initialRole={portalRoleNum(accessRow.portal_role)}
+          onClose={() => setAccessRow(null)}
+          onChanged={() => load()}
+        />
       )}
     </div>
   )

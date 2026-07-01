@@ -109,6 +109,18 @@ export default function VerifyEmailPage() {
       const data = await res.json()
       if (!data.success) { setError(data.error || 'Invalid code'); return }
 
+      // Portal-staff accounts (Admin/Super Admin) are authenticated directly by
+      // verify-otp — the server already set the session cookie, no further
+      // select-login round trip is needed.
+      if (data.authenticated) {
+        sessionStorage.removeItem('pending_otp_email')
+        sessionStorage.removeItem('pending_otp_userId')
+        sessionStorage.removeItem('pending_otp_username')
+        sessionStorage.removeItem('pending_login_rows')
+        await update()
+        return
+      }
+
       // Check if multiple logins need selection
       const rows = JSON.parse(sessionStorage.getItem('pending_login_rows') || '[]')
       if (rows.length > 1) {
