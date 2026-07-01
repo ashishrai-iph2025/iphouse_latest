@@ -197,6 +197,8 @@ func main() {
 	mux.Handle("PUT /api/admin/super-admin/permissions", saAuth(admin.SuperAdminPermissions))
 	mux.Handle("GET /api/admin/super-admin/config-access", saAuth(admin.SuperAdminConfigAccess))
 	mux.Handle("PUT /api/admin/super-admin/config-access", saAuth(admin.SuperAdminConfigAccess))
+	mux.Handle("GET /api/admin/super-admin/accounts", saAuth(admin.SuperAdminAccounts))
+	mux.Handle("GET /api/admin/super-admin/user-permissions", saAuth(admin.SuperAdminUserPermissions))
 
 	// ── Serve Vite static build (SPA fallback) ───────────────────────────────
 	distDir := "../dist"

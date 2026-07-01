@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useSession } from '@/lib/auth-client'
-import ManageAccessModal from './ManageAccessModal'
 
 interface LoginGroup {
   loginId: number
@@ -111,11 +110,6 @@ export default function SharedLoginsClient() {
   const [loading,     setLoading]     = useState(true)
   const [error,       setError]       = useState('')
   const [search,      setSearch]      = useState('')
-
-  // Manage Access (Super Admin only) — one modal covers Role + Configuration
-  // module access for the PERSON behind a shared login (same component used
-  // on /admin/users), independent of any client company's role.
-  const [accessRow, setAccessRow] = useState<LoginGroup | null>(null)
 
   const [modal,       setModal]       = useState<'add' | 'edit' | 'delete' | null>(null)
   const [form,        setForm]        = useState({ ...BLANK_FORM })
@@ -422,17 +416,12 @@ export default function SharedLoginsClient() {
                         const ri = PORTAL_ROLE_LABEL[pr]
                         return (
                           <td>
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold"
-                                style={{ color: ri.color, background: ri.bg }}>
-                                <span className="w-1.5 h-1.5 rounded-full" style={{ background: ri.color }} />
-                                {ri.label}
-                              </span>
-                              <button onClick={() => setAccessRow(row)}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-gray-50 text-[#14254A] border border-gray-200 hover:bg-gray-100">
-                                🔑 Manage
-                              </button>
-                            </div>
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold"
+                              style={{ color: ri.color, background: ri.bg }}
+                              title="Manage from /admin/users">
+                              <span className="w-1.5 h-1.5 rounded-full" style={{ background: ri.color }} />
+                              {ri.label}
+                            </span>
                           </td>
                         )
                       })()}
@@ -562,17 +551,6 @@ export default function SharedLoginsClient() {
         document.body
       )}
 
-      {/* ── MANAGE ACCESS MODAL (Super Admin only) ── */}
-      {accessRow && (
-        <ManageAccessModal
-          loginUsername={accessRow.login_username}
-          displayName={[accessRow.first_name, accessRow.last_name].filter(Boolean).join(' ') || accessRow.login_username}
-          companiesLabel={accessRow.master_names ? `Shared with: ${accessRow.master_names}` : undefined}
-          initialRole={portalRoleNum(accessRow.portal_role)}
-          onClose={() => setAccessRow(null)}
-          onChanged={() => load()}
-        />
-      )}
     </div>
   )
 }

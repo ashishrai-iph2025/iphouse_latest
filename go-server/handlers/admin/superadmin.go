@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
@@ -85,6 +86,13 @@ func superAdminUpdate(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "User not found"); return
 	}
 
+	currentSA, _ := db.QueryOne("SELECT role FROM dcp_super_admin WHERE userId = ? LIMIT 1", body.UserID)
+	if currentSA != nil && strVal(currentSA["role"]) == "SuperAdmin" && role != "superadmin" {
+		if activeSuperAdminCount() <= 1 {
+			fail(w, 422, "At least one Super Admin must remain — promote someone else first"); return
+		}
+	}
+
 	dcpRole := map[string]int{"client": 0, "admin": 1, "superadmin": 2}[role]
 	db.Exec("UPDATE dcp_user SET role = ? WHERE userId = ?", dcpRole, body.UserID)
 
@@ -123,14 +131,32 @@ func superAdminUpdate(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{"success": true})
 }
 
+// activeSuperAdminCount returns how many active Super Admin rows currently
+// exist. Used to block the last one from being demoted or revoked, so a
+// mistake can never leave the portal with zero Super Admins.
+func activeSuperAdminCount() int64 {
+	row, _ := db.QueryOne("SELECT COUNT(*) AS c FROM dcp_super_admin WHERE role = 'SuperAdmin' AND is_active = 1")
+	if row == nil {
+		return 0
+	}
+	return intVal(row["c"])
+}
+
 // superAdminUpdateByLogin grants/revokes portal-staff access to the PERSON
 // behind a shared login (identified by login_username/email), independent of
 // dcp_user.role. Shared logins can be assigned to many client companies at
 // once, so there is no single "owning" company whose role should flip —
 // unlike the per-userId path above, this never touches dcp_user at all.
 func superAdminUpdateByLogin(w http.ResponseWriter, loginUsername, role string) {
+	current, _ := db.QueryOne("SELECT role FROM dcp_super_admin WHERE email = ? LIMIT 1", loginUsername)
+	if current != nil && strVal(current["role"]) == "SuperAdmin" && role != "superadmin" {
+		if activeSuperAdminCount() <= 1 {
+			fail(w, 422, "At least one Super Admin must remain — promote someone else first"); return
+		}
+	}
+
 	if role == "client" {
-		db.Exec("DELETE FROM dcp_super_admin WHERE email = ? AND userId IS NULL", loginUsername)
+		db.Exec("DELETE FROM dcp_super_admin WHERE email = ?", loginUsername)
 		ok(w, map[string]any{"success": true}); return
 	}
 
@@ -159,6 +185,62 @@ func superAdminUpdateByLogin(w http.ResponseWriter, loginUsername, role string) 
 		fail(w, 500, "Failed to grant portal access"); return
 	}
 	ok(w, map[string]any{"success": true})
+}
+
+// GET /api/admin/super-admin/accounts  (super admin only)
+// The direct, authoritative list of everyone currently holding Admin or
+// Super Admin access — every row in dcp_super_admin. This is what the login
+// flow actually checks, so it's the ground truth for "who has power right
+// now", independent of any client company's dcp_user.role.
+func SuperAdminAccounts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, 405, "Method not allowed"); return
+	}
+	accounts, _ := db.Query(`
+		SELECT id, name, email, role, is_active, last_login, created_at
+		FROM dcp_super_admin
+		ORDER BY role DESC, name ASC`)
+	if accounts == nil {
+		accounts = []map[string]any{}
+	}
+	ok(w, map[string]any{"success": true, "accounts": accounts, "superAdminCount": activeSuperAdminCount()})
+}
+
+// GET /api/admin/super-admin/user-permissions  (super admin only)
+// One row per unique person (grouped by login_username), covering every
+// login account — clients, admins, and super admins alike — so access can be
+// granted or revoked for anyone from a single list, regardless of how many
+// client companies share that login. portal_role reflects dcp_super_admin
+// (checked first at login time), independent of any one company's dcp_user.role.
+func SuperAdminUserPermissions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, 405, "Method not allowed"); return
+	}
+	rows, err := db.Query(`
+		SELECT
+			MAX(ul.loginId)                                              AS loginId,
+			ul.login_username,
+			MAX(ul.first_name)                                           AS first_name,
+			MAX(ul.last_name)                                            AS last_name,
+			MAX(ul.is_active)                                            AS is_active,
+			GROUP_CONCAT(DISTINCT u.name ORDER BY u.name SEPARATOR ', ') AS companies,
+			MAX(sa.role)                                                 AS portal_role
+		FROM dcp_user_login ul
+		LEFT JOIN dcp_user u ON u.userId = ul.userId AND u.deleted = 0
+		LEFT JOIN dcp_super_admin sa
+			ON CONVERT(sa.email USING utf8mb4) COLLATE utf8mb4_general_ci
+			 = CONVERT(ul.login_username USING utf8mb4) COLLATE utf8mb4_general_ci
+			AND sa.is_active = 1
+		WHERE ul.is_active = 1
+		GROUP BY ul.login_username
+		ORDER BY MAX(ul.first_name) ASC, ul.login_username ASC`)
+	if err != nil {
+		log.Printf("[user-permissions] query failed: %v", err)
+	}
+	if rows == nil {
+		rows = []map[string]any{}
+	}
+	ok(w, map[string]any{"success": true, "users": rows})
 }
 
 // GET /api/admin/super-admin/active-sessions

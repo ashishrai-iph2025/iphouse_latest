@@ -2,10 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from '@/lib/router'
-import { useSession } from '@/lib/auth-client'
 import PaginationBar, { PER_PAGE } from './PaginationBar'
 import AdminModal from './AdminModal'
-import ManageAccessModal from './ManageAccessModal'
 
 interface LoginRow {
   loginId: number
@@ -33,8 +31,6 @@ function LoginTypeBadge({ type }: { type: number }) {
 
 export default function UsersTableClient() {
   const router = useRouter()
-  const { data: session } = useSession()
-  const isSuperAdmin = (session?.user as any)?.role === 2
   const [rows, setRows] = useState<LoginRow[]>([])
   const [fetchError, setFetchError] = useState<string | null>(null)
   useEffect(() => {
@@ -65,10 +61,6 @@ export default function UsersTableClient() {
   const [nameRow,    setNameRow]    = useState<LoginRow | null>(null)
   const [nameForm,   setNameForm]   = useState({ firstName: '', lastName: '' })
   const [nameBusy,   setNameBusy]   = useState(false)
-
-  // Manage Access (Super Admin only) — one modal covers Role + Configuration
-  // module access for the person behind this login (by login_username).
-  const [accessRow, setAccessRow] = useState<LoginRow | null>(null)
 
   function handleSort(col: string) {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -233,12 +225,11 @@ export default function UsersTableClient() {
                 <th className="cursor-pointer select-none" onClick={() => handleSort('login_type')}>Login Type<>{si('login_type')}</></th>
                 <th className="cursor-pointer select-none" onClick={() => handleSort('is_active')}>Status<>{si('is_active')}</></th>
                 <th>Actions</th>
-                {isSuperAdmin && <th>Portal Access</th>}
               </tr>
             </thead>
             <tbody>
               {pageRows.length === 0 ? (
-                <tr><td colSpan={isSuperAdmin ? 8 : 7} className="text-center py-8 text-brand-muted">No users found</td></tr>
+                <tr><td colSpan={7} className="text-center py-8 text-brand-muted">No users found</td></tr>
               ) : pageRows.map(r => (
                 <tr key={r.loginId}>
                   <td className="text-xs text-gray-400">#{r.loginId}</td>
@@ -293,14 +284,6 @@ export default function UsersTableClient() {
                       {r.is_active === 1 ? 'Deactivate' : 'Activate'}
                     </button>
                   </td>
-                  {isSuperAdmin && (
-                    <td>
-                      <button onClick={() => setAccessRow(r)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-gray-50 text-[#14254A] border border-gray-200 hover:bg-gray-100">
-                        🔑 Manage Access
-                      </button>
-                    </td>
-                  )}
                 </tr>
               ))}
             </tbody>
@@ -449,19 +432,6 @@ export default function UsersTableClient() {
         </AdminModal>
       )}
 
-      {/* ── Manage Access Modal (Super Admin only) ──────── */}
-      {accessRow && (
-        <ManageAccessModal
-          loginUsername={accessRow.login_username}
-          displayName={displayName(accessRow)}
-          companiesLabel={accessRow.user_name}
-          initialRole={accessRow.role ?? 0}
-          onClose={() => setAccessRow(null)}
-          onChanged={newRole => {
-            setRows(prev => prev.map(r => r.login_username === accessRow.login_username ? { ...r, role: newRole } : r))
-          }}
-        />
-      )}
     </>
   )
 }
