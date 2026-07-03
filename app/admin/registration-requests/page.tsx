@@ -86,9 +86,9 @@ export default function RegistrationRequestsPage() {
     if (!confirmTarget) return
     setActioning(true); setActionMsg('')
     try {
-      const res  = await fetch('/api/admin/registration-requests', {
+      const res  = await fetch('/api/admin/registrations', {
         credentials: 'include',
-        method:  'POST',
+        method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ requestId: confirmTarget.id, action: confirmTarget.action }),
       })

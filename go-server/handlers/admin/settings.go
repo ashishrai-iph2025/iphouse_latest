@@ -832,9 +832,11 @@ func registrationsUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if body.Action == "reject" {
-		db.Exec("UPDATE user_registration_requests SET status='rejected' WHERE requestId=?", body.RequestID)
-		req, _ := db.QueryOne("SELECT * FROM user_registration_requests WHERE requestId = ?", body.RequestID)
+	// Accept both "reject"/"rejected" and "approve"/"approved" so the payload
+	// matches whether the caller sends the verb or the resulting status.
+	if body.Action == "reject" || body.Action == "rejected" {
+		db.Exec("UPDATE user_registration_requests SET status='rejected' WHERE id=?", body.RequestID)
+		req, _ := db.QueryOne("SELECT * FROM user_registration_requests WHERE id = ?", body.RequestID)
 		if req != nil {
 			emailAddr := strVal(req["email"])
 			name := strVal(req["first_name"]) + " " + strVal(req["last_name"])
@@ -844,8 +846,8 @@ func registrationsUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if body.Action == "approve" {
-		req, _ := db.QueryOne("SELECT * FROM user_registration_requests WHERE requestId = ? AND status = 'pending'", body.RequestID)
+	if body.Action == "approve" || body.Action == "approved" {
+		req, _ := db.QueryOne("SELECT * FROM user_registration_requests WHERE id = ? AND status = 'pending'", body.RequestID)
 		if req == nil {
 			ok(w, map[string]any{"success": false, "error": "Request not found or already processed"})
 			return
@@ -858,8 +860,10 @@ func registrationsUpdate(w http.ResponseWriter, r *http.Request) {
 			rawPass = "changeme123"
 		}
 
+		// New self-registered users are Clients (role 0). role 2 now means
+		// Super Admin in the access model, so it must never be assigned here.
 		hashed, _ := ipAuthHashPassword(rawPass)
-		lid, _, err := db.Exec("INSERT INTO dcp_user (name, email, role, deleted, IsSecure) VALUES (?, ?, 2, 0, 0)", fullName, emailAddr)
+		lid, _, err := db.Exec("INSERT INTO dcp_user (name, email, role, deleted, IsSecure) VALUES (?, ?, 0, 0, 0)", fullName, emailAddr)
 		if err != nil {
 			fail(w, 500, err.Error())
 			return
@@ -870,7 +874,7 @@ func registrationsUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		db.Exec("INSERT INTO dcp_user_login (userId, first_name, login_username, login_password, login_type, is_active) VALUES (?, ?, ?, ?, 0, 1)",
 			lid, fullName, username, hashed)
-		db.Exec("UPDATE user_registration_requests SET status='approved' WHERE requestId=?", body.RequestID)
+		db.Exec("UPDATE user_registration_requests SET status='approved' WHERE id=?", body.RequestID)
 
 		go email.SendRegistrationApproved(emailAddr, fullName, username, rawPass, "/login")
 
