@@ -1,8 +1,10 @@
 package admin
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"log"
+	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +16,38 @@ import (
 	"github.com/ip-house/iphouse-api/markscan"
 	"github.com/ip-house/iphouse-api/middleware"
 )
+
+// genStrongPassword returns a random n-char password with at least one lower,
+// upper, digit and symbol. Ambiguous characters (0/O/1/l/I) are excluded so the
+// emailed credential is easy to read and type.
+func genStrongPassword(n int) string {
+	const (
+		lower  = "abcdefghijkmnopqrstuvwxyz"
+		upper  = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+		digits = "23456789"
+		syms   = "!@#$%*?"
+	)
+	all := lower + upper + digits + syms
+	pick := func(set string) byte {
+		idx, _ := rand.Int(rand.Reader, big.NewInt(int64(len(set))))
+		return set[idx.Int64()]
+	}
+	if n < 4 {
+		n = 4
+	}
+	b := make([]byte, n)
+	b[0], b[1], b[2], b[3] = pick(lower), pick(upper), pick(digits), pick(syms)
+	for i := 4; i < n; i++ {
+		b[i] = pick(all)
+	}
+	// Shuffle so the guaranteed classes aren't always in the first four slots.
+	for i := len(b) - 1; i > 0; i-- {
+		jb, _ := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		j := int(jb.Int64())
+		b[i], b[j] = b[j], b[i]
+	}
+	return string(b)
+}
 
 // logReveal records who revealed which credential, so credential disclosure
 // leaves an audit trail in user_activity_log.
@@ -857,7 +891,7 @@ func registrationsUpdate(w http.ResponseWriter, r *http.Request) {
 		emailAddr := strVal(req["email"])
 		rawPass, _ := req["password_raw"].(string)
 		if rawPass == "" {
-			rawPass = "changeme123"
+			rawPass = genStrongPassword(12)
 		}
 
 		// New self-registered users are Clients (role 0). role 2 now means

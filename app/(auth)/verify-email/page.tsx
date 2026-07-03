@@ -119,11 +119,13 @@ export default function VerifyEmailPage() {
         return
       }
 
-      // Single login – sign in with temp token
+      // Single login – sign in with the verified temp token. It MUST be passed
+      // as `tempToken` (not `password`) so the Login handler's temp-token branch
+      // fires — otherwise it tries to verify the token as a password and fails.
       const result = await signIn('credentials', {
         redirect:  false,
         username:  data.username,
-        password:  data.tempToken,
+        tempToken: data.tempToken,
         loginId:   String(data.loginId),
       })
 
