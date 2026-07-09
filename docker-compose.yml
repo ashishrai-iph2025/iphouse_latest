@@ -10,4 +10,15 @@ services:
     environment:
       - STATIC_DIR=/app/dist
       - GO_PORT=8080
+      # War Room dataset store. Falls back to in-memory if unreachable/unset.
+      - REDIS_ADDR=redis:6379
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # Pure cache: capped memory + LRU eviction, no disk persistence — the War Room
+    # dataset rebuilds itself from MarkScan via the startDate/updatedSince flow.
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru", "--appendonly", "no"]
     restart: unless-stopped

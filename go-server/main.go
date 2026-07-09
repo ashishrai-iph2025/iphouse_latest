@@ -13,6 +13,7 @@ import (
 	"github.com/ip-house/iphouse-api/handlers"
 	"github.com/ip-house/iphouse-api/handlers/admin"
 	"github.com/ip-house/iphouse-api/middleware"
+	"github.com/ip-house/iphouse-api/store"
 )
 
 func main() {
@@ -29,6 +30,9 @@ func main() {
 		log.Fatalf("[main] DB connect failed: %v", err)
 	}
 	db.Migrate()
+
+	// War Room dataset store (Redis-backed, in-memory fallback).
+	handlers.SetWarRoomStore(store.New(config.C.RedisAddr))
 
 	mux := http.NewServeMux()
 
@@ -64,6 +68,8 @@ func main() {
 
 	// Client routes
 	mux.Handle("POST /api/infringement", auth(handlers.Infringement))
+	mux.Handle("POST /api/warroom", auth(handlers.WarRoom))
+	mux.Handle("POST /api/warroom/stream", auth(handlers.WarRoomStream))
 	mux.Handle("POST /api/search", auth(handlers.Search))
 	mux.Handle("GET /api/download", auth(handlers.DownloadList))
 	mux.Handle("POST /api/download", auth(handlers.DownloadTrigger))
@@ -177,6 +183,9 @@ func main() {
 	mux.Handle("GET /api/admin/home-analytics", adminAuth(admin.HomeAnalytics))
 
 	mux.Handle("GET /api/admin/my-config-access", adminAuth(admin.MyConfigAccess))
+
+	// War Room: admin generates a selected client's MarkScan token + asset list.
+	mux.Handle("POST /api/warroom/client-token", adminAuth(handlers.WarRoomClientToken))
 
 	mux.Handle("GET /api/admin/registrations", adminAuth(admin.Registrations))
 	mux.Handle("PUT /api/admin/registrations", adminAuth(admin.Registrations))

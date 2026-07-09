@@ -29,6 +29,7 @@ const QcActionPage         = lazy(() => import('@/app/(client)/qc-action/page'))
 const ProfilePage          = lazy(() => import('@/app/(client)/profile/page'))
 const SwitchAccountPage    = lazy(() => import('@/app/(client)/switch-account/page'))
 const IpTrackingPage       = lazy(() => import('@/app/(client)/ip-tracking/page'))
+const WarRoomPage          = lazy(() => import('@/app/(client)/war-room/page'))
 
 // ── Admin pages ───────────────────────────────────────────────────────────────
 const AdminHomePage        = lazy(() => import('@/app/admin/home/page'))
@@ -60,6 +61,7 @@ const PowerBICredsPage     = lazy(() => import('@/app/admin/powerbi-creds/page')
 const PowerBIWorkspacePage = lazy(() => import('@/app/admin/powerbi-workspace/page'))
 const SuperAdminPage       = lazy(() => import('@/app/admin/super-admin/page'))
 const ApiPlaygroundPage    = lazy(() => import('@/app/admin/api-playground/page'))
+const AdminWarRoomPage     = lazy(() => import('@/app/admin/war-room/page'))
 
 // ── Route guards ──────────────────────────────────────────────────────────────
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -358,6 +360,7 @@ export default function App() {
         {/* Client pages */}
         <Route element={<ClientLayout />}>
           <Route path="/dashboard"                element={<DashboardPage />} />
+          <Route path="/war-room"                 element={<WarRoomPage />} />
           <Route path="/infringement"             element={<InfringementPage />} />
           <Route path="/infringement/:platform"   element={<InfringementPlatformRoute />} />
           <Route path="/search"                   element={<SearchPage />} />
@@ -401,6 +404,7 @@ export default function App() {
           <Route path="/admin/powerbi-workspace"          element={<PowerBIWorkspacePage />} />
           <Route path="/admin/super-admin"                element={<SuperAdminPage />} />
           <Route path="/admin/api-playground"             element={<ApiPlaygroundPage />} />
+          <Route path="/admin/war-room"                   element={<AdminWarRoomPage />} />
         </Route>
 
         {/* Fallback */}

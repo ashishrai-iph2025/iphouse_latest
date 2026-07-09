@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS `dcp_user` (
 -- ── Login credentials (one user may have many logins / shared logins) ─
 CREATE TABLE IF NOT EXISTS `dcp_user_login` (
   `loginId`        INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  `userId`         INT UNSIGNED NOT NULL,
+  `userId`         INT UNSIGNED DEFAULT NULL COMMENT 'NULL = approved registrant awaiting client assignment',
   `first_name`     VARCHAR(128) NOT NULL DEFAULT '',
   `last_name`      VARCHAR(128) NOT NULL DEFAULT '',
   `login_username` VARCHAR(255) NOT NULL DEFAULT '',

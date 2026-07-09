@@ -6,6 +6,7 @@ import { usePathname } from '@/lib/router'
 import { useSession } from '@/lib/auth-client'
 import { useCustomizer, SIDEBAR_HEX } from '@/lib/ThemeCustomizerContext'
 import { NAV_ITEMS, isNavItemActive, type NavItem, type NavDropdownItem } from '@/lib/navItems'
+import { useModuleAccess } from '@/lib/moduleAccess'
 
 // Sidebar bg now driven by CSS variable --sidebar-bg (set by ThemeCustomizerContext)
 
@@ -17,18 +18,12 @@ export default function SideNav() {
   const { navLayout, sidebarSize, sidebarColor } = useCustomizer()
 
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
-  const [allowedModuleNames, setAllowedModuleNames] = useState<string[] | null>(null)
   const [hovered, setHovered] = useState(false)
   const [overlayOpen, setOverlayOpen] = useState(false)
 
-  useEffect(() => {
-    fetch('/api/user/nav', { credentials: 'include' })
-      .then(r => r.json())
-      .then(d => {
-        if (d.success) setAllowedModuleNames(d.allowedModules.map((m: { moduleName: string }) => m.moduleName))
-      })
-      .catch(() => {})
-  }, [])
+  // Shared, sessionStorage-cached nav permissions (see lib/moduleAccess) — a
+  // refresh paints the granted nav on the first frame instead of flashing all.
+  const { allowedModuleNames } = useModuleAccess()
 
   // close dropdown on route change
   useEffect(() => { setOpenDropdown(null); setOverlayOpen(false) }, [pathname])
@@ -38,7 +33,8 @@ export default function SideNav() {
   const hasRealApiToken = !!(user?.apiAccess)
 
   function moduleAllowed(names: string[]): boolean {
-    if (allowedModuleNames === null) return true
+    // Fail closed while permissions are unknown — never flash ungranted modules.
+    if (allowedModuleNames === null) return false
     return names.some(n => allowedModuleNames.includes(n))
   }
   function isNavAllowed(item: NavItem): boolean {

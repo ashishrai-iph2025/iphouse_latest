@@ -167,6 +167,11 @@ export async function signOut(options?: { callbackUrl?: string; redirect?: boole
   // Clear cookies
   document.cookie = 'token=; path=/; max-age=0'
   document.cookie = 'userRole=; path=/; max-age=0'
+  // Drop cached nav permissions so the next login starts clean
+  try {
+    const { clearModuleAccessCache } = await import('@/lib/moduleAccess')
+    clearModuleAccessCache()
+  } catch { /* ignore */ }
   const url = options?.callbackUrl ?? '/login'
   if (options?.redirect !== false) window.location.href = url
 }

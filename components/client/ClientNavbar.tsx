@@ -7,6 +7,7 @@ import { useSession, signOut } from '@/lib/auth-client'
 import { useTheme } from '@/lib/ThemeContext'
 import { useCustomizer, NAVBAR_HEX } from '@/lib/ThemeCustomizerContext'
 import { NAV_ITEMS, isNavItemActive, isSidebarLayout, type NavItem, type NavDropdownItem } from '@/lib/navItems'
+import { useModuleAccess } from '@/lib/moduleAccess'
 
 function isActive(item: NavItem, pathname: string): boolean {
   return isNavItemActive(item, pathname)
@@ -26,9 +27,9 @@ export default function ClientNavbar() {
 
   const [notifications, setNotifications] = useState<Notification[]>([])
 
-  // Nav permissions + account count
-  const [allowedModuleNames, setAllowedModuleNames] = useState<string[] | null>(null)
-  const [accountCount,       setAccountCount]       = useState(1)
+  // Nav permissions + account count — shared, sessionStorage-cached (see
+  // lib/moduleAccess) so a refresh paints the granted nav on the first frame.
+  const { allowedModuleNames, accountCount } = useModuleAccess()
 
   const { theme, toggle } = useTheme()
   const { navbarStyle, navLayout, sidebarSize } = useCustomizer()
@@ -54,7 +55,10 @@ export default function ClientNavbar() {
   const hasRealApiToken = !!(user?.apiAccess)
 
   function moduleAllowed(names: string[]): boolean {
-    if (allowedModuleNames === null) return true   // still loading – show all to avoid flash
+    // Fail closed while permissions are unknown (first-ever load, no cache):
+    // briefly showing only Dashboard and then expanding beats flashing
+    // modules the user was never granted.
+    if (allowedModuleNames === null) return false
     return names.some(n => allowedModuleNames.includes(n))
   }
 
@@ -76,18 +80,6 @@ export default function ClientNavbar() {
     fetch('/api/notifications', { credentials: 'include' })
       .then(r => r.json())
       .then(d => { if (d.success) setNotifications(d.notifications || []) })
-      .catch(() => {})
-  }, [])
-
-  useEffect(() => {
-    fetch('/api/user/nav', { credentials: 'include' })
-      .then(r => r.json())
-      .then(d => {
-        if (d.success) {
-          setAllowedModuleNames(d.allowedModules.map((m: { moduleName: string }) => m.moduleName))
-          setAccountCount(d.accountCount)
-        }
-      })
       .catch(() => {})
   }, [])
 

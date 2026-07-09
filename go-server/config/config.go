@@ -25,6 +25,7 @@ type Config struct {
 	APICredKey    string
 	APICredIV     string
 	Port          string
+	RedisAddr     string
 }
 
 var C Config
@@ -74,6 +75,7 @@ func Load() {
 	C.APICredKey       = getEnv("API_CRED_KEY", "")
 	C.APICredIV        = getEnv("API_CRED_IV", "")
 	C.Port             = getEnv("GO_PORT", "8080")
+	C.RedisAddr        = getEnv("REDIS_ADDR", "")
 }
 
 func getEnv(key, fallback string) string {
