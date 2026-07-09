@@ -321,7 +321,7 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
     }
   }, [activeRows])
 
-  // ── UGC sub-platform breakdown (only rendered when UGC & Other is selected).
+  // //── UGC sub-platform breakdown (only rendered when UGC & Other is selected).
   // Rows under the umbrella carry subPlatform (tiktok/vk/…) from ingestion;
   // rows cached before that field existed fall into the residual bucket.
   const ugcBreakdown = useMemo(() => {
