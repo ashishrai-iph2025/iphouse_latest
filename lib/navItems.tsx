@@ -32,7 +32,9 @@ export const NAV_ITEMS: NavItem[] = [
   {
     label:       'War Room',
     href:        '/war-room',
-    moduleNames: ['Dashboard'],
+    // Matches the "WAR ROOM" module_permission row granted per login on
+    // /admin/module-permissions (both casings accepted, matching is exact).
+    moduleNames: ['WAR ROOM', 'War Room'],
     icon: (
       <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>

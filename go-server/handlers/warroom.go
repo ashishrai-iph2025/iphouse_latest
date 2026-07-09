@@ -10,6 +10,7 @@ import (
 	"time"
 
 	ipauth "github.com/ip-house/iphouse-api/auth"
+	"github.com/ip-house/iphouse-api/db"
 	"github.com/ip-house/iphouse-api/markscan"
 	"github.com/ip-house/iphouse-api/store"
 )
@@ -48,6 +49,25 @@ type apiErr struct {
 
 func (e *apiErr) Error() string { return e.msg }
 
+// warRoomAllowed reports whether this login may use the War Room: portal
+// staff (admin/super admin) always can; clients need the "WAR ROOM" module
+// granted on /admin/module-permissions.
+func warRoomAllowed(claims *ipauth.Claims) bool {
+	if claims == nil {
+		return false
+	}
+	if isAdmin(claims) {
+		return true
+	}
+	row, _ := db.QueryOne(`
+		SELECT 1 AS ok
+		FROM user_module_permission_test u
+		JOIN module_permission m ON m.Id = u.moduleId
+		WHERE u.loginId = ? AND u.allowed = 1 AND m.status = 0 AND UPPER(m.ModuleName) = 'WAR ROOM'
+		LIMIT 1`, claims.LoginID)
+	return row != nil
+}
+
 // resolveWarRoomToken picks the MarkScan token + store-key owner for a request:
 // clients use their own token; an admin (role>=1) may act on behalf of a
 // selected client by passing clientUserId.
@@ -76,6 +96,10 @@ func resolveWarRoomToken(claims *ipauth.Claims, body warRoomBody) (token string,
 // body: { assetName?, startDate, endDate?, platforms?[], mode: "auto"|"full"|"incremental" }
 func WarRoom(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
+	if !warRoomAllowed(claims) {
+		Fail(w, 403, "War Room access is not enabled for your account")
+		return
+	}
 	if warStore == nil {
 		Fail(w, 500, "war room store not initialised")
 		return
@@ -114,6 +138,10 @@ func WarRoom(w http.ResponseWriter, r *http.Request) {
 // POST /api/warroom/stream
 func WarRoomStream(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
+	if !warRoomAllowed(claims) {
+		Fail(w, 403, "War Room access is not enabled for your account")
+		return
+	}
 	if warStore == nil {
 		Fail(w, 500, "war room store not initialised")
 		return
