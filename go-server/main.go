@@ -71,6 +71,7 @@ func main() {
 	mux.Handle("POST /api/infringement", auth(handlers.Infringement))
 	mux.Handle("POST /api/warroom", auth(handlers.WarRoom))
 	mux.Handle("POST /api/warroom/stream", auth(handlers.WarRoomStream))
+	mux.Handle("GET /api/warroom/assets", auth(handlers.WarRoomAssets))
 	mux.Handle("POST /api/search", auth(handlers.Search))
 	mux.Handle("GET /api/download", auth(handlers.DownloadList))
 	mux.Handle("POST /api/download", auth(handlers.DownloadTrigger))
@@ -172,6 +173,9 @@ func main() {
 
 	mux.Handle("GET /api/admin/asset-access", adminAuth(admin.AssetAccess))
 	mux.Handle("POST /api/admin/asset-access", adminAuth(admin.AssetAccess))
+
+	mux.Handle("GET /api/admin/warroom-settings", adminAuth(admin.WarRoomSettings))
+	mux.Handle("POST /api/admin/warroom-settings", adminAuth(admin.WarRoomSettings))
 
 	mux.Handle("GET /api/admin/master-api", adminAuth(admin.MasterAPI))
 	mux.Handle("POST /api/admin/master-api", adminAuth(admin.MasterAPI))

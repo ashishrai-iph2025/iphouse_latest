@@ -344,7 +344,10 @@ const rowStatus = (r: WarRoomRow): string => {
   const s = String(r.removalStatus ?? '').trim()
   if (!s) return 'Pending'
   // Normalize: cap first letter, lowercase rest — so "DEAD" and "Dead" merge
-  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase()
+  const label = s.charAt(0).toUpperCase() + s.slice(1).toLowerCase()
+  // Display term: "Dead" is shown as "Removed" (must match the Go statusLabel
+  // so server- and client-aggregated status buckets carry the same label).
+  return label === 'Dead' ? 'Removed' : label
 }
 // Rows under the UGC umbrella with no derivable platform belong to the
 // residual bucket — same fallback the ingestion side uses.

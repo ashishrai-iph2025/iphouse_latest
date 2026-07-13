@@ -766,13 +766,19 @@ func isRemoved(r map[string]any) bool {
 
 // statusLabel normalises removalStatus for the status breakdown.
 // Always returns title-case so "DEAD" and "Dead" are treated as the same value.
+// "Dead" is displayed as "Removed" (must match the client-side rowStatus so
+// server- and client-aggregated status buckets carry the same label).
 func statusLabel(r map[string]any) string {
 	s := strings.TrimSpace(strFrom(r["removalStatus"]))
 	if s == "" {
 		return "Pending"
 	}
 	runes := []rune(s)
-	return strings.ToUpper(string(runes[0])) + strings.ToLower(string(runes[1:]))
+	label := strings.ToUpper(string(runes[0])) + strings.ToLower(string(runes[1:]))
+	if label == "Dead" {
+		return "Removed"
+	}
+	return label
 }
 
 // channelIdentity resolves the platform-specific channel/profile identity and

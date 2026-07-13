@@ -6,6 +6,7 @@ import MultiSearchableSelect from '@/components/ui/MultiSearchableSelect'
 import DatePicker from '@/components/ui/DatePicker'
 import Breadcrumb from '@/components/ui/Breadcrumb'
 import WarRoomReport from '@/components/shared/WarRoomReport'
+import WarRoomComparison from '@/components/shared/WarRoomComparison'
 import {
   streamWarRoom, fetchWarRoom, fetchWarRoomClients, fetchWarRoomClientToken,
   type WarRoomReport as Report, type WarRoomRow, type WarRoomMeta,
@@ -40,10 +41,21 @@ const NAVY_TEXT = 'var(--wr-navy-text)'
 const ORANGE_TEXT = 'var(--wr-orange-text)'
 const ORANGE_GRADIENT = 'linear-gradient(135deg,#FFC82B,#FC934C)'
 
-interface Opt { key: string; label: string }
+interface Opt { key: string; label: string; warRoomEndDate?: string }
 
 function isoDaysAgo(n: number) {
   const d = new Date(); d.setUTCDate(d.getUTCDate() - n); return d.toISOString().slice(0, 10)
+}
+
+// Default asset when landing on the page: the only asset if there is just one,
+// otherwise the asset with the latest warRoomEndDate (assets without an end
+// date sort last). ISO datetimes compare correctly as strings.
+function pickDefaultAsset(list: Opt[]): string | null {
+  if (list.length === 0) return null
+  if (list.length === 1) return list[0].key
+  const sorted = [...list].sort((a, b) =>
+    String(b.warRoomEndDate ?? '').localeCompare(String(a.warRoomEndDate ?? '')))
+  return sorted[0].key
 }
 
 export default function WarRoomPage({ area = 'War Room', admin: adminProp = false }: { area?: string; admin?: boolean }) {
@@ -76,14 +88,52 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
   const [filtersOpen, setFiltersOpen] = useState(true)
   const [platformProgress, setPlatformProgress] = useState<Record<string, PlatformProgress>>({})
 
-  // Client mode: use the MasterDataContext already loaded by ClientShell —
-  // same source as infringement, reports, and every other client page.
-  // In admin mode assets come from the per-client token step instead.
+  // Tabs: single-asset dashboard vs multi-asset comparison. The comparison tab
+  // only appears when the account has more than one asset; it is mounted
+  // lazily on first visit and then kept alive so its results survive
+  // switching back and forth.
+  const [view, setView] = useState<'dashboard' | 'comparison'>('dashboard')
+  const [comparisonVisited, setComparisonVisited] = useState(false)
+
+  // Client mode: the asset dropdown lists only War Room assets (MarkScan
+  // GetAllWarRoomAssets, asset names only) via /api/warroom/assets. If that
+  // fails, fall back to the shared master-data asset list so the page still
+  // works. In admin mode assets come from the per-client token step instead.
   const { assets: ctxAssets } = useMasterData()
+  const [wrAssetsFailed, setWrAssetsFailed] = useState(false)
+  // Per-client flag managed on /admin/war-room-assets: clients only get the
+  // Asset Comparison tab when an admin has enabled it for their account.
+  const [comparisonEnabled, setComparisonEnabled] = useState(false)
+  // Auto-load on navigation: once the war-room asset list arrives, pre-select
+  // the default asset (single asset, or latest warRoomEndDate) and generate
+  // its dashboard without the user clicking anything.
+  const [autoRunArmed, setAutoRunArmed] = useState(false)
+  const autoRanRef = useRef(false)
   useEffect(() => {
     if (admin) return
+    let alive = true
+    fetch('/api/warroom/assets', { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => {
+        if (!alive) return
+        setComparisonEnabled(!!d.comparisonEnabled)
+        if (d.success && Array.isArray(d.assets) && d.assets.length > 0) {
+          setAssets(d.assets)
+          const def = pickDefaultAsset(d.assets)
+          if (def && !autoRanRef.current) {
+            setAssetNames(prev => (prev.length > 0 ? prev : [def]))
+            setAutoRunArmed(true)
+          }
+        }
+        else setWrAssetsFailed(true)
+      })
+      .catch(() => { if (alive) setWrAssetsFailed(true) })
+    return () => { alive = false }
+  }, [admin])
+  useEffect(() => {
+    if (admin || !wrAssetsFailed) return
     if (ctxAssets.length > 0) setAssets(ctxAssets)
-  }, [admin, ctxAssets])
+  }, [admin, wrAssetsFailed, ctxAssets])
 
   // Admin: load client list on mount.
   useEffect(() => {
@@ -161,6 +211,17 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
     return () => clearInterval(t)
   }, [])
 
+  // Fire the auto-load exactly once, on the render after the default asset
+  // selection was committed (run() reads assetNames from state). Skipped if
+  // the user already generated something or a fetch is in flight.
+  useEffect(() => {
+    if (admin || !autoRunArmed || autoRanRef.current) return
+    if (assetNames.length === 0 || loading || refreshing || report) return
+    autoRanRef.current = true
+    run('auto', { silent: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [admin, autoRunArmed, assetNames])
+
   const assetDisabled = admin && !tokenReady
   const assetInvalid = assetTouched && assetNames.length === 0
 
@@ -203,6 +264,26 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
         </div>
       </div>
 
+      {/* Tab switcher — comparison needs 2+ assets, and for clients it must
+          also be enabled per client on /admin/war-room-assets. */}
+      {assets.length > 1 && (admin || comparisonEnabled) && (
+        <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit mb-5">
+          {([
+            { key: 'dashboard',  label: '📊 Dashboard' },
+            { key: 'comparison', label: '⚖ Asset Comparison' },
+          ] as const).map(t => (
+            <button key={t.key}
+              onClick={() => { setView(t.key); if (t.key === 'comparison') setComparisonVisited(true) }}
+              className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${view === t.key ? 'bg-white shadow text-[#14254A]' : 'text-gray-500 hover:text-gray-700'}`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ── Dashboard view (kept mounted so its report survives tab switches) ── */}
+      <div className={view === 'dashboard' ? '' : 'hidden'}>
+
       {/* Controls — collapses to a summary bar once a report is generated */}
       <div className="relative bg-white rounded-2xl shadow-card border border-gray-100 overflow-hidden mb-6">
         <div className="h-1" style={{ background: 'linear-gradient(90deg,#14254A,#FC934C)' }} />
@@ -220,7 +301,7 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
               )}
               {meta && (
                 <><span className="text-gray-300">·</span>
-                <span className="text-gray-400 text-xs">{meta.rowCount.toLocaleString()} rows · {meta.source}</span></>
+                <span className="text-gray-400 text-xs">{meta.rowCount.toLocaleString()} rows</span></>
               )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
@@ -317,7 +398,6 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
 
             {meta && (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-4 text-[11px] text-gray-400">
-                <span>Store: <b className="text-gray-600">{meta.source}</b></span>
                 <span>Rows stored: <b className="text-gray-600">{meta.rowCount.toLocaleString()}</b></span>
                 {meta.displayCount !== undefined && (
                   <span>Rows shown: <b className="text-gray-600">{meta.displayCount.toLocaleString()}</b></span>
@@ -348,63 +428,104 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
         </div>
       )}
       {report && !loading && <WarRoomReport report={report} rows={rows} admin={admin} />}
+
+      </div>{/* end dashboard view */}
+
+      {/* ── Comparison view ── */}
+      {(comparisonVisited || view === 'comparison') && assets.length > 1 && (admin || comparisonEnabled) && (
+        <div className={view === 'comparison' ? '' : 'hidden'}>
+          <WarRoomComparison
+            assets={assets}
+            defaultStart={startDate}
+            defaultEnd={endDate}
+            clientUserId={clientUserId}
+          />
+        </div>
+      )}
       </div>
     </>
   )
 }
 
 /* ── Live per-platform loader — shown while Generate is fanning out across
-   every MarkScan endpoint, reflecting each platform's real fetch state. ───── */
+   every MarkScan endpoint. A compact, professional treatment: progress ring +
+   status line + slim gradient bar, with one small pill chip per platform. ── */
 function PlatformLoader({ progress }: { progress: Record<string, PlatformProgress> }) {
-  const done  = Object.values(progress).filter(p => p.phase === 'done' || p.phase === 'error').length
-  const total = WAR_ROOM_PLATFORMS.length
+  const entries = WAR_ROOM_PLATFORMS.map(p => ({
+    ...p,
+    st:    progress[p.key]?.phase ?? 'pending',
+    count: progress[p.key]?.count ?? 0,
+    error: progress[p.key]?.error,
+  }))
+  const total     = entries.length
+  const done      = entries.filter(e => e.st === 'done' || e.st === 'error').length
+  const pctDone   = total ? Math.round((done / total) * 100) : 0
+  const active    = entries.filter(e => e.st === 'start')
+  const rowsSoFar = entries.reduce((n, e) => n + (e.st === 'done' ? e.count : 0), 0)
+  const finishing = done === total
 
   return (
-    <div className="mt-4 pt-4 border-t border-gray-100">
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <h2 className="text-sm font-bold text-[#14254A]">Fetching across platforms…</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Pulling and aggregating data from every endpoint in real time.</p>
+    <div className="mt-4 pt-5 border-t border-gray-100">
+      <div className="flex items-center gap-5">
+        {/* Progress ring */}
+        <div className="relative w-[74px] h-[74px] flex-shrink-0 rounded-full grid place-items-center transition-all"
+          style={{ background: `conic-gradient(#FC934C ${Math.max(pctDone, 2)}%, #eef1f5 0)` }}>
+          <div className="w-[58px] h-[58px] rounded-full bg-white dark:bg-[#1a2d55] grid place-items-center">
+            <span className="text-sm font-extrabold" style={{ color: NAVY_TEXT }}>{pctDone}%</span>
+          </div>
         </div>
-        <div className="text-xs font-bold text-gray-400">{done} / {total}</div>
+
+        {/* Status line + slim bar */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-sm font-bold truncate" style={{ color: NAVY_TEXT }}>
+              {finishing ? 'Finalizing report…' : 'Generating report'}
+            </h2>
+            <span className="text-[11px] font-bold text-gray-400 flex-shrink-0">{done} / {total} platforms</span>
+          </div>
+          <p className="text-xs text-gray-400 mt-0.5 truncate">
+            {finishing
+              ? 'Aggregating cross-platform intelligence…'
+              : active.length > 0
+                ? <>Scanning <b className="text-gray-500">{active.map(a => a.label).join(', ')}</b></>
+                : 'Contacting MarkScan endpoints…'}
+            {rowsSoFar > 0 && <> · {rowsSoFar.toLocaleString()} rows collected</>}
+          </p>
+          <div className="relative h-1 rounded-full bg-gray-100 overflow-hidden mt-2.5">
+            <div className="h-full rounded-full transition-all duration-500 ease-out"
+              style={{ width: `${Math.max(pctDone, 3)}%`, background: 'linear-gradient(90deg,#14254A,#FC934C)' }} />
+            <div className="absolute inset-y-0 w-16 animate-pulse rounded-full"
+              style={{ left: `calc(${Math.max(pctDone, 3)}% - 4rem)`, background: 'linear-gradient(90deg,transparent,rgba(255,255,255,0.55))' }} />
+          </div>
+        </div>
       </div>
 
-      <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden mb-4">
-        <div className="h-full rounded-full transition-all duration-300"
-          style={{ width: `${total ? (done / total) * 100 : 0}%`, background: 'linear-gradient(90deg,#14254A,#FC934C)' }} />
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-        {WAR_ROOM_PLATFORMS.map(p => {
-          const st = progress[p.key]?.phase ?? 'pending'
-          const count = progress[p.key]?.count ?? 0
-          const errMsg = progress[p.key]?.error
-          return (
-            <div key={p.key} title={errMsg}
-              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border text-sm transition-colors ${
-                st === 'error' ? 'border-red-200 bg-red-50'
-                : st === 'done' ? 'border-green-200 bg-green-50/60'
-                : st === 'start' ? 'border-[#FC934C]/40 bg-orange-50/50'
-                : 'border-gray-100 bg-gray-50/50'
-              }`}>
-              <span className="w-4 h-4 flex-shrink-0 grid place-items-center">
-                {st === 'pending' && <span className="w-2 h-2 rounded-full bg-gray-300" />}
-                {st === 'start' && <span className="w-3.5 h-3.5 border-2 border-orange-200 border-t-orange-500 rounded-full animate-spin" />}
-                {st === 'done' && <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#16a34a" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}
-                {st === 'error' && <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#dc2626" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>}
-              </span>
-              <span className={`flex-1 truncate font-semibold ${
-                st === 'pending' ? 'text-gray-400' : 'text-[#14254A]'
-              }`}>{p.label}</span>
-              {st === 'done' && <span className="text-xs font-bold text-gray-400 flex-shrink-0">{count.toLocaleString()}</span>}
-              {st === 'error' && (
-                <span className="text-[10px] font-bold text-red-500 flex-shrink-0 truncate max-w-[110px]">
-                  {errMsg || 'failed'}
-                </span>
-              )}
-            </div>
-          )
-        })}
+      {/* Platform chips */}
+      <div className="flex flex-wrap gap-1.5 mt-4">
+        {entries.map(e => (
+          <span key={e.key} title={e.error ?? (e.st === 'done' ? `${e.count.toLocaleString()} rows` : undefined)}
+            className={`inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border text-[11px] font-semibold transition-all duration-300 ${
+              e.st === 'error' ? 'border-red-200 bg-red-50 text-red-500'
+              : e.st === 'done' ? 'border-emerald-200/70 bg-emerald-50/70 text-emerald-700'
+              : e.st === 'start' ? 'border-[#FC934C]/50 bg-orange-50/70 text-[#d97b2e]'
+              : 'border-gray-200/70 bg-gray-50/60 text-gray-400'
+            }`}>
+            <span className="relative w-2 h-2 grid place-items-center flex-shrink-0">
+              {e.st === 'start' && <span className="absolute inline-flex w-2 h-2 rounded-full bg-orange-400 opacity-60 animate-ping" />}
+              <span className={`relative w-1.5 h-1.5 rounded-full ${
+                e.st === 'error' ? 'bg-red-400'
+                : e.st === 'done' ? 'bg-emerald-500'
+                : e.st === 'start' ? 'bg-orange-500'
+                : 'bg-gray-300'
+              }`} />
+            </span>
+            {e.label}
+            {e.st === 'done' && e.count > 0 && (
+              <span className="font-bold opacity-60">{e.count.toLocaleString()}</span>
+            )}
+            {e.st === 'error' && <span className="font-bold">✕</span>}
+          </span>
+        ))}
       </div>
     </div>
   )

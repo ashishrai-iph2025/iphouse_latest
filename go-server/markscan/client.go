@@ -255,6 +255,22 @@ func GetAllAssets(token string) ([]any, error) {
 	return extractArray(data), nil
 }
 
+// GetAllWarRoomAssets returns only the assets flagged for the War Room.
+func GetAllWarRoomAssets(token string) ([]any, error) {
+	base := config.C.MarkscanBase
+	req, _ := http.NewRequest("GET", base+"/GetAllWarRoomAssets", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var data any
+	json.NewDecoder(resp.Body).Decode(&data)
+	return extractArray(data), nil
+}
+
 // PushInfringements submits infringing URLs.
 func PushInfringements(token, endpoint string, payload any) (int, any, error) {
 	base := config.C.MarkscanBase

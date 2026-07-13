@@ -521,24 +521,71 @@ func WarRoomClientToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawAssets, err := markscan.GetAllAssets(token)
+	rawAssets, err := markscan.GetAllWarRoomAssets(token)
 	if err != nil {
 		Fail(w, 502, "Token generated, but fetching assets failed: "+err.Error())
 		return
 	}
 	log.Printf("[warroom client-token] clientUserId=%d rawAssets=%d item[0]=%v", body.ClientUserID, len(rawAssets), firstAny(rawAssets))
-	assets := make([]map[string]string, 0, len(rawAssets))
+	OK(w, map[string]any{"success": true, "tokenReady": true, "assets": assetOptions(rawAssets)})
+}
+
+// GET /api/warroom/assets — client mode: the War Room asset dropdown lists
+// only assets flagged for the War Room (MarkScan GetAllWarRoomAssets),
+// reduced to unique asset names.
+func WarRoomAssets(w http.ResponseWriter, r *http.Request) {
+	claims := ClaimsFrom(r)
+	if claims == nil {
+		Fail(w, 401, "Not authenticated"); return
+	}
+	token := ResolveAPIToken(claims)
+	if token == "" {
+		Fail(w, 401, "API token missing"); return
+	}
+	raw, err := markscan.GetAllWarRoomAssets(token)
+	if err != nil {
+		Fail(w, 502, "Fetching War Room assets failed: "+err.Error()); return
+	}
+	log.Printf("[warroom assets] loginId=%d rawAssets=%d item[0]=%v", claims.LoginID, len(raw), firstAny(raw))
+	OK(w, map[string]any{
+		"success":           true,
+		"assets":            assetOptions(raw),
+		"comparisonEnabled": warRoomComparisonEnabled(claims.UserID),
+	})
+}
+
+// warRoomComparisonEnabled reports whether the Asset Comparison tab is enabled
+// for a client — managed per client on /admin/war-room-assets (default off).
+// A missing table (page never opened) or missing row both mean "off".
+func warRoomComparisonEnabled(userID int64) bool {
+	row, _ := db.QueryOne("SELECT comparison_enabled FROM war_room_client_settings WHERE user_id = ? LIMIT 1", userID)
+	return row != nil && intFromAny(row["comparison_enabled"]) == 1
+}
+
+// assetOptions reduces a loosely-typed MarkScan asset list to unique
+// {key,label,warRoomEndDate} options — the name plus the war-room end date,
+// which the frontend uses to auto-select the most recent asset.
+func assetOptions(raw []any) []map[string]string {
+	assets := make([]map[string]string, 0, len(raw))
 	seen := map[string]bool{}
-	for _, a := range rawAssets {
+	for _, a := range raw {
 		name := assetNameOf(a)
 		if name == "" || seen[name] {
 			continue
 		}
 		seen[name] = true
-		assets = append(assets, map[string]string{"key": name, "label": name})
+		end := ""
+		if m, ok := a.(map[string]any); ok {
+			for _, k := range []string{"warRoomEndDate", "WarRoomEndDate", "war_room_end_date"} {
+				if s, ok := m[k].(string); ok && s != "" {
+					end = s
+					break
+				}
+			}
+		}
+		assets = append(assets, map[string]string{"key": name, "label": name, "warRoomEndDate": end})
 	}
-
-	OK(w, map[string]any{"success": true, "tokenReady": true, "assets": assets})
+	return assets
 }
 
 func firstAny(s []any) any {

@@ -54,6 +54,7 @@ const ModulePermsPage      = lazy(() => import('@/app/admin/module-permissions/p
 const SettingsPage         = lazy(() => import('@/app/admin/settings/page'))
 const IdleTimeoutPage      = lazy(() => import('@/app/admin/idle-timeout/page'))
 const AssetAccessPage      = lazy(() => import('@/app/admin/asset-access/page'))
+const WarRoomAssetsPage    = lazy(() => import('@/app/admin/war-room-assets/page'))
 const ApiCredsPage         = lazy(() => import('@/app/admin/api-credentials/page'))
 const MasterApiPage        = lazy(() => import('@/app/admin/master-api/page'))
 const ActivityPage         = lazy(() => import('@/app/admin/activity/page'))
@@ -447,6 +448,7 @@ export default function App() {
           <Route path="/admin/settings"                   element={<SettingsPage />} />
           <Route path="/admin/idle-timeout"               element={<IdleTimeoutPage />} />
           <Route path="/admin/asset-access"               element={<AssetAccessPage />} />
+          <Route path="/admin/war-room-assets"            element={<WarRoomAssetsPage />} />
           <Route path="/admin/api-credentials"            element={<ApiCredsPage />} />
           <Route path="/admin/master-api"                 element={<MasterApiPage />} />
           <Route path="/admin/activity"                   element={<ActivityPage />} />

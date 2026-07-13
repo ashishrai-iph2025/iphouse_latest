@@ -75,8 +75,8 @@ const LOGIC = {
   openWebStats: 'Open Web identification is distinct URLs, not raw rows, since one URL can appear on many rows: "Distinct host URLs"/"domains" = unique sourceURL/domain values; "Distinct infringing URLs"/"domains" = unique infringingURL/domain values (rows with no sourceURL are infringing-URL rows).',
   newDomains: 'For each infringing domain, takes the earliest ReportDay across all its rows and buckets that domain under that first-seen date — so a domain only counts once, on the day it was first discovered.',
   searchEngine: 'Groups Open Web rows by the searchEngine field. Identified = row count per engine; Removed = rows where the same isRemoved() logic (Dead / delisting Approved) is true.',
-  funnel: 'Discovered = total identified rows. Enforced = rows with a non-empty enforcementTime. Removed = rows where isRemoved() is true (Dead/Removed status, or Open Web delisting Approved). Each stage % is stage ÷ discovered; the small % next to each row is stage ÷ previous stage (conversion rate).',
-  currentStatus: 'Buckets rows by removalStatus, title-cased (DEAD/Dead/dead all merge into one "Dead" bucket); blank status becomes "Pending". Bars show identified (count in that status) vs removed (rows in that status that also satisfy isRemoved()) — for most buckets these are equal since the status IS the removal signal.',
+  funnel: 'Identification = total identified rows. Enforced = rows with a non-empty enforcementTime. Removed = rows where isRemoved() is true (Dead/Removed status, or Open Web delisting Approved). Each stage % is stage ÷ identification; the small % next to each row is stage ÷ previous stage (conversion rate).',
+  currentStatus: 'Buckets rows by removalStatus, title-cased (DEAD/Dead/dead all merge into one bucket, displayed as "Removed"); blank status becomes "Pending". Bars show identified (count in that status) vs removed (rows in that status that also satisfy isRemoved()) — for most buckets these are equal since the status IS the removal signal.',
   hostVideo: 'removed = same Removed count as the funnel above. active = identified − removed (clamped at 0). The ring % = removed ÷ (removed + active).',
   channelsProfiles: 'Distinct channel/profile per platform: YouTube = channelId; Facebook/Instagram/Twitter = profileUrl; Telegram = channelUrl; UGC = channelOrProfileUrl. Removed = profileRemovalStatus is "Dead" (the Active/Dead column every paged endpoint returns); Active = everything else. YouTube additionally counts isChannelSuspended as removed (fallback for older cached rows). "Subscribers impacted" sums the MAX subscriberCount seen per distinct removed profile (not summed across every row, to avoid double-counting the same profile appearing on many URLs).',
   headlineKpi: 'Identification/Enforced/Removal/Views mirror the same totals as the Enforcement funnel and At-a-glance cards for the currently selected platform (or all platforms combined). Views sums viewCount across all identified rows.',
@@ -85,7 +85,7 @@ const LOGIC = {
   kpiRemoval: 'Count of rows where isRemoved() is true (Dead/Removed status, or Open Web delisting Approved). The % shown is removed ÷ identified.',
   kpiViews: 'Sum of viewCount across every identified row for the current selection. Not shown for Open Web, which has no view-count concept.',
   removalRate: 'removed ÷ identified × 100, rounded to the nearest whole percent, for the current platform/filter selection.',
-  atAGlance: 'Restates Identified, Enforced, Removed, Pending Removal (identified − removed), Total Views (Σ viewCount) and Engagement (Σ likeCount + Σ commentCount) for the current platform/filter selection — same underlying totals as the Headline KPIs, just laid out as a quick-reference grid.',
+  atAGlance: 'Restates Identification, Enforced, Removed, Pending Removal (identified − removed), Total Views (Σ viewCount) and Engagement (Σ likeCount + Σ commentCount) for the current platform/filter selection — same underlying totals as the Headline KPIs, just laid out as a quick-reference grid.',
   tatUrlEnf: 'For each row, minutes between (urlUploadDate ?? discoveryDoneAt) and enforcementTime, bucketed into 0-15/15-30/31-45/46-60/1hr+ (TAT_BUCKETS). Rows missing either timestamp, or with a negative gap, are excluded — the row count shown is only rows where both timestamps exist.',
   tatEnfRem: 'For each row, minutes between enforcementTime and the effective removal timestamp, bucketed the same way. Effective removal time = removalTime for most platforms; for Open Web, host URLs use removalTime only once Dead, infringing URLs use delistingTime only once delistingStatus is Approved.',
   breakdownReason: 'Groups rows by infringementType (blank → "Unknown"). Identified = row count per type; Removed = rows of that type where isRemoved() is true.',
@@ -115,6 +115,10 @@ const UGC_LABELS: Record<string, string> = {
 ═══════════════════════════════════════════════════════════════════════════ */
 export default function WarRoomReport({ report, rows, admin = false }: { report: Report; rows: WarRoomRow[]; admin?: boolean }) {
   const [filters, setFilters] = useState<WarRoomFilters>({})
+  // Per-platform pills stay hidden behind a "Show Platforms" toggle next to
+  // the All Platforms tab; forced visible while a platform filter is active
+  // (otherwise the active selection would be invisible).
+  const [showPlatforms, setShowPlatforms] = useState(false)
 
   const hasFilter = Object.values(filters).some(Boolean)
   const view = useMemo<Report>(
@@ -132,7 +136,10 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
   const rowStatus = (r: WarRoomRow): string => {
     const s = String(r.removalStatus ?? '').trim()
     if (!s) return 'Pending'
-    return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase()
+    const label = s.charAt(0).toUpperCase() + s.slice(1).toLowerCase()
+    // "Dead" displays as "Removed" — keep in sync with lib/warroom.ts rowStatus
+    // so clicking the "Removed" status bar matches these rows.
+    return label === 'Dead' ? 'Removed' : label
   }
   const normalized = (value: string | undefined | null) => String(value ?? '').trim().toLowerCase()
 
@@ -567,7 +574,23 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
                 </div>
               </button>
 
-              {view.platforms.filter(p => p.available).map(p => {
+              {/* Show/Hide toggle for the per-platform pills. Hiding while a
+                  platform is selected also clears that selection — the pills
+                  are forced visible whenever a platform filter is active. */}
+              <button
+                onClick={() => {
+                  if (showPlatforms || activePlatform) {
+                    if (activePlatform) selectPlatform(activePlatform)
+                    setShowPlatforms(false)
+                  } else {
+                    setShowPlatforms(true)
+                  }
+                }}
+                className="flex-shrink-0 self-stretch rounded-xl border-2 border-dashed border-gray-200 px-3 text-[11px] font-bold text-gray-500 hover:border-[#FC934C]/50 hover:text-[#FC934C] transition-all whitespace-nowrap">
+                {(showPlatforms || activePlatform) ? '‹ Hide Platforms' : 'Show Platforms ›'}
+              </button>
+
+              {(showPlatforms || !!activePlatform) && view.platforms.filter(p => p.available).map(p => {
                 const rate    = p.totals.identified > 0 ? Math.round((p.totals.removed / p.totals.identified) * 100) : 0
                 const isActive = activePlatform === p.platform
                 return (
@@ -588,7 +611,7 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
                       )}
                     </div>
                     <div className="flex gap-3">
-                      <Stat n={compact(p.totals.identified)} label="Identified" tone="navy" />
+                      <Stat n={compact(p.totals.identified)} label="Identification" tone="navy" />
                       <Stat n={compact(p.totals.removed)} label="Removed" tone="orange" />
                     </div>
                   </button>
@@ -725,11 +748,11 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
 
       {/* ── FULL WIDTH: breakdown bars ──────────────────────────────────────── */}
       <div className="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 items-stretch">
-        <SegmentBars title="Infringement type" data={b.byReason} dim="reason" active={filters.reason} onSelect={toggle} onInspect={openInspect} info={admin && <InfoTip text={LOGIC.breakdownReason} />} />
-        <SegmentBars title="Quality of print"  data={b.byQuality}  dim="quality"  active={filters.quality}  onSelect={toggle} onInspect={openInspect} info={admin && <InfoTip text={LOGIC.breakdownQuality} />} />
-        <SegmentBars title="Language"           data={b.byLanguage} dim="language" active={filters.language} onSelect={toggle} onInspect={openInspect} info={admin && <InfoTip text={LOGIC.breakdownLanguage} />} />
+        <SegmentBars title="Infringement type" data={b.byReason} dim="reason" active={filters.reason} onSelect={toggle} onInspect={admin ? openInspect : undefined} info={admin && <InfoTip text={LOGIC.breakdownReason} />} />
+        <SegmentBars title="Quality of print"  data={b.byQuality}  dim="quality"  active={filters.quality}  onSelect={toggle} onInspect={admin ? openInspect : undefined} info={admin && <InfoTip text={LOGIC.breakdownQuality} />} />
+        <SegmentBars title="Language"           data={b.byLanguage} dim="language" active={filters.language} onSelect={toggle} onInspect={admin ? openInspect : undefined} info={admin && <InfoTip text={LOGIC.breakdownLanguage} />} />
         {activePlatform !== 'telegram' && (
-          <SegmentBars title="Country" data={b.byCountry} dim="country" active={filters.country} onSelect={toggle} onInspect={openInspect} info={admin && <InfoTip text={LOGIC.breakdownCountry} />} />
+          <SegmentBars title="Country" data={b.byCountry} dim="country" active={filters.country} onSelect={toggle} onInspect={admin ? openInspect : undefined} info={admin && <InfoTip text={LOGIC.breakdownCountry} />} />
         )}
       </div>
 
@@ -869,7 +892,7 @@ function AssetCompareChart({ data }: {
           formatter={(value: any, name: any, entry: any) =>
             name === 'Removed' ? [`${nf(Number(value))} (${entry?.payload?.rate ?? 0}%)`, name] : [nf(Number(value)), name]} />
         <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
-        <Bar dataKey="identified" name="Identified" fill={NAVY} radius={[6, 6, 0, 0]} maxBarSize={42} />
+        <Bar dataKey="identified" name="Identification" fill={NAVY} radius={[6, 6, 0, 0]} maxBarSize={42} />
         <Bar dataKey="removed" name="Removed" fill={ORANGE} radius={[6, 6, 0, 0]} maxBarSize={42}>
           <LabelList dataKey="rate" position="top"
             formatter={(v: any) => `${v}%`}
@@ -910,7 +933,7 @@ function UgcPlatformChart({ data, active, onSelect }: {
           formatter={(value: any, name: any) =>
             name === '% Removal' ? [`${value}%`, name] : [nf(Number(value)), name]} />
         <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
-        <Bar yAxisId="count" dataKey="identified" name="Identified" fill={NAVY} radius={[6, 6, 0, 0]} maxBarSize={42}
+        <Bar yAxisId="count" dataKey="identified" name="Identification" fill={NAVY} radius={[6, 6, 0, 0]} maxBarSize={42}
           onClick={barClick} style={{ cursor: 'pointer' }}>
           {data.map(d => (
             <Cell key={d.key} opacity={hasActive && d.key !== active ? 0.25 : 1} style={{ cursor: 'pointer' }} />
@@ -957,7 +980,7 @@ function RepeatOffendersCard({ data, active, onSelect }: {
     <Card className="p-4 mt-1">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 mb-3 text-[11px] text-gray-500">
         <span><b style={{ color: NAVY_TEXT }}>{nf(data.length)}</b> repeat offender{data.length === 1 ? '' : 's'}</span>
-        <span><b style={{ color: NAVY_TEXT }}>{nf(totIdentified)}</b> URLs identified</span>
+        <span><b style={{ color: NAVY_TEXT }}>{nf(totIdentified)}</b> URL identifications</span>
         <span><b style={{ color: ORANGE_TEXT }}>{nf(totRemoved)}</b> removed</span>
         <span><b style={{ color: ORANGE_TEXT }}>{nf(totReuploads)}</b> re-uploads after takedown</span>
         {hasActive && (
@@ -1001,7 +1024,7 @@ function RepeatOffendersCard({ data, active, onSelect }: {
       </div>
       <div className="flex items-center justify-between mt-2">
         <div className="flex gap-4 text-[11px] text-gray-400">
-          <span className="flex items-center gap-1"><i className="inline-block w-2 h-2 rounded-sm" style={{ background: NAVY }} />Identified</span>
+          <span className="flex items-center gap-1"><i className="inline-block w-2 h-2 rounded-sm" style={{ background: NAVY }} />Identification</span>
           <span className="flex items-center gap-1"><i className="inline-block w-2 h-2 rounded-sm" style={{ background: ORANGE }} />Removed</span>
         </div>
         {data.length > top.length && (
@@ -1033,7 +1056,7 @@ function TrendChart({ data }: { data: { date: string; identified: number; remove
         <YAxis tickLine={false} axisLine={false} tick={{ fill: '#8592a6', fontSize: 11 }} width={40} tickFormatter={compact} />
         <Tooltip contentStyle={{ borderRadius: 10, border: '1px solid #e4e8f0', fontSize: 13 }} />
         <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
-        <Area type="monotone" dataKey="identified" name="Identified" stroke={NAVY}   fill="url(#wrNavy)"   strokeWidth={2.2} dot={false} />
+        <Area type="monotone" dataKey="identified" name="Identification" stroke={NAVY}   fill="url(#wrNavy)"   strokeWidth={2.2} dot={false} />
         <Area type="monotone" dataKey="removed"    name="Removed"    stroke={ORANGE} fill="url(#wrOrange)" strokeWidth={2.2} dot={false} />
       </AreaChart>
     </ResponsiveContainer>
@@ -1043,9 +1066,9 @@ function TrendChart({ data }: { data: { date: string; identified: number; remove
 /* ── Enforcement funnel ───────────────────────────────────────────────── */
 function FunnelView({ f }: { f: Funnel }) {
   const stages = [
-    { k: 'Discovered', v: f.discovered },
-    { k: 'Enforced',   v: f.enforced },
-    { k: 'Removed',    v: f.removed },
+    { k: 'Identification', v: f.discovered },
+    { k: 'Enforced',       v: f.enforced },
+    { k: 'Removed',        v: f.removed },
   ]
   const max = Math.max(1, f.discovered)
   return (
@@ -1123,7 +1146,7 @@ function DonutCard({ title, icon, removed, pending, tone, extras, className = ''
 /* ── Summary "at a glance" card ───────────────────────────────────────── */
 function SummaryCard({ totals, funnel, className = '' }: { totals: Totals; funnel: Funnel; className?: string }) {
   const items = [
-    { label: 'Identified',      value: nf(totals.identified),  color: NAVY_TEXT },
+    { label: 'Identification',  value: nf(totals.identified),  color: NAVY_TEXT },
     { label: 'Enforced',        value: nf(totals.enforced),    color: '#64748b' },
     { label: 'Removed',         value: nf(totals.removed),     color: ORANGE },
     { label: 'Pending removal', value: nf(funnel.pending),     color: '#64748b' },
@@ -1275,7 +1298,7 @@ function SegmentBars({ title, data, dim, active, onSelect, onInspect, info, clas
             )
           })}
           <div className="flex gap-4 mt-1 text-[11px] text-gray-400">
-            <span className="flex items-center gap-1"><i className="inline-block w-2 h-2 rounded-sm" style={{ background: NAVY }} />Identified</span>
+            <span className="flex items-center gap-1"><i className="inline-block w-2 h-2 rounded-sm" style={{ background: NAVY }} />Identification</span>
             <span className="flex items-center gap-1"><i className="inline-block w-2 h-2 rounded-sm" style={{ background: ORANGE }} />Removed</span>
           </div>
         </div>
