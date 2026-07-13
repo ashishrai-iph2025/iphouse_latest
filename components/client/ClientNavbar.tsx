@@ -29,7 +29,7 @@ export default function ClientNavbar() {
 
   // Nav permissions + account count — shared, sessionStorage-cached (see
   // lib/moduleAccess) so a refresh paints the granted nav on the first frame.
-  const { allowedModuleNames, accountCount } = useModuleAccess()
+  const { allowedModuleNames, accountCount, apiAccess: liveApiAccess } = useModuleAccess()
 
   const { theme, toggle } = useTheme()
   const { navbarStyle, navLayout, sidebarSize } = useCustomizer()
@@ -52,7 +52,9 @@ export default function ClientNavbar() {
 
   const unread = notifications.filter(n => !n.is_read).length
 
-  const hasRealApiToken = !!(user?.apiAccess)
+  // Live token availability from /api/user/nav wins; the session's apiAccess
+  // claim (frozen at select-login) is only the fallback.
+  const hasRealApiToken = liveApiAccess ?? !!(user?.apiAccess)
 
   function moduleAllowed(names: string[]): boolean {
     // Fail closed while permissions are unknown (first-ever load, no cache):

@@ -16,9 +16,14 @@ import { useSession } from '@/lib/auth-client'
 interface ModuleAccess {
   allowedModuleNames: string[] | null
   accountCount: number
+  // Live Markscan token availability from /api/user/nav. null = not known yet;
+  // consumers should fall back to the session's apiAccess claim. Unlike the
+  // claim (frozen at select-login), this heals once a transient Markscan
+  // failure at login resolves itself.
+  apiAccess: boolean | null
 }
 
-const Ctx = createContext<ModuleAccess>({ allowedModuleNames: null, accountCount: 1 })
+const Ctx = createContext<ModuleAccess>({ allowedModuleNames: null, accountCount: 1, apiAccess: null })
 
 const CACHE_PREFIX = 'nav-modules:'
 const cacheKey = (loginId: number) => `${CACHE_PREFIX}${loginId}`
@@ -37,7 +42,7 @@ export function ModuleAccessProvider({ children }: { children: ReactNode }) {
   const { data: session } = useSession()
   const loginId = session?.user?.loginId
 
-  const [state, setState] = useState<ModuleAccess>({ allowedModuleNames: null, accountCount: 1 })
+  const [state, setState] = useState<ModuleAccess>({ allowedModuleNames: null, accountCount: 1, apiAccess: null })
 
   useEffect(() => {
     if (loginId === undefined) return
@@ -53,6 +58,7 @@ export function ModuleAccessProvider({ children }: { children: ReactNode }) {
           setState({
             allowedModuleNames: cached.allowedModuleNames,
             accountCount: Number(cached.accountCount) || 1,
+            apiAccess: typeof cached.apiAccess === 'boolean' ? cached.apiAccess : null,
           })
         }
       }
@@ -66,6 +72,7 @@ export function ModuleAccessProvider({ children }: { children: ReactNode }) {
         const next: ModuleAccess = {
           allowedModuleNames: (d.allowedModules ?? []).map((m: { moduleName: string }) => m.moduleName),
           accountCount: d.accountCount ?? 1,
+          apiAccess: typeof d.apiAccess === 'boolean' ? d.apiAccess : null,
         }
         setState(next)
         try { sessionStorage.setItem(cacheKey(loginId), JSON.stringify(next)) } catch { /* quota */ }

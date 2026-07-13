@@ -8,6 +8,7 @@ import { NAV_ITEMS, isNavItemActive } from '@/lib/navItems'
 import PageLoader from '@/components/ui/PageLoader'
 import ClientShell from '@/components/client/ClientShell'
 import AdminShell from '@/components/admin/AdminShell'
+import MaintenancePage from '@/components/MaintenancePage'
 
 // ── Auth pages ────────────────────────────────────────────────────────────────
 const LoginPage            = lazy(() => import('@/app/(auth)/login/page'))
@@ -175,17 +176,19 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
       return
     }
 
-    // If no API access, every non-dashboard route is restricted
-    if (!user?.apiAccess) {
-      setState({ checked: true, allowed: false, label: item.label })
-      return
-    }
-
-    // Fetch allowed modules from server and check
+    // Fetch allowed modules from server and check. API access comes from the
+    // live response (it heals after a transient Markscan failure at login);
+    // the session's apiAccess claim — frozen at select-login — is the fallback.
     fetch('/api/user/nav', { credentials: 'include' })
       .then(r => r.json())
       .then(d => {
         if (!d.success) {
+          setState({ checked: true, allowed: false, label: item.label })
+          return
+        }
+        const liveApiAccess = typeof d.apiAccess === 'boolean' ? d.apiAccess : !!user?.apiAccess
+        if (!liveApiAccess) {
+          // No API token → every non-dashboard route is restricted
           setState({ checked: true, allowed: false, label: item.label })
           return
         }
@@ -206,6 +209,53 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
     </div>
   )
   return <>{children}</>
+}
+
+// ── Maintenance mode guard ────────────────────────────────────────────────────
+// Polls /api/maintenance; while the flag is on, non-admin visitors get the
+// full-screen maintenance page on every route except /login (kept reachable so
+// staff can sign in and turn it off). Admins (role 1/2) bypass and see a banner.
+function MaintenanceGuard({ children }: { children: ReactNode }) {
+  const pathname = usePathname()
+  const { data: session, status } = useSession()
+  const [maint, setMaint] = useState<{ on: boolean; message: string } | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    const check = () =>
+      fetch('/api/maintenance', { credentials: 'include' })
+        .then(r => r.json())
+        .then(d => { if (alive) setMaint({ on: !!d.maintenance, message: d.message || '' }) })
+        .catch(() => { if (alive) setMaint(m => m ?? { on: false, message: '' }) }) // fail open
+    check()
+    const id = setInterval(check, 60_000)
+    return () => { alive = false; clearInterval(id) }
+  }, [])
+
+  if (maint === null) return <PageLoader />
+  if (!maint.on) return <>{children}</>
+
+  const role = (session?.user as any)?.role
+  const isStaff = role === 1 || role === 2
+  if (status === 'loading') return <PageLoader />
+
+  if (!isStaff && pathname !== '/login') return <MaintenancePage message={maint.message} />
+
+  return (
+    <>
+      {children}
+      {isStaff && (
+        <div style={{
+          position: 'fixed', bottom: 18, left: '50%', transform: 'translateX(-50%)', zIndex: 9999,
+          background: '#FC934C', color: '#fff', borderRadius: 999, padding: '9px 22px',
+          fontSize: 13, fontWeight: 700, boxShadow: '0 6px 20px rgba(252,147,76,0.45)',
+          fontFamily: 'Inter, system-ui, sans-serif', whiteSpace: 'nowrap',
+        }}>
+          🛠️ Maintenance mode is ON — clients see the maintenance page
+        </div>
+      )}
+    </>
+  )
 }
 
 // ── Layout wrappers ───────────────────────────────────────────────────────────
@@ -344,6 +394,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 export default function App() {
   return (
     <ErrorBoundary>
+    <MaintenanceGuard>
     <Suspense fallback={<PageLoader />}>
       <Routes>
         {/* Root redirect */}
@@ -411,6 +462,7 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>
+    </MaintenanceGuard>
     </ErrorBoundary>
   )
 }

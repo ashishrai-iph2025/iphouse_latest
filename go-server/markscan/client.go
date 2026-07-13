@@ -45,7 +45,26 @@ func SetCachedToken(userID int64, token string) {
 
 // ── Login ─────────────────────────────────────────────────────────────────────
 
+// Login authenticates against the Markscan API. The API occasionally rejects a
+// valid login transiently (observed intermittent 400s with credentials that
+// succeed moments later) — and a missing token locks the whole session to
+// Dashboard-only — so failed attempts are retried before giving up.
 func Login(apiUsername, apiPassword string) (string, error) {
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		token, err := loginOnce(apiUsername, apiPassword)
+		if err == nil {
+			return token, nil
+		}
+		lastErr = err
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+		}
+	}
+	return "", lastErr
+}
+
+func loginOnce(apiUsername, apiPassword string) (string, error) {
 	base := config.C.MarkscanBase
 	body, _ := json.Marshal(map[string]string{"userName": apiUsername, "password": apiPassword})
 	req, _ := http.NewRequest("POST", base+"/Login", bytes.NewReader(body))
@@ -56,10 +75,14 @@ func Login(apiUsername, apiPassword string) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("markscan login %d", resp.StatusCode)
-	}
 	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		snippet := string(raw)
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return "", fmt.Errorf("markscan login %d: %s", resp.StatusCode, snippet)
+	}
 	// Response is a JSON string e.g. "eyJ..."
 	var token string
 	if err := json.Unmarshal(raw, &token); err != nil {

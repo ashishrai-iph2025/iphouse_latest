@@ -23,14 +23,15 @@ export default function SideNav() {
 
   // Shared, sessionStorage-cached nav permissions (see lib/moduleAccess) — a
   // refresh paints the granted nav on the first frame instead of flashing all.
-  const { allowedModuleNames } = useModuleAccess()
+  const { allowedModuleNames, apiAccess: liveApiAccess } = useModuleAccess()
 
   // close dropdown on route change
   useEffect(() => { setOpenDropdown(null); setOverlayOpen(false) }, [pathname])
 
-  // apiAccess is set on the session when an IP House API token was generated for
-  // the selected account (apiToken itself is no longer exposed to the client).
-  const hasRealApiToken = !!(user?.apiAccess)
+  // Prefer the LIVE token availability reported by /api/user/nav — it heals
+  // when a transient Markscan failure at select-login resolves. The session's
+  // apiAccess claim is frozen at login, so it's only the fallback.
+  const hasRealApiToken = liveApiAccess ?? !!(user?.apiAccess)
 
   function moduleAllowed(names: string[]): boolean {
     // Fail closed while permissions are unknown — never flash ungranted modules.

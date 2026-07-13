@@ -132,7 +132,13 @@ func UserNav(w http.ResponseWriter, r *http.Request) {
 			"pageName":   strFromAny(row["pageName"]),
 		})
 	}
-	OK(w, map[string]any{"success": true, "allowedModules": modules, "accountCount": accountCount})
+	// Live API-token availability. The session's apiAccess claim is frozen at
+	// select-login time, so a transient Markscan failure there would lock the
+	// sidebar to Dashboard-only for the whole session. ResolveAPIToken serves
+	// the cache or lazily re-authenticates, so this heals once Markscan recovers.
+	apiAccess := ResolveAPIToken(claims) != ""
+
+	OK(w, map[string]any{"success": true, "allowedModules": modules, "accountCount": accountCount, "apiAccess": apiAccess})
 }
 
 // GET /api/user/idle-timeout
@@ -179,11 +185,11 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 	// Portal staff (Admin / Super Admin) authenticate against dcp_super_admin,
 	// so their password must be changed there — never in dcp_user_login, where
 	// claims.LoginID may collide with an unrelated client login row.
-	if claims.LoginType == 2 {
-		row, _ := db.QueryOne("SELECT id, password_hash FROM dcp_super_admin WHERE email = ? AND is_active = 1 LIMIT 1", claims.LoginUsername)
-		if row == nil {
-			OK(w, map[string]any{"success": false, "error": "Account not found"}); return
-		}
+	// NOTE: claims.LoginType == 2 cannot identify staff — client rows in
+	// dcp_user_login also use login_type = 2 (it means "password login" there).
+	// Mirror the login flow instead: a dcp_super_admin row for this email takes
+	// precedence; otherwise fall through to the regular dcp_user_login path.
+	if row, _ := db.QueryOne("SELECT id, password_hash FROM dcp_super_admin WHERE email = ? AND is_active = 1 LIMIT 1", claims.LoginUsername); row != nil {
 		hash, _ := row["password_hash"].(string)
 		if !ipauth.VerifyPassword(body.Current, hash) {
 			OK(w, map[string]any{"success": false, "error": "Current password is incorrect"}); return

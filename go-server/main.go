@@ -36,8 +36,8 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// ── CORS middleware wrapper ───────────────────────────────────────────────
-	handler := corsMiddleware(mux)
+	// ── CORS + maintenance-mode wrappers ─────────────────────────────────────
+	handler := corsMiddleware(middleware.MaintenanceGate(mux))
 
 	// ── Public auth routes (no JWT required) ─────────────────────────────────
 	// Sensitive endpoints are rate-limited per IP to blunt brute-force and
@@ -56,6 +56,7 @@ func main() {
 	mux.Handle("POST /api/auth/verify-reset-otp", rl(handlers.VerifyResetOTP))
 	mux.Handle("POST /api/auth/register", rl(handlers.Register))
 	mux.HandleFunc("GET /api/test-db", handlers.TestDB)
+	mux.HandleFunc("GET /api/maintenance", handlers.MaintenanceStatus)
 
 	// ── Protected: requires JWT ───────────────────────────────────────────────
 	auth := func(h http.HandlerFunc) http.Handler {
@@ -207,6 +208,7 @@ func main() {
 	mux.Handle("GET /api/admin/super-admin/config-access", saAuth(admin.SuperAdminConfigAccess))
 	mux.Handle("PUT /api/admin/super-admin/config-access", saAuth(admin.SuperAdminConfigAccess))
 	mux.Handle("GET /api/admin/super-admin/accounts", saAuth(admin.SuperAdminAccounts))
+	mux.Handle("POST /api/admin/maintenance", saAuth(handlers.MaintenanceUpdate))
 	mux.Handle("GET /api/admin/super-admin/user-permissions", saAuth(admin.SuperAdminUserPermissions))
 
 	// ── Serve Vite static build (SPA fallback) ───────────────────────────────
