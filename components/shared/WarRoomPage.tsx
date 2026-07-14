@@ -96,11 +96,13 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
   const [comparisonVisited, setComparisonVisited] = useState(false)
 
   // Client mode: the asset dropdown lists only War Room assets (MarkScan
-  // GetAllWarRoomAssets, asset names only) via /api/warroom/assets. If that
-  // fails, fall back to the shared master-data asset list so the page still
-  // works. In admin mode assets come from the per-client token step instead.
+  // GetAllWarRoomAssets, asset names only) via /api/warroom/assets. A
+  // successful-but-empty list is authoritative (MarkScan has no war-room
+  // assets for this client) — the master-data fallback applies only when the
+  // request itself fails. In admin mode assets come from the token step.
   const { assets: ctxAssets } = useMasterData()
   const [wrAssetsFailed, setWrAssetsFailed] = useState(false)
+  const [wrAssetsEmpty, setWrAssetsEmpty] = useState(false)
   // Per-client flag managed on /admin/war-room-assets: clients only get the
   // Asset Comparison tab when an admin has enabled it for their account.
   const [comparisonEnabled, setComparisonEnabled] = useState(false)
@@ -117,8 +119,9 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
       .then(d => {
         if (!alive) return
         setComparisonEnabled(!!d.comparisonEnabled)
-        if (d.success && Array.isArray(d.assets) && d.assets.length > 0) {
+        if (d.success && Array.isArray(d.assets)) {
           setAssets(d.assets)
+          setWrAssetsEmpty(d.assets.length === 0)
           const def = pickDefaultAsset(d.assets)
           if (def && !autoRanRef.current) {
             setAssetNames(prev => (prev.length > 0 ? prev : [def]))
@@ -371,10 +374,16 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
                   options={assets}
                   values={assetNames}
                   onChange={v => { setAssetNames(v); setAssetTouched(true) }}
-                  placeholder={assetDisabled ? 'Generate a token first…' : 'Select assets…'}
+                  placeholder={assetDisabled ? 'Generate a token first…'
+                    : (!admin && wrAssetsEmpty) ? 'No War Room assets available' : 'Select assets…'}
                   disabled={assetDisabled}
                   invalid={assetInvalid}
                 />
+                {!admin && wrAssetsEmpty && (
+                  <p className="text-[11px] mt-1 text-gray-400">
+                    No assets are currently flagged for the War Room on your account. Please contact the <b className="text-[#FC934C]">IP House team</b> to enable War Room monitoring for your titles.
+                  </p>
+                )}
                 {assetInvalid && (
                   <p className="text-red-500 text-[11px] mt-1">At least one asset is required</p>
                 )}
