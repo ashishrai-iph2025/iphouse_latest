@@ -129,9 +129,14 @@ func genOTPDigits() string {
 // portal-staff email always takes precedence over a matching client login.
 func superAdminByEmail(email string) map[string]any {
 	row, _ := db.QueryOne(`
-		SELECT id, name, email, password_hash, is_active, role, userId, loginId
+		SELECT id, name, email, password_hash, is_active, role, userId, loginId, otp_login_enabled
 		FROM dcp_super_admin WHERE email = ? AND is_active = 1 LIMIT 1`, email)
 	return row
+}
+
+// staffOTPEnabledForRow reports whether a dcp_super_admin row requires OTP login.
+func staffOTPEnabledForRow(sa map[string]any) bool {
+	return sa != nil && intFromAny(sa["otp_login_enabled"]) == 1
 }
 
 // claimsForSuperAdminRow builds JWT claims for a dcp_super_admin row. Admin-tier
@@ -216,6 +221,10 @@ func CheckMultipleLogins(w http.ResponseWriter, r *http.Request) {
 			"success": true, "userId": claims.UserID,
 			"email": sa["email"], "login_type": 2, "role": *claims.Role,
 			"multipleLogins": false, "rows": []any{},
+			// Per-staff setting: this account completes an email OTP after its
+			// password only when a Super Admin enabled OTP for THIS row (same
+			// flow/template as clients).
+			"otpRequired": staffOTPEnabledForRow(sa), "staff": true,
 		}); return
 	}
 
@@ -295,6 +304,15 @@ func SendOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 
+	// Portal staff take precedence over a matching client login (same rule as
+	// Login/check-multiple-logins): their code is stored on dcp_super_admin, not
+	// dcp_user, so route here before the client path — but only for a staff
+	// account that has OTP login enabled for its own row.
+	if sa := superAdminByEmail(body.Email); staffOTPEnabledForRow(sa) {
+		sendStaffOTP(w, sa)
+		return
+	}
+
 	// Email-based resolution always wins so send/verify target the same row.
 	body.UserID = otpUserID(body.Email, body.UserID)
 	if body.UserID == 0 {
@@ -360,6 +378,41 @@ func SendOTP(w http.ResponseWriter, r *http.Request) {
 	OK(w, map[string]any{"success": true, "userId": body.UserID})
 }
 
+// sendStaffOTP issues and emails a login code for a portal-staff account,
+// storing it on dcp_super_admin (staff have no dcp_user.twofa_code row). Uses
+// the SAME code generator, attempt budget and email template as clients.
+func sendStaffOTP(w http.ResponseWriter, sa map[string]any) {
+	id := intFromAny(sa["id"])
+	recipient := strFromAny(sa["email"])
+	name := strFromAny(sa["name"])
+	if name == "" {
+		name = recipient
+	}
+
+	digits := genOTPDigits()
+	// Namespaced key so a staff account whose id collides with a client userId
+	// gets its own attempt budget.
+	clearOTPAttempts(staffOTPKey(id))
+
+	if err := db.MustExec(
+		"UPDATE dcp_super_admin SET twofa_code = ?, twofa_code_expires = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE id = ?",
+		digits, id); err != nil {
+		Fail(w, 500, "Could not start verification. Please try again."); return
+	}
+
+	if err := email.SendOTP(recipient, digits, name); err != nil {
+		log.Printf("[send-otp] staff email to %s failed: %v", recipient, err)
+		Fail(w, 502, "Could not send the verification email. Please check email settings or try again.")
+		return
+	}
+	log.Printf("[send-otp] staff OTP sent to %s (saId=%d)", recipient, id)
+	OK(w, map[string]any{"success": true, "staff": true})
+}
+
+// staffOTPKey namespaces a dcp_super_admin id in the shared OTP attempt map so
+// it can't collide with a dcp_user userId.
+func staffOTPKey(saID int64) int64 { return -saID - 1 }
+
 // ── POST /api/auth/verify-otp ─────────────────────────────────────────────────
 
 func VerifyOTP(w http.ResponseWriter, r *http.Request) {
@@ -369,6 +422,14 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		Code   string `json:"code"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
+
+	// Portal staff verify against dcp_super_admin and, on success, get a session
+	// straight away (there is no account-selection step for staff). Gated per
+	// row, same as send-otp — inert unless OTP is enabled for this account.
+	if sa := superAdminByEmail(body.Email); staffOTPEnabledForRow(sa) {
+		verifyStaffOTP(w, r, sa, body.Code)
+		return
+	}
 
 	// Resolve the same canonical userId the OTP was stored against.
 	body.UserID = otpUserID(body.Email, body.UserID)
@@ -435,6 +496,56 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	})
 
 	OK(w, map[string]any{"success": true, "loginId": loginID, "tempToken": tempTok, "username": username})
+}
+
+// verifyStaffOTP checks a portal-staff login code against dcp_super_admin and,
+// on success, issues the staff session cookie directly — no client-selection
+// step. Mirrors the client verify: attempt cap, constant-time compare, expiry.
+func verifyStaffOTP(w http.ResponseWriter, r *http.Request, sa map[string]any, code string) {
+	id := intFromAny(sa["id"])
+	key := staffOTPKey(id)
+
+	row, _ := db.QueryOne("SELECT twofa_code, (twofa_code_expires IS NOT NULL AND twofa_code_expires > NOW()) AS not_expired FROM dcp_super_admin WHERE id = ? LIMIT 1", id)
+	if row == nil {
+		OK(w, map[string]any{"success": false, "error": "Account not found"}); return
+	}
+	storedCode := strFromAny(row["twofa_code"])
+	if storedCode == "" {
+		OK(w, map[string]any{"success": false, "error": "No active code"}); return
+	}
+	if otpAttemptsExceeded(key) {
+		db.Exec("UPDATE dcp_super_admin SET twofa_code = NULL, twofa_code_expires = NULL WHERE id = ?", id)
+		clearOTPAttempts(key)
+		OK(w, map[string]any{"success": false, "error": "Too many incorrect attempts. Please request a new code."}); return
+	}
+	if subtle.ConstantTimeCompare([]byte(storedCode), []byte(code)) != 1 {
+		if registerOTPFailure(key) <= 0 {
+			db.Exec("UPDATE dcp_super_admin SET twofa_code = NULL, twofa_code_expires = NULL WHERE id = ?", id)
+			clearOTPAttempts(key)
+			OK(w, map[string]any{"success": false, "error": "Too many incorrect attempts. Please request a new code."}); return
+		}
+		OK(w, map[string]any{"success": false, "error": "Incorrect code"}); return
+	}
+	if intFromAny(row["not_expired"]) == 0 {
+		OK(w, map[string]any{"success": false, "error": "Code has expired"}); return
+	}
+
+	// Success: burn the code and mint the staff session (same claims as the
+	// password login path, so role/access are identical).
+	clearOTPAttempts(key)
+	db.Exec("UPDATE dcp_super_admin SET twofa_code = NULL, twofa_code_expires = NULL WHERE id = ?", id)
+
+	claims := claimsForSuperAdminRow(sa)
+	tok, err := ipauth.SignToken(claims)
+	if err != nil {
+		Fail(w, 500, "Token error"); return
+	}
+	go db.Exec("UPDATE dcp_super_admin SET last_login = NOW() WHERE id = ?", id)
+	go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (?, ?, NOW())", claims.UserID, claims.LoginID)
+	go activity.Log(claims.LoginID, "login", "auth/verify-otp", activity.GetIP(r), activity.GetUA(r), map[string]any{"method": "otp"})
+
+	SetTokenCookie(w, tok)
+	OK(w, map[string]any{"success": true, "staff": true, "token": tok, "user": sanitizeClaims(claims)})
 }
 
 // ── POST /api/auth/select-login ───────────────────────────────────────────────
@@ -676,30 +787,41 @@ func ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	// credential-stuffing. Failures are logged server-side instead.
 	const genericReply = "If an account exists for that email address, a password reset link has been sent."
 
-	user, _ := db.QueryOne("SELECT loginId, login_username, first_name, last_name FROM dcp_user_login WHERE login_username = ? AND is_active = 1 LIMIT 1", body.Email)
-	if user == nil {
+	// Resolve which table owns this email so the reset writes to the SAME place
+	// the login flow reads. Portal staff (Admin/Super Admin) authenticate
+	// against dcp_super_admin, so their email is checked there FIRST and always
+	// wins over a matching client login (mirrors Login/ChangePassword).
+	var (
+		accountType string // "super_admin" | "login"
+		targetID    int64  // dcp_super_admin.id or dcp_user_login.loginId
+		name        string
+	)
+	if sa := superAdminByEmail(body.Email); sa != nil {
+		accountType = "super_admin"
+		targetID = intFromAny(sa["id"])
+		name = strFromAny(sa["name"])
+	} else if user, _ := db.QueryOne("SELECT loginId, login_username, first_name, last_name FROM dcp_user_login WHERE login_username = ? AND is_active = 1 LIMIT 1", body.Email); user != nil {
+		accountType = "login"
+		targetID = intFromAny(user["loginId"])
+		name = strings.TrimSpace(strFromAny(user["first_name"]) + " " + strFromAny(user["last_name"]))
+		if name == "" {
+			name = strFromAny(user["login_username"])
+		}
+	} else {
 		log.Printf("[forgot-password] no active account for %q — returning generic reply", body.Email)
 		OK(w, map[string]any{"success": true, "message": genericReply}); return
 	}
 
 	resetToken := randHex(32)        // raw token — emailed to the user only
 	storedToken := hashResetToken(resetToken) // SHA-256 hash — all that touches the DB
-	loginID := intFromAny(user["loginId"])
-	db.Exec("DELETE FROM dcp_password_resets WHERE userId = ?", loginID)
-	if _, _, err := db.Exec("INSERT INTO dcp_password_resets (userId, token, expires_at, used) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE), 0)", loginID, storedToken); err != nil {
-		log.Printf("[forgot-password] insert token failed for loginId=%d: %v", loginID, err)
+	// Scope the cleanup to the same account (type + id) so a client and a staff
+	// account whose ids happen to collide don't clobber each other's tokens.
+	db.Exec("DELETE FROM dcp_password_resets WHERE userId = ? AND account_type = ?", targetID, accountType)
+	if _, _, err := db.Exec("INSERT INTO dcp_password_resets (userId, account_type, token, expires_at, used) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE), 0)", targetID, accountType, storedToken); err != nil {
+		log.Printf("[forgot-password] insert token failed for %s id=%d: %v", accountType, targetID, err)
 		Fail(w, 500, "Could not create reset token. Please try again."); return
 	}
 
-	fn, _ := user["first_name"].(string)
-	ln, _ := user["last_name"].(string)
-	name := fn
-	if ln != "" {
-		name += " " + ln
-	}
-	if name == "" {
-		name, _ = user["login_username"].(string)
-	}
 	go email.SendPasswordReset(body.Email, resetToken, name)
 
 	OK(w, map[string]any{"success": true, "message": genericReply})
@@ -724,7 +846,7 @@ func ResetPassword(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 400, "Reset token required"); return
 	}
 
-	row, err := db.QueryOne("SELECT id, userId AS loginId, used, (expires_at > NOW()) AS not_expired FROM dcp_password_resets WHERE token = ? LIMIT 1", hashResetToken(body.ResetToken))
+	row, err := db.QueryOne("SELECT id, userId AS targetId, COALESCE(account_type, 'login') AS account_type, used, (expires_at > NOW()) AS not_expired FROM dcp_password_resets WHERE token = ? LIMIT 1", hashResetToken(body.ResetToken))
 	if err != nil {
 		log.Printf("[reset-password] DB error looking up token: %v", err)
 		Fail(w, 500, "Database error. Please try again."); return
@@ -747,14 +869,35 @@ func ResetPassword(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		Fail(w, 500, "Hash error"); return
 	}
-	loginID := intFromAny(row["loginId"])
-	// If the password write fails, do NOT burn the token or report success —
-	// the user would be locked into believing a password that does not exist.
-	if err := db.MustExec("UPDATE dcp_user_login SET login_password = ? WHERE loginId = ?", hashed, loginID); err != nil {
+
+	targetID := intFromAny(row["targetId"])
+	accountType := strFromAny(row["account_type"])
+
+	// Write the new hash to the table the token was issued against. If the write
+	// fails, do NOT burn the token or report success — the user would be locked
+	// into believing a password that was never stored.
+	var uerr error
+	switch accountType {
+	case "super_admin":
+		// Portal staff: their password lives in dcp_super_admin.password_hash.
+		uerr = db.MustExec("UPDATE dcp_super_admin SET password_hash = ? WHERE id = ?", hashed, targetID)
+	default: // "login"
+		// Clients authenticate by USERNAME (login picks LIMIT 1 across all the
+		// email's accounts), so write to EVERY active row sharing that username
+		// — same as ChangePassword — otherwise the change lands on a row the
+		// login query never reads.
+		if lg, _ := db.QueryOne("SELECT login_username FROM dcp_user_login WHERE loginId = ? LIMIT 1", targetID); lg != nil && strFromAny(lg["login_username"]) != "" {
+			uerr = db.MustExec("UPDATE dcp_user_login SET login_password = ? WHERE login_username = ? AND is_active = 1", hashed, strFromAny(lg["login_username"]))
+		} else {
+			uerr = db.MustExec("UPDATE dcp_user_login SET login_password = ? WHERE loginId = ?", hashed, targetID)
+		}
+	}
+	if uerr != nil {
 		Fail(w, 500, "Could not update your password. Please try again."); return
 	}
+
 	db.Exec("UPDATE dcp_password_resets SET used = 1 WHERE id = ?", intFromAny(row["id"]))
-	go activity.Log(loginID, "password_reset", "auth/reset-password", activity.GetIP(r), activity.GetUA(r), map[string]any{"method": "reset_token"})
+	go activity.Log(targetID, "password_reset", "auth/reset-password", activity.GetIP(r), activity.GetUA(r), map[string]any{"method": "reset_token", "accountType": accountType})
 
 	OK(w, map[string]any{"success": true})
 }

@@ -197,7 +197,8 @@ func SuperAdminAccounts(w http.ResponseWriter, r *http.Request) {
 		fail(w, 405, "Method not allowed"); return
 	}
 	accounts, _ := db.Query(`
-		SELECT id, name, email, role, is_active, last_login, created_at
+		SELECT id, name, email, role, is_active, last_login, created_at,
+		       COALESCE(otp_login_enabled, 0) AS otp_login_enabled
 		FROM dcp_super_admin
 		ORDER BY role DESC, name ASC`)
 	if accounts == nil {

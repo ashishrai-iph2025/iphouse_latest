@@ -50,8 +50,13 @@ function LoginForm() {
       sessionStorage.setItem('pending_otp_username', username)
       sessionStorage.setItem('pending_login_rows',   JSON.stringify(checkData.rows))
       if (checkData.tempToken) sessionStorage.setItem('pending_multi_tempToken', checkData.tempToken)
+      // Staff (role 1/2) go through OTP only when a Super Admin enabled it
+      // (check-multiple-logins returns otpRequired). Their verify step sets the
+      // session directly, so remember it's a staff OTP for the verify page.
+      const staffOtp = checkData.staff === true && checkData.otpRequired === true
+      sessionStorage.setItem('pending_otp_staff', staffOtp ? '1' : '0')
 
-      const needsOtp = (loginType === 0 || loginType === 1) && role !== 1 && role !== 2
+      const needsOtp = staffOtp || ((loginType === 0 || loginType === 1) && role !== 1 && role !== 2)
       if (needsOtp) {
         const otpRes  = await fetch('/api/auth/send-otp', {
           credentials: 'include',

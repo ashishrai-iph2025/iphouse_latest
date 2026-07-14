@@ -162,15 +162,6 @@ export default function ClientSelectionPage() {
                 </div>
                 <p style={{ margin: 0, fontSize: 14.5, fontWeight: 700, color: '#14254A', lineHeight: 1.3 }}>{row.account_name}</p>
                 <p style={{ margin: '6px 0 0', fontSize: 12, color: '#7C899C', wordBreak: 'break-word' }}>{row.login_username}</p>
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 12,
-                  padding: '3px 10px', borderRadius: 20, fontSize: 10.5, fontWeight: 700,
-                  background: row.has_api ? 'rgba(43,124,56,0.10)' : 'rgba(124,137,156,0.12)',
-                  color: row.has_api ? '#2b7c38' : '#7C899C',
-                }}>
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: row.has_api ? '#2b7c38' : '#9aa3b2' }} />
-                  {row.has_api ? 'Full access' : 'Limited access'}
-                </span>
               </button>
             )
           })}
@@ -179,14 +170,7 @@ export default function ClientSelectionPage() {
         {/* footer bar */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 32, paddingTop: 20, borderTop: '1px solid #e2e7ef', flexWrap: 'wrap', gap: 12 }}>
           <div style={{ fontSize: 13, color: selectedRow ? '#14254A' : '#9aa3b2', fontWeight: selectedRow ? 600 : 400 }}>
-            {selectedRow ? (
-              <>
-                Selected: {selectedRow.account_name}
-                <span style={{ marginLeft: 8, fontSize: 11, color: selectedRow.has_api ? '#2b7c38' : '#b45309', fontWeight: 600 }}>
-                  {selectedRow.has_api ? '· Full data access' : '· Limited access (no API token)'}
-                </span>
-              </>
-            ) : 'No account selected'}
+            {selectedRow ? <>Selected: {selectedRow.account_name}</> : 'No account selected'}
           </div>
           <button
             onClick={handleContinue}

@@ -187,13 +187,14 @@ function MaintenanceCard() {
 
 /* ── Tab 0: Admins & Super Admins (the dcp_super_admin table itself) ────── */
 interface SuperAdminAccount {
-  id:         number
-  name:       string
-  email:      string
-  role:       'Admin' | 'SuperAdmin'
-  is_active:  number
-  last_login: string | null
-  created_at: string
+  id:                number
+  name:              string
+  email:             string
+  role:              'Admin' | 'SuperAdmin'
+  is_active:         number
+  last_login:        string | null
+  created_at:        string
+  otp_login_enabled: number
 }
 
 function AdminAccountsTab() {
@@ -256,6 +257,30 @@ function AdminAccountsTab() {
 
   const lastSuperAdminStanding = (a: SuperAdminAccount) => a.role === 'SuperAdmin' && a.is_active === 1 && saCount <= 1
 
+  // Per-account OTP login toggle (dcp_super_admin.otp_login_enabled).
+  async function toggleOtp(a: SuperAdminAccount) {
+    const next = Number(a.otp_login_enabled) !== 1
+    setBusy(a.id)
+    try {
+      const res = await fetch('/api/admin/staff-otp', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: a.id, enabled: next }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setAccounts(prev => prev.map(x => x.id === a.id ? { ...x, otp_login_enabled: next ? 1 : 0 } : x))
+        showToast(`OTP login ${next ? 'enabled' : 'disabled'} for ${a.name || a.email}`)
+      } else {
+        showToast(data.error || 'Failed to update OTP setting', 'error')
+      }
+    } catch {
+      showToast('Network error', 'error')
+    }
+    setBusy(null)
+  }
+
   return (
     <>
       {toast && (
@@ -276,16 +301,16 @@ function AdminAccountsTab() {
           <table className="w-full text-sm">
             <thead>
               <tr style={{ background: '#14254A' }}>
-                {['Name', 'Email', 'Role', 'Status', 'Last Login', 'Created', 'Actions'].map(h => (
+                {['Name', 'Email', 'Role', 'Status', 'OTP Login', 'Last Login', 'Created', 'Actions'].map(h => (
                   <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-white/80 uppercase tracking-wide whitespace-nowrap">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={7} className="text-center py-12 text-gray-400 text-sm">Loading…</td></tr>
+                <tr><td colSpan={8} className="text-center py-12 text-gray-400 text-sm">Loading…</td></tr>
               ) : accounts.length === 0 ? (
-                <tr><td colSpan={7} className="text-center py-12 text-gray-400 text-sm">No Admin or Super Admin accounts yet.</td></tr>
+                <tr><td colSpan={8} className="text-center py-12 text-gray-400 text-sm">No Admin or Super Admin accounts yet.</td></tr>
               ) : accounts.map(a => {
                 const ri = ROLE_LABEL[a.role === 'SuperAdmin' ? 2 : 1]
                 const protectedLast = lastSuperAdminStanding(a)
@@ -314,6 +339,23 @@ function AdminAccountsTab() {
                         <span className={`w-1.5 h-1.5 rounded-full ${a.is_active ? 'bg-emerald-500' : 'bg-gray-300'}`} />
                         {a.is_active ? 'Active' : 'Inactive'}
                       </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      {(() => {
+                        const otpOn = Number(a.otp_login_enabled) === 1
+                        return (
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => toggleOtp(a)} disabled={isBusy}
+                              role="switch" aria-checked={otpOn} title={otpOn ? 'OTP login enabled' : 'OTP login disabled'}
+                              className={`relative inline-flex items-center h-5 w-9 rounded-full transition-colors disabled:opacity-50 flex-shrink-0 ${otpOn ? 'bg-emerald-500' : 'bg-gray-200'}`}>
+                              <span className={`inline-block w-[15px] h-[15px] bg-white rounded-full shadow transform transition-transform ${otpOn ? 'translate-x-[19px]' : 'translate-x-[3px]'}`} />
+                            </button>
+                            <span className={`text-[11px] font-semibold ${otpOn ? 'text-emerald-600' : 'text-gray-400'}`}>
+                              {otpOn ? 'On' : 'Off'}
+                            </span>
+                          </div>
+                        )
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{a.last_login || '—'}</td>
                     <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{a.created_at || '—'}</td>

@@ -122,6 +122,12 @@ func Migrate() {
 	} else {
 		log.Printf("[db] migrate: dcp_password_resets OK")
 	}
+	// A reset token must remember WHICH table it targets. Portal staff
+	// (Admin/Super Admin) authenticate against dcp_super_admin.password_hash,
+	// clients against dcp_user_login.login_password — the userId column alone
+	// can't tell them apart, so a staff reset was silently writing to the wrong
+	// table. 'login' (client) is the default for any pre-existing row.
+	addColumnIfMissing("dcp_password_resets", "account_type", "VARCHAR(20) NOT NULL DEFAULT 'login'")
 
 	// Global key/value settings (maintenance mode + message, and any other
 	// app-wide flag). Read/written by the Settings and Maintenance handlers, but
@@ -188,6 +194,10 @@ func Migrate() {
 	addColumnIfMissing("dcp_super_admin", "loginId", "INT NULL")
 	addColumnIfMissing("dcp_super_admin", "twofa_code", "VARCHAR(10) NULL")
 	addColumnIfMissing("dcp_super_admin", "twofa_code_expires", "DATETIME NULL")
+	// Per-staff OTP login: each Admin/Super Admin can independently require an
+	// email OTP after their password (default off). Managed per row on the
+	// Super Admin Control → Admins & Super Admins tab.
+	addColumnIfMissing("dcp_super_admin", "otp_login_enabled", "TINYINT(1) NOT NULL DEFAULT 0")
 	addIndexIfMissing("dcp_super_admin", "idx_super_admin_userId", "INDEX idx_super_admin_userId (userId)")
 	addIndexIfMissing("dcp_super_admin", "uniq_super_admin_email", "UNIQUE KEY uniq_super_admin_email (email)")
 }

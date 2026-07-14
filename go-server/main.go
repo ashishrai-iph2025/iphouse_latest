@@ -223,6 +223,7 @@ func main() {
 	mux.Handle("PUT /api/admin/super-admin/config-access", saAuth(admin.SuperAdminConfigAccess))
 	mux.Handle("GET /api/admin/super-admin/accounts", saAuth(admin.SuperAdminAccounts))
 	mux.Handle("POST /api/admin/maintenance", saAuth(handlers.MaintenanceUpdate))
+	mux.Handle("POST /api/admin/staff-otp", saAuth(handlers.StaffOTPSetting))
 	mux.Handle("GET /api/admin/super-admin/user-permissions", saAuth(admin.SuperAdminUserPermissions))
 
 	// ── Serve Vite static build (SPA fallback) ───────────────────────────────

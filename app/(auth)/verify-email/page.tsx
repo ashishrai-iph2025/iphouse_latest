@@ -109,6 +109,19 @@ export default function VerifyEmailPage() {
       const data = await res.json()
       if (!data.success) { setError(data.error || 'Invalid code'); return }
 
+      // Staff OTP: verify-otp already set the session cookie, so there's no
+      // account-selection or signIn step — just refresh the session and let the
+      // useEffect route to /admin/home.
+      if (data.staff) {
+        sessionStorage.removeItem('pending_otp_email')
+        sessionStorage.removeItem('pending_otp_userId')
+        sessionStorage.removeItem('pending_otp_username')
+        sessionStorage.removeItem('pending_login_rows')
+        sessionStorage.removeItem('pending_otp_staff')
+        await update()
+        return
+      }
+
       // Check if multiple logins need selection
       const rows = JSON.parse(sessionStorage.getItem('pending_login_rows') || '[]')
       if (rows.length > 1) {
