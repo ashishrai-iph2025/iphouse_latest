@@ -17,21 +17,18 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    # Runs directly on the production EC2 box (self-hosted runner registered
+    # there with the "production" label) — no SSH hop needed.
+    runs-on: [self-hosted, production]
     # Requires a "production" Environment configured in repo settings.
     # Add required reviewers there to gate every deploy behind manual approval.
     environment: production
     steps:
-      - name: Deploy over SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host:     ${{ secrets.PROD_EC2_HOST }}
-          username: ${{ secrets.PROD_EC2_USER }}
-          key:      ${{ secrets.PROD_EC2_SSH_KEY }}
-          script: |
-            set -e
-            cd ~/iphouse_latest
-            git fetch origin production
-            git reset --hard origin/production   # deterministic; never conflicts
-            docker compose up -d --build
-            docker image prune -f                # reclaim space from old images
+      - name: Deploy
+        run: |
+          set -e
+          cd ~/iphouse_latest
+          git fetch origin production
+          git reset --hard origin/production   # deterministic; never conflicts
+          docker compose up -d --build
+          docker image prune -f                # reclaim space from old images

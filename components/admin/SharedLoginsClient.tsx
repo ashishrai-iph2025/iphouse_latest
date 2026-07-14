@@ -409,7 +409,13 @@ export default function SharedLoginsClient() {
                         }
                       </td>
                       <td className="text-sm text-gray-600 max-w-[200px]">
-                        <span className="truncate block" title={row.master_names}>{row.master_names || '—'}</span>
+                        {row.master_names
+                          ? <span className="truncate block" title={row.master_names}>{row.master_names}</span>
+                          : <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                              Unassigned
+                            </span>
+                        }
                       </td>
                       {isSuperAdmin && (() => {
                         const pr = portalRoleNum(row.portal_role)

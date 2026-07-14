@@ -189,6 +189,15 @@ func CheckMultipleLogins(w http.ResponseWriter, r *http.Request) {
 		INNER JOIN dcp_user u ON u.userId = l.userId
 		WHERE l.login_username = ? AND l.is_active = 1 AND u.deleted = 0 LIMIT 1`, body.Username)
 	if row == nil {
+		// Approved registrants start as a login with no client company yet
+		// (userId NULL) and can't sign in until one is assigned — say so
+		// instead of "invalid credentials" when their password is right.
+		pending, _ := db.QueryOne("SELECT login_password FROM dcp_user_login WHERE login_username = ? AND is_active = 1 AND userId IS NULL LIMIT 1", body.Username)
+		if pending != nil {
+			if hash, _ := pending["login_password"].(string); ipauth.VerifyPassword(body.Password, hash) {
+				OK(w, map[string]any{"success": false, "error": "Your account is approved but not yet assigned to a client account. Please contact your administrator."}); return
+			}
+		}
 		OK(w, map[string]any{"success": false, "error": "Invalid username or password"}); return
 	}
 	hash, _ := row["login_password"].(string)

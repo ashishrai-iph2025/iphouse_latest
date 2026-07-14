@@ -894,25 +894,31 @@ func registrationsUpdate(w http.ResponseWriter, r *http.Request) {
 			rawPass = genStrongPassword(12)
 		}
 
-		// New self-registered users are Clients (role 0). role 2 now means
-		// Super Admin in the access model, so it must never be assigned here.
+		// Approval creates only the person's login credential — no dcp_user
+		// (client company) row. The login stays unassigned (userId NULL) and
+		// cannot sign in until an admin attaches client companies to it from
+		// /admin/registrations (shared logins), since every login path joins
+		// dcp_user_login to dcp_user.
 		hashed, _ := ipAuthHashPassword(rawPass)
-		lid, _, err := db.Exec("INSERT INTO dcp_user (name, email, role, deleted, IsSecure) VALUES (?, ?, 0, 0, 0)", fullName, emailAddr)
-		if err != nil {
-			fail(w, 500, err.Error())
-			return
-		}
 		username := strVal(req["username"])
 		if username == "" {
 			username = emailAddr
 		}
-		db.Exec("INSERT INTO dcp_user_login (userId, first_name, login_username, login_password, login_type, is_active) VALUES (?, ?, ?, ?, 0, 1)",
-			lid, fullName, username, hashed)
+		if dup, _ := db.QueryOne("SELECT loginId FROM dcp_user_login WHERE login_username = ? AND is_active = 1 LIMIT 1", username); dup != nil {
+			ok(w, map[string]any{"success": false, "error": "A login with this username already exists"})
+			return
+		}
+		lid, _, err := db.Exec("INSERT INTO dcp_user_login (userId, first_name, last_name, designation, login_username, login_password, login_type, is_active) VALUES (NULL, ?, ?, ?, ?, ?, 0, 1)",
+			strVal(req["first_name"]), strVal(req["last_name"]), nullStr(strVal(req["designation"])), username, hashed)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
 		db.Exec("UPDATE user_registration_requests SET status='approved' WHERE id=?", body.RequestID)
 
 		go email.SendRegistrationApproved(emailAddr, fullName, username, rawPass, "/login")
 
-		ok(w, map[string]any{"success": true, "userId": lid})
+		ok(w, map[string]any{"success": true, "loginId": lid})
 		return
 	}
 
@@ -1061,9 +1067,15 @@ func SharedLogins(w http.ResponseWriter, r *http.Request) {
 						encNullStr(body.TwofaSecret), nullStr(body.FirstName), nullStr(body.LastName), nullStr(body.Designation))
 				}
 			}
-			// Soft-delete removed users
+			// Soft-delete removed users. uid 0 is an unassigned placeholder row
+			// (userId NULL, created by registration approval) — retire it now
+			// that real company assignments exist.
 			for _, r := range currentRows {
 				uid := intVal(r["userId"])
+				if uid == 0 {
+					db.Exec("UPDATE dcp_user_login SET is_active = 0 WHERE login_username = ? AND userId IS NULL", body.LoginUsername)
+					continue
+				}
 				if !newMap[uid] {
 					db.Exec("UPDATE dcp_user_login SET is_active = 0 WHERE login_username = ? AND userId = ?", body.LoginUsername, uid)
 				}

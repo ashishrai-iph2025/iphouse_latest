@@ -15,6 +15,19 @@
   /* Theme customizer — defaults, overridden by JS */
   --accent:        #FC934C;
   --accent-ring:   rgba(252,147,76,0.25);
+
+  /* War Room "brand text" colors. The `.dark` overrides below flip Tailwind
+     utility classes (bg-white, text-gray-400, text-[#14254A], …) automatically,
+     but that only works for class names — it can't reach hardcoded hex values
+     passed through inline style={{color}} (used throughout WarRoomReport.tsx
+     for chart-adjacent numbers). Those read these vars instead so they stay
+     legible in both themes. */
+  --wr-navy-text:   #14254A;
+  --wr-orange-text: #b5651a;
+}
+.dark {
+  --wr-navy-text:   #e2e8f0;
+  --wr-orange-text: #fb923c;
 }
 
 /* ── Accent color applied to key elements ───── */

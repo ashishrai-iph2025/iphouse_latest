@@ -69,6 +69,8 @@ export default function SuperAdminClient() {
         description="Manage Admin/Super Admin access and Configuration modules for every user, right here."
       />
 
+      <MaintenanceCard />
+
       {/* Tab switcher */}
       <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit mb-6">
         {[
@@ -90,6 +92,95 @@ export default function SuperAdminClient() {
       {tab === 'permissions'     && <ModulePermissionsTab />}
       {tab === 'flow'            && <AccessFlowTab />}
       {tab === 'sessions'        && <ActiveSessionsTab />}
+    </div>
+  )
+}
+
+/* ── Maintenance mode toggle ──────────────────────────────────────────────── */
+function MaintenanceCard() {
+  const [on,      setOn]      = useState(false)
+  const [message, setMessage] = useState('')
+  const [loaded,  setLoaded]  = useState(false)
+  const [saving,  setSaving]  = useState(false)
+  const [toast,   setToast]   = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
+
+  useEffect(() => {
+    fetch('/api/maintenance', { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => { setOn(!!d.maintenance); setMessage(d.message || '') })
+      .catch(() => {})
+      .finally(() => setLoaded(true))
+  }, [])
+
+  function showToast(msg: string, type: 'success' | 'error' = 'success') {
+    setToast({ msg, type })
+    setTimeout(() => setToast(null), 3500)
+  }
+
+  async function save(enabled: boolean) {
+    setSaving(true)
+    try {
+      const res = await fetch('/api/admin/maintenance', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled, message }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setOn(enabled)
+        showToast(enabled ? 'Maintenance mode enabled — clients now see the maintenance page' : 'Maintenance mode disabled — platform is live')
+      } else {
+        showToast(data.error || 'Failed to update maintenance mode', 'error')
+      }
+    } catch {
+      showToast('Network error', 'error')
+    }
+    setSaving(false)
+  }
+
+  return (
+    <div className={`rounded-2xl border shadow-card p-5 mb-6 ${on ? 'bg-orange-50 border-orange-200' : 'bg-white border-gray-100'}`}>
+      {toast && (
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl text-white text-sm font-semibold shadow-xl ${toast.type === 'success' ? 'bg-emerald-600' : 'bg-red-500'}`}>
+          {toast.type === 'success' ? '✓' : '✕'} {toast.msg}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="w-11 h-11 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+          style={{ background: on ? '#FC934C22' : '#14254A12' }}>
+          🛠️
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="font-semibold text-sm text-[#14254A]">Maintenance Mode</h3>
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide ${on ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-500'}`}>
+              {on ? 'ON' : 'OFF'}
+            </span>
+          </div>
+          <p className="text-xs text-gray-500 mt-0.5">
+            When enabled, clients see an &quot;Under Maintenance&quot; page and their API access is paused. Admins and Super Admins are not affected.
+          </p>
+        </div>
+        <button onClick={() => save(!on)} disabled={!loaded || saving}
+          className={`px-5 py-2 rounded-xl text-sm font-semibold text-white disabled:opacity-50 transition-all ${on ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-orange-500 hover:bg-orange-600'}`}>
+          {saving ? 'Saving…' : on ? 'Turn OFF — Go Live' : 'Turn ON Maintenance'}
+        </button>
+      </div>
+
+      <div className="mt-4">
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Message shown to visitors (optional)</label>
+        <div className="flex gap-2">
+          <input type="text" value={message} onChange={e => setMessage(e.target.value)}
+            placeholder="e.g. We are upgrading the platform and will be back by 6:00 PM IST."
+            className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#14254A]/20" />
+          <button onClick={() => save(on)} disabled={!loaded || saving}
+            className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+            Save Message
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

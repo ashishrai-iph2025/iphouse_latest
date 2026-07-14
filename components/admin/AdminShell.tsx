@@ -16,7 +16,8 @@ const navGroups: NavGroup[] = [
   {
     label: 'Overview',
     items: [
-      { href: '/admin/home',  icon: '🏠', label: 'Home' },
+      { href: '/admin/home',     icon: '🏠', label: 'Home' },
+      { href: '/admin/war-room', icon: '🛡️', label: 'War Room' },
     ],
   },
   {

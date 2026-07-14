@@ -13,6 +13,7 @@ import (
 	"github.com/ip-house/iphouse-api/handlers"
 	"github.com/ip-house/iphouse-api/handlers/admin"
 	"github.com/ip-house/iphouse-api/middleware"
+	"github.com/ip-house/iphouse-api/store"
 )
 
 func main() {
@@ -30,10 +31,13 @@ func main() {
 	}
 	db.Migrate()
 
+	// War Room dataset store (Redis-backed, in-memory fallback).
+	handlers.SetWarRoomStore(store.New(config.C.RedisAddr))
+
 	mux := http.NewServeMux()
 
-	// ── CORS middleware wrapper ───────────────────────────────────────────────
-	handler := corsMiddleware(mux)
+	// ── CORS + maintenance-mode wrappers ─────────────────────────────────────
+	handler := corsMiddleware(middleware.MaintenanceGate(mux))
 
 	// ── Public auth routes (no JWT required) ─────────────────────────────────
 	// Sensitive endpoints are rate-limited per IP to blunt brute-force and
@@ -52,6 +56,7 @@ func main() {
 	mux.Handle("POST /api/auth/verify-reset-otp", rl(handlers.VerifyResetOTP))
 	mux.Handle("POST /api/auth/register", rl(handlers.Register))
 	mux.HandleFunc("GET /api/test-db", handlers.TestDB)
+	mux.HandleFunc("GET /api/maintenance", handlers.MaintenanceStatus)
 
 	// ── Protected: requires JWT ───────────────────────────────────────────────
 	auth := func(h http.HandlerFunc) http.Handler {
@@ -64,6 +69,9 @@ func main() {
 
 	// Client routes
 	mux.Handle("POST /api/infringement", auth(handlers.Infringement))
+	mux.Handle("POST /api/warroom", auth(handlers.WarRoom))
+	mux.Handle("POST /api/warroom/stream", auth(handlers.WarRoomStream))
+	mux.Handle("GET /api/warroom/assets", auth(handlers.WarRoomAssets))
 	mux.Handle("POST /api/search", auth(handlers.Search))
 	mux.Handle("GET /api/download", auth(handlers.DownloadList))
 	mux.Handle("POST /api/download", auth(handlers.DownloadTrigger))
@@ -166,6 +174,9 @@ func main() {
 	mux.Handle("GET /api/admin/asset-access", adminAuth(admin.AssetAccess))
 	mux.Handle("POST /api/admin/asset-access", adminAuth(admin.AssetAccess))
 
+	mux.Handle("GET /api/admin/warroom-settings", adminAuth(admin.WarRoomSettings))
+	mux.Handle("POST /api/admin/warroom-settings", adminAuth(admin.WarRoomSettings))
+
 	mux.Handle("GET /api/admin/master-api", adminAuth(admin.MasterAPI))
 	mux.Handle("POST /api/admin/master-api", adminAuth(admin.MasterAPI))
 	mux.Handle("PUT /api/admin/master-api", adminAuth(admin.MasterAPI))
@@ -177,6 +188,9 @@ func main() {
 	mux.Handle("GET /api/admin/home-analytics", adminAuth(admin.HomeAnalytics))
 
 	mux.Handle("GET /api/admin/my-config-access", adminAuth(admin.MyConfigAccess))
+
+	// War Room: admin generates a selected client's MarkScan token + asset list.
+	mux.Handle("POST /api/warroom/client-token", adminAuth(handlers.WarRoomClientToken))
 
 	mux.Handle("GET /api/admin/registrations", adminAuth(admin.Registrations))
 	mux.Handle("PUT /api/admin/registrations", adminAuth(admin.Registrations))
@@ -198,6 +212,7 @@ func main() {
 	mux.Handle("GET /api/admin/super-admin/config-access", saAuth(admin.SuperAdminConfigAccess))
 	mux.Handle("PUT /api/admin/super-admin/config-access", saAuth(admin.SuperAdminConfigAccess))
 	mux.Handle("GET /api/admin/super-admin/accounts", saAuth(admin.SuperAdminAccounts))
+	mux.Handle("POST /api/admin/maintenance", saAuth(handlers.MaintenanceUpdate))
 	mux.Handle("GET /api/admin/super-admin/user-permissions", saAuth(admin.SuperAdminUserPermissions))
 
 	// ── Serve Vite static build (SPA fallback) ───────────────────────────────

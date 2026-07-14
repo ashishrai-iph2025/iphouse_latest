@@ -7,6 +7,7 @@ import IdleTimeoutGuard from './IdleTimeoutGuard'
 import Footer from '@/components/ui/Footer'
 import ThemeCustomizer from '@/components/ui/ThemeCustomizer'
 import { MasterDataProvider } from '@/lib/masterDataContext'
+import { ModuleAccessProvider } from '@/lib/moduleAccess'
 import { ThemeProvider } from '@/lib/ThemeContext'
 import { ThemeCustomizerProvider, useCustomizer } from '@/lib/ThemeCustomizerContext'
 import { LoadingProvider } from '@/lib/LoadingContext'
@@ -18,7 +19,7 @@ interface Props {
 
 function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const fullWidth = pathname === '/dashboard'
+  const fullWidth = pathname === '/dashboard' || pathname === '/war-room'
   const { layoutWidth, navLayout, navbarStyle } = useCustomizer()
 
   const sidebar = isSidebarLayout(navLayout)
@@ -79,8 +80,10 @@ export default function ClientShell({ children }: Props) {
     <ThemeCustomizerProvider>
     <LoadingProvider>
     <MasterDataProvider>
+    <ModuleAccessProvider>
       <IdleTimeoutGuard />
       <Shell>{children}</Shell>
+    </ModuleAccessProvider>
     </MasterDataProvider>
     </LoadingProvider>
     </ThemeCustomizerProvider>

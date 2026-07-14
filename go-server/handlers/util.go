@@ -29,16 +29,23 @@ func ResolveAPIToken(claims *ipauth.Claims) string {
 	if claims == nil {
 		return ""
 	}
-	userID := claims.UserID
+	return TokenForUser(claims.UserID)
+}
 
-	// 1. memory cache (populated at login; survives for the cache TTL)
+// TokenForUser resolves the Markscan bearer token for any dcp_user by id: it
+// serves a cached token when fresh, else re-authenticates against Markscan using
+// that user's stored (encrypted) API credentials and caches the result. Used both
+// for the session user (ResolveAPIToken) and, in the admin War Room, for a
+// selected client whose token an admin generates on their behalf.
+func TokenForUser(userID int64) string {
+	if userID == 0 {
+		return ""
+	}
+	// 1. memory cache (populated at login / prior resolve; survives the cache TTL)
 	if t := markscan.GetCachedToken(userID); t != "" {
 		return t
 	}
-
 	// 2. fresh login from DB credentials (cache miss / after a server restart).
-	//    The token is no longer carried in the JWT, so this is the authoritative
-	//    fallback — it re-authenticates against Markscan using stored credentials.
 	row, err := db.QueryOne("SELECT api_user_name, api_password FROM dcp_user WHERE userId = ? AND deleted = 0", userID)
 	if err != nil || row == nil {
 		return ""

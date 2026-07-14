@@ -155,7 +155,7 @@ export default function RegistrationRequestsPage() {
         <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-6 text-center">
           <p className="font-semibold">Error loading data</p>
           <p className="text-sm mt-1">{error}</p>
-          <button onClick={() => load(page)} className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg text-sm">Retry</button>
+          <button onClick={() => load()} className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg text-sm">Retry</button>
         </div>
       ) : (
         <div className="bg-white rounded-2xl shadow-card border border-gray-100 overflow-hidden">
@@ -265,7 +265,7 @@ export default function RegistrationRequestsPage() {
             <div className="p-6">
               <p className="text-sm text-gray-600">
                 {confirmTarget.action === 'approved'
-                  ? <>Approve <strong>{confirmTarget.name}</strong> and send login credentials to their email?</>
+                  ? <>Approve <strong>{confirmTarget.name}</strong> and send login credentials to their email? They can sign in once you assign a client account on the Registrations page.</>
                   : <>Reject the registration request from <strong>{confirmTarget.name}</strong>?</>
                 }
               </p>

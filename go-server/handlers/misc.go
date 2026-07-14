@@ -132,7 +132,13 @@ func UserNav(w http.ResponseWriter, r *http.Request) {
 			"pageName":   strFromAny(row["pageName"]),
 		})
 	}
-	OK(w, map[string]any{"success": true, "allowedModules": modules, "accountCount": accountCount})
+	// Live API-token availability. The session's apiAccess claim is frozen at
+	// select-login time, so a transient Markscan failure there would lock the
+	// sidebar to Dashboard-only for the whole session. ResolveAPIToken serves
+	// the cache or lazily re-authenticates, so this heals once Markscan recovers.
+	apiAccess := ResolveAPIToken(claims) != ""
+
+	OK(w, map[string]any{"success": true, "allowedModules": modules, "accountCount": accountCount, "apiAccess": apiAccess})
 }
 
 // GET /api/user/idle-timeout
@@ -176,7 +182,36 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 		OK(w, map[string]any{"success": false, "error": "New password must be at least 8 characters"}); return
 	}
 
-	row, _ := db.QueryOne("SELECT loginId, login_password FROM dcp_user_login WHERE loginId = ? AND is_active = 1", claims.LoginID)
+	// Portal staff (Admin / Super Admin) authenticate against dcp_super_admin,
+	// so their password must be changed there — never in dcp_user_login, where
+	// claims.LoginID may collide with an unrelated client login row.
+	// NOTE: claims.LoginType == 2 cannot identify staff — client rows in
+	// dcp_user_login also use login_type = 2 (it means "password login" there).
+	// Mirror the login flow instead: a dcp_super_admin row for this email takes
+	// precedence; otherwise fall through to the regular dcp_user_login path.
+	if row, _ := db.QueryOne("SELECT id, password_hash FROM dcp_super_admin WHERE email = ? AND is_active = 1 LIMIT 1", claims.LoginUsername); row != nil {
+		hash, _ := row["password_hash"].(string)
+		if !ipauth.VerifyPassword(body.Current, hash) {
+			OK(w, map[string]any{"success": false, "error": "Current password is incorrect"}); return
+		}
+		hashed, err := ipauth.HashPassword(body.NewPass)
+		if err != nil {
+			Fail(w, 500, "Hash error"); return
+		}
+		db.Exec("UPDATE dcp_super_admin SET password_hash = ? WHERE id = ?", hashed, intFromAny(row["id"]))
+		OK(w, map[string]any{"success": true})
+		return
+	}
+
+	// Regular users: login authenticates by USERNAME (LIMIT 1 across all of the
+	// email's accounts), not by the selected loginId — so verify against that
+	// same row and write the new hash to EVERY active row sharing the username,
+	// otherwise the change lands on a row the login query never reads.
+	row, _ := db.QueryOne(`
+		SELECT l.loginId, l.login_password
+		FROM dcp_user_login l
+		INNER JOIN dcp_user u ON u.userId = l.userId
+		WHERE l.login_username = ? AND l.is_active = 1 AND u.deleted = 0 LIMIT 1`, claims.LoginUsername)
 	if row == nil {
 		OK(w, map[string]any{"success": false, "error": "Account not found"}); return
 	}
@@ -189,7 +224,7 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		Fail(w, 500, "Hash error"); return
 	}
-	db.Exec("UPDATE dcp_user_login SET login_password = ? WHERE loginId = ?", hashed, claims.LoginID)
+	db.Exec("UPDATE dcp_user_login SET login_password = ? WHERE login_username = ? AND is_active = 1", hashed, claims.LoginUsername)
 	OK(w, map[string]any{"success": true})
 }
 
@@ -352,7 +387,15 @@ func MasterData(w http.ResponseWriter, r *http.Request) {
 	rawA, _ := markscan.GetAllAssets(apiToken)
 	platforms := normalizeMasterList(rawP, "platformName", "platform_name", "name", "platform", "PlatformName", "Platform")
 	assets    := normalizeMasterList(rawA, "assetName", "asset_name", "name", "AssetName", "Asset")
+	log.Printf("[master-data] raw assets from MarkScan: %d items → normalised: %d items; raw[0]=%v", len(rawA), len(assets), first(rawA))
 	OK(w, map[string]any{"success": true, "platforms": platforms, "assets": assets})
+}
+
+func first(s []any) any {
+	if len(s) > 0 {
+		return s[0]
+	}
+	return nil
 }
 
 // normalizeMasterList converts a raw list of strings or objects into

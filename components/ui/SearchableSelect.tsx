@@ -42,8 +42,13 @@ export default function SearchableSelect({
   const inputRef   = useRef<HTMLInputElement>(null)
 
   const selected = options.find(o => o.key === value)
-  const filtered = query.trim()
-    ? options.filter(o => o.label.toLowerCase().includes(query.toLowerCase()))
+  const normalizedQuery = query.trim().toLowerCase()
+  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean)
+  const filtered = queryTokens.length
+    ? options.filter(o => {
+        const haystack = `${String(o.label ?? '').toLowerCase()} ${String(o.key ?? '').toLowerCase()}`
+        return queryTokens.every(token => haystack.includes(token))
+      })
     : options
 
   // Close on outside click
