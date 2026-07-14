@@ -49,8 +49,8 @@ export default function MaintenancePage({ message }: { message?: string }) {
 
         <p style={{ marginTop: 26, fontSize: 11, color: '#adb5bd' }}>
           IP House Anti-Piracy Platform — need urgent help? Contact{' '}
-          <a href="mailto:support@ip-house.com" style={{ color: '#FC934C', textDecoration: 'none', fontWeight: 600 }}>
-            support@ip-house.com
+          <a href="mailto:India-itsupport@ip-house.com" style={{ color: '#FC934C', textDecoration: 'none', fontWeight: 600 }}>
+            India-itsupport@ip-house.com
           </a>
         </p>
       </div>

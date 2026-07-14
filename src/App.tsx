@@ -132,7 +132,7 @@ function AccessDenied({ moduleName }: { moduleName: string }) {
             }}>
             ← Back to Dashboard
           </a>
-          <a href="mailto:support@ip-house.com"
+          <a href="mailto:India-itsupport@ip-house.com"
             style={{
               padding: '10px 24px', borderRadius: 12, border: '1px solid #e8ebf0',
               background: '#fff', color: '#14254A',

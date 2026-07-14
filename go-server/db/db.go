@@ -123,6 +123,24 @@ func Migrate() {
 		log.Printf("[db] migrate: dcp_password_resets OK")
 	}
 
+	// Global key/value settings (maintenance mode + message, and any other
+	// app-wide flag). Read/written by the Settings and Maintenance handlers, but
+	// the table was never created by the app — on an environment where it was
+	// missing, the maintenance-mode upsert failed ("Table doesn't exist"), which
+	// only became visible once write errors stopped being swallowed. The UNIQUE
+	// key on `key` is required for the handlers' ON DUPLICATE KEY UPDATE upsert.
+	_, _, err = Exec("CREATE TABLE IF NOT EXISTS dcp_settings (" +
+		"id    INT AUTO_INCREMENT PRIMARY KEY," +
+		"`key` VARCHAR(128) NOT NULL," +
+		"`value` TEXT," +
+		"UNIQUE KEY uniq_key (`key`)" +
+		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+	if err != nil {
+		log.Printf("[db] migrate dcp_settings: %v", err)
+	} else {
+		log.Printf("[db] migrate: dcp_settings OK")
+	}
+
 	// Per-admin-login Configuration-module access. Grant-based (default deny):
 	// only shared modules (granted = 1) are stored, so an admin login sees only
 	// the modules a Super Admin explicitly shares with it. Keyed by loginId so
