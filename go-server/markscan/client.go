@@ -128,6 +128,8 @@ func init() {
 		"dailymotion":              base + "/UGCPlatform/Paged",
 		"bilibili":                 base + "/UGCPlatform/Paged",
 		"ugc and other social media": base + "/UGCPlatform/Paged",
+		"meta ads":                 base + "/MetaAds/Paged",
+		"marketplace":              base + "/Marketplace/Paged",
 		"i-tunes":                  base + "/GetInfringements/ItunesApiUrls",
 		"play store":               base + "/GetInfringements/GooglePlaystoreAPIurls",
 		"third party app":          base + "/GetInfringements/ThirdPartyAppAPIurls",

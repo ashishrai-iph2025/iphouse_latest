@@ -14,6 +14,8 @@ export const PLATFORM_PAGE_MAP: Record<string, string> = {
   'bilibili':                   'bilibili',
   'chomikuj':                   'chomikuj',
   'ugc and other social media': 'ugc-sm',
+  'meta ads':                   'meta-ads',
+  'marketplace':                'marketplace',
   'i-tunes':                    'itunes',
   'play store':                 'play-store',
   'third party app':            'third-party-app',

@@ -11,6 +11,11 @@ import { useMasterData } from '@/lib/masterDataContext'
 
 const ICON_COLORS = ['#0078D4','#FC934C','#16A34A','#DC2626','#7C3AED','#F59E0B','#0891B2','#DB2777']
 
+// Platforms visible in the catalogue but not yet searchable — clicking them
+// shows a "Coming Soon" notice instead of running a search.
+const COMING_SOON_PLATFORMS = ['torrent']
+const isComingSoon = (key: string) => COMING_SOON_PLATFORMS.includes(key.trim().toLowerCase())
+
 export default function InfringementPage() {
   const router = useRouter()
 
@@ -20,12 +25,14 @@ export default function InfringementPage() {
   const [assetName, setAssetName] = useState('')
   const [loading,   setLoading]   = useState(false)
   const [error,     setError]     = useState('')
+  const [comingSoon, setComingSoon] = useState<string | null>(null)
 
   const { platforms, assets } = useMasterData()
 
   async function handleSearch(e: React.FormEvent) {
     e.preventDefault()
     if (!platform) { setError('Please select a platform'); return }
+    if (isComingSoon(platform)) { setComingSoon(platform); return }
     setError('')
     setLoading(true)
     try {
@@ -124,14 +131,22 @@ export default function InfringementPage() {
               {platforms.map((p, i) => (
                 <button
                   key={p.key}
-                  onClick={() => { setPlatform(p.key); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
-                  className={`flex flex-col items-center p-4 rounded-xl border-2 transition-all hover:-translate-y-0.5 text-center group ${
+                  onClick={() => {
+                    if (isComingSoon(p.key)) { setComingSoon(p.label); return }
+                    setPlatform(p.key); window.scrollTo({ top: 0, behavior: 'smooth' })
+                  }}
+                  className={`relative flex flex-col items-center p-4 rounded-xl border-2 transition-all hover:-translate-y-0.5 text-center group ${
                     platform === p.key
                       ? 'border-[#14254A] bg-[#14254A]/5 shadow-sm'
                       : 'border-gray-100 hover:border-[#FC934C]/50 hover:bg-orange-50/50'
                   }`}
                 >
-                  <span className="w-9 h-9 rounded-xl flex items-center justify-center text-white text-sm font-bold mb-2 shadow-sm"
+                  {isComingSoon(p.key) && (
+                    <span className="absolute top-2 right-2 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-[#FC934C]/15 text-[#d97b2e] border border-[#FC934C]/30">
+                      Soon
+                    </span>
+                  )}
+                  <span className={`w-9 h-9 rounded-xl flex items-center justify-center text-white text-sm font-bold mb-2 shadow-sm ${isComingSoon(p.key) ? 'opacity-60' : ''}`}
                     style={{ background: ICON_COLORS[i % ICON_COLORS.length] }}>
                     {p.label.charAt(0).toUpperCase()}
                   </span>
@@ -140,6 +155,36 @@ export default function InfringementPage() {
                   }`}>{p.label}</span>
                 </button>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Coming Soon modal ── */}
+      {comingSoon && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+          onClick={() => setComingSoon(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden fade-in"
+            onClick={e => e.stopPropagation()}>
+            <div className="h-1" style={{ background: 'linear-gradient(90deg,#14254A,#FC934C)' }} />
+            <div className="p-7 text-center">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-2xl flex items-center justify-center text-3xl"
+                style={{ background: 'linear-gradient(135deg,#FC934C22,#14254A14)' }}>
+                🚧
+              </div>
+              <h3 className="text-lg font-extrabold text-[#14254A]">Coming Soon</h3>
+              <p className="text-sm text-gray-500 mt-2 leading-relaxed">
+                <b className="text-[#14254A]">{comingSoon}</b> monitoring is under development
+                and will be available on the platform shortly.
+              </p>
+              <p className="text-xs text-gray-400 mt-1.5">
+                Stay tuned — we&apos;ll enable it here as soon as it&apos;s ready.
+              </p>
+              <button onClick={() => setComingSoon(null)}
+                className="mt-6 px-8 py-2.5 rounded-xl font-bold text-white text-sm transition-all hover:opacity-90"
+                style={{ background: 'linear-gradient(135deg,#14254A,#1e3a6e)' }}>
+                Got it
+              </button>
             </div>
           </div>
         </div>

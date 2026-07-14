@@ -244,12 +244,16 @@ func APICredentials(w http.ResponseWriter, r *http.Request) {
 		}
 		// An empty password means "keep the current one" — the GET endpoint only ever
 		// returns a masked password, so a blank submit must not overwrite the real value.
+		var uerr error
 		if body.ApiPassword != "" {
-			db.Exec("UPDATE dcp_user SET api_user_name = ?, api_password = ? WHERE userId = ?",
+			_, _, uerr = db.Exec("UPDATE dcp_user SET api_user_name = ?, api_password = ? WHERE userId = ?",
 				ipauth.EncryptMain(body.ApiUserName), ipauth.EncryptMain(body.ApiPassword), body.UserID)
 		} else {
-			db.Exec("UPDATE dcp_user SET api_user_name = ? WHERE userId = ?",
+			_, _, uerr = db.Exec("UPDATE dcp_user SET api_user_name = ? WHERE userId = ?",
 				ipauth.EncryptMain(body.ApiUserName), body.UserID)
+		}
+		if uerr != nil {
+			fail(w, 500, "Save failed: "+uerr.Error()); return
 		}
 		ok(w, map[string]any{"success": true})
 	case http.MethodDelete:

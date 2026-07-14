@@ -33,39 +33,69 @@ function fmtDate(v: string) {
   })
 }
 
-function resolveFields(row: InfringementItem) {
+// Listing-style platforms (Meta Ads, Marketplace) carry commerce fields
+// (listing/shop URLs, seller, price) and use the pipeline status
+// (currentStatusName) as their display status when removalStatus is empty.
+function isListingPlatform(platform: string) {
+  const p = platform.trim().toLowerCase()
+  return p === 'meta ads' || p === 'marketplace'
+}
+
+// Positive-count helper: ratings/reviews/purchases are meaningless as 0.
+function positiveNum(v: unknown): string {
+  const n = Number(v)
+  return v != null && isFinite(n) && n > 0 ? String(n) : '—'
+}
+
+function resolveFields(row: InfringementItem, platform = '') {
+  const listing = isListingPlatform(platform)
+
+  // Marketplace price range: min / max + currency.
+  const priceParts = [row['listingPriceMin'], row['listingPriceMax']]
+    .filter(v => v != null && String(v).trim() !== '')
+    .map(v => Number(v).toLocaleString())
+  const currency = row['listingCurrency'] != null ? String(row['listingCurrency']).trim() : ''
+  const price = priceParts.length ? `${priceParts.join(' – ')}${currency ? ` ${currency}` : ''}` : '—'
+
   return {
     asset: get(row, 'assetName', 'AssetName', 'asset', 'Asset', 'title'),
-    type: get(row, 'infringementType', 'InfringementType', 'type', 'isSourceURL'),
-    status: get(row, 'removalStatus', 'RemovalStatus', 'status'),
+    type: get(row, 'infringementType', 'InfringementType', 'infringementTypeName', 'type', 'isSourceURL'),
+    status: listing
+      ? get(row, 'removalStatus', 'RemovalStatus', 'status', 'currentStatusName')
+      : get(row, 'removalStatus', 'RemovalStatus', 'status'),
     videoUrl: get(row, 'videoURL', 'VideoURL', 'videoUrl', 'sourceURLLink'),
-    profileUrl: get(row, 'profileURL', 'ProfileURL', 'channelOrProfileURL', 'channelURL', 'channelUrl', 'ChannelURL'),
+    profileUrl: get(row, 'profileURL', 'ProfileURL', 'channelOrProfileURL', 'channelURL', 'channelUrl', 'ChannelURL', 'shopUrl'),
     hostUrl: get(row, 'sourceURL', 'sourceUrl', 'SourceURL', 'hostURL', 'hostUrl'),
-    linkUrl: get(row, 'infringingURL', 'infringingUrl', 'url', 'URL', 'postURL', 'postUrl'),
+    linkUrl: get(row, 'infringingURL', 'infringingUrl', 'url', 'URL', 'postURL', 'postUrl', 'listingUrl'),
     domain: get(row, 'infringingDomain', 'domain', 'infringingHost', 'host'),
     sourceDomain: get(row, 'sourceDomain', 'sourceHost'),
-    videoTitle: get(row, 'videoTitle', 'VideoTitle', 'caption', 'title'),
-    channelName: get(row, 'channelName', 'ChannelName', 'profileName', 'channelOrProfileName', 'userName', 'chatTitle'),
-    channelId: get(row, 'channelId', 'channelID', 'ChannelId', 'channelURL', 'channelUrl'),
+    videoTitle: get(row, 'videoTitle', 'VideoTitle', 'caption', 'title', 'postDescription', 'listingTitle'),
+    channelName: get(row, 'channelName', 'ChannelName', 'profileName', 'channelOrProfileName', 'userName', 'chatTitle', 'sellerName'),
+    channelId: get(row, 'channelId', 'channelID', 'ChannelId', 'channelURL', 'channelUrl', 'pageId'),
     views: get(row, 'views', 'Views', 'viewCount'),
     likes: get(row, 'like_count', 'likeCount', 'likes'),
     comments: get(row, 'comment_count', 'commentCount', 'commentsCount'),
     subscribers: get(row, 'subscribers', 'subscriberCount', 'subscrbers', 'followersCount', 'members'),
-    quality: get(row, 'qualityOfPrint', 'QualityOfPrint', 'quality', 'qualityPrint'),
+    quality: get(row, 'qualityOfPrint', 'QualityOfPrint', 'qualityOfPrintName', 'quality', 'qualityPrint'),
     duration: get(row, 'videoLength', 'VideoLength', 'videoDuration', 'duration'),
     keywords: get(row, 'keywords', 'Keywords', 'keyword', 'category'),
     screenshot: get(row, 'screenshotUrl', 'screenshotURL', 'screenshot', 'screenshot_url'),
     discovered: get(row, 'urlUploadDate', 'URLUploadDate', 'publishedDate', 'PublishedDate', 'discoveredDate', 'detectedDate', 'detectionDate', 'createdAt', 'date'),
-    published: get(row, 'publishedDate', 'PublishedDate'),
+    published: get(row, 'publishedDate', 'PublishedDate', 'postUploadDate'),
     uploaded: get(row, 'urlUploadDate', 'URLUploadDate'),
-    country: get(row, 'country', 'Country', 'countryName'),
-    language: get(row, 'audioLanguage', 'AudioLanguage', 'language1', 'language', 'lang'),
+    country: get(row, 'country', 'Country', 'countryName', 'sellerCountryName'),
+    language: get(row, 'audioLanguage', 'AudioLanguage', 'language1', 'language', 'lang', 'languageName'),
     searchEngine: get(row, 'searchEngine', 'engine', 'searchEngineType'),
     removalTime: get(row, 'removalTime', 'RemovalTime'),
     delistStatus: get(row, 'delistingremovalstatus', 'delistingRemovalStatus', 'delistingStatus', 'delisting', 'delistStatus'),
     delistTime: get(row, 'delistingTime', 'delistingDate', 'delistDate'),
     dmcaStatus: get(row, 'dmcaremovalstatus', 'dmcaRemovalStatus', 'hostDmcaStatus', 'infringingDmcaStatus', 'infringingDmca', 'dmcaStatus'),
     dmcaTime: get(row, 'dmcaRemovalTime', 'infringingDmcaTime', 'hostDmcaTime'),
+    // Listing-platform extras (— on every other platform)
+    price,
+    ratings: positiveNum(row['ratings']),
+    reviews: positiveNum(row['noOfReviews']),
+    buys: positiveNum(row['noOfBuys']),
   }
 }
 
@@ -238,7 +268,7 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
     return pages
   }
 
-  const modalFields = useMemo(() => (modal ? resolveFields(modal) : null), [modal])
+  const modalFields = useMemo(() => (modal ? resolveFields(modal, platformParam) : null), [modal, platformParam])
 
   return (
     <div className="fade-in">
@@ -366,7 +396,7 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
 
           <div className="bg-white dark:bg-[#1a2d55] rounded-2xl shadow-card border border-gray-100 dark:border-white/10 divide-y divide-gray-100 dark:divide-white/8 overflow-hidden">
             {pageRows.map((item, i) => {
-              const f = resolveFields(item)
+              const f = resolveFields(item, platformParam)
               const isActive = f.status === '—' || f.status.toLowerCase().includes('active') || f.status.toLowerCase() === 'live'
 
               return (
@@ -429,7 +459,7 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
                       ) : (
                         f.profileUrl !== '—' && (
                           <p className="text-xs truncate">
-                            <span className="text-gray-400">Channel: </span>
+                            <span className="text-gray-400">{isListingPlatform(platformParam) ? 'Seller: ' : 'Channel: '}</span>
                             <a href={f.profileUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
                               {f.channelName !== '—' ? f.channelName : f.profileUrl.slice(0, 60)}
                             </a>
@@ -442,6 +472,8 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
                       {f.discovered !== '—' && <span>Discovered: {fmtDate(f.discovered)}</span>}
                       {f.language !== '—' && <span className="ml-3">| Lang: {f.language}</span>}
                       {f.subscribers !== '—' && <span className="ml-3">| Subscribers: {Number(f.subscribers).toLocaleString()}</span>}
+                      {f.price !== '—' && <span className="ml-3">| Price: {f.price}</span>}
+                      {f.country !== '—' && isListingPlatform(platformParam) && <span className="ml-3">| Country: {f.country}</span>}
                     </p>
                   </div>
 
@@ -561,7 +593,7 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
                   </MRow>
                 )}
                 {modalFields.profileUrl !== '—' && (
-                  <MRow label="Channel / Profile URL">
+                  <MRow label={isListingPlatform(platformParam) ? 'Seller / Shop URL' : 'Channel / Profile URL'}>
                     <a href={modalFields.profileUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline break-all text-xs">
                       {modalFields.profileUrl}
                     </a>
@@ -570,7 +602,11 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {modalFields.channelName !== '—' && <MCell label="Channel / Profile">{modalFields.channelName}</MCell>}
+                {modalFields.channelName !== '—' && <MCell label={isListingPlatform(platformParam) ? 'Seller' : 'Channel / Profile'}>{modalFields.channelName}</MCell>}
+                {modalFields.price !== '—' && <MCell label="Listing Price">{modalFields.price}</MCell>}
+                {modalFields.ratings !== '—' && <MCell label="Ratings">{modalFields.ratings}</MCell>}
+                {modalFields.reviews !== '—' && <MCell label="Reviews">{Number(modalFields.reviews).toLocaleString()}</MCell>}
+                {modalFields.buys !== '—' && <MCell label="Purchases">{Number(modalFields.buys).toLocaleString()}</MCell>}
                 {modalFields.sourceDomain !== '—' && <MCell label="Source Domain">{modalFields.sourceDomain}</MCell>}
                 {modalFields.domain !== '—' && <MCell label="Infringing Domain">{modalFields.domain}</MCell>}
                 {modalFields.type !== '—' && <MCell label="Infringement Type">{modalFields.type}</MCell>}

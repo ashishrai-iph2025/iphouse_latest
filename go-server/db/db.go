@@ -123,6 +123,16 @@ func Migrate() {
 		log.Printf("[db] migrate: dcp_admin_config_access userId→loginId renamed")
 	}
 
+	// api_user_name/api_password hold AES+base64 ciphertext (~80–110 chars for
+	// typical inputs). Older production schemas used VARCHAR(100), which made
+	// credential updates fail under STRICT_TRANS_TABLES ("Data too long") once
+	// the plaintext reached 32 chars. Idempotent and instant on MySQL 8.
+	if _, _, aerr := Exec("ALTER TABLE dcp_user MODIFY api_user_name VARCHAR(255) NULL, MODIFY api_password VARCHAR(255) NULL"); aerr != nil {
+		log.Printf("[db] migrate dcp_user api credential columns: %v", aerr)
+	} else {
+		log.Printf("[db] migrate: dcp_user api credential columns at VARCHAR(255)")
+	}
+
 	// Unify dcp_super_admin into the master portal-staff table: an "Admin" or
 	// "SuperAdmin" tier is stored here (not just the original hand-seeded
 	// Super Admin row). userId/loginId link a mirrored row back to the real

@@ -21,6 +21,8 @@ export const INFRINGEMENT_ENDPOINTS: Record<string, string> = {
   'dailymotion': `${BASE}/UGCPlatform/Paged`,
   'bilibili': `${BASE}/UGCPlatform/Paged`,
   'ugc and other social media': `${BASE}/UGCPlatform/Paged`,
+  'meta ads': `${BASE}/MetaAds/Paged`,
+  'marketplace': `${BASE}/Marketplace/Paged`,
   'i-tunes': `${BASE}/GetInfringements/ItunesApiUrls`,
   'play store': `${BASE}/GetInfringements/GooglePlaystoreAPIurls`,
   'third party app': `${BASE}/GetInfringements/ThirdPartyAppAPIurls`,
