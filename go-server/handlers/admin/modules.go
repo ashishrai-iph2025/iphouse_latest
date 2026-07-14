@@ -57,7 +57,7 @@ func DashboardModules(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query(q)
 		if err != nil {
 			log.Printf("[dashboard-modules] query failed: %v", err)
-			fail(w, 500, "Database error: "+err.Error()); return
+			fail(w, 500, "Could not load dashboard modules."); return
 		}
 		if rows == nil {
 			rows = []map[string]any{}

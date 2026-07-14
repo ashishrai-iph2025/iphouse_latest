@@ -4,12 +4,14 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	ipauth "github.com/ip-house/iphouse-api/auth"
@@ -19,6 +21,41 @@ import (
 	"github.com/ip-house/iphouse-api/email"
 	"github.com/ip-house/iphouse-api/markscan"
 )
+
+// ── OTP brute-force protection ───────────────────────────────────────────────
+// Per-user wrong-guess counter for the 6-digit login code. Kept in memory: the
+// code itself is short-lived, so a counter that resets on restart is acceptable
+// (the code is also cleared once the cap is hit). For a multi-instance
+// deployment move this to Redis alongside the rate limiter.
+
+const maxOTPAttempts = 5
+
+var otpFails struct {
+	sync.Mutex
+	m map[int64]int
+}
+
+func init() { otpFails.m = map[int64]int{} }
+
+func otpAttemptsExceeded(userID int64) bool {
+	otpFails.Lock()
+	defer otpFails.Unlock()
+	return otpFails.m[userID] >= maxOTPAttempts
+}
+
+// registerOTPFailure records a wrong guess and returns the attempts remaining.
+func registerOTPFailure(userID int64) int {
+	otpFails.Lock()
+	defer otpFails.Unlock()
+	otpFails.m[userID]++
+	return maxOTPAttempts - otpFails.m[userID]
+}
+
+func clearOTPAttempts(userID int64) {
+	otpFails.Lock()
+	defer otpFails.Unlock()
+	delete(otpFails.m, userID)
+}
 
 // ── Stateless temp tokens ────────────────────────────────────────────────────
 // Temp tokens are HMAC-signed payloads (not stored server-side) so they survive
@@ -294,6 +331,9 @@ func SendOTP(w http.ResponseWriter, r *http.Request) {
 
 	digits := genOTPDigits()
 
+	// A newly issued code starts with a clean attempt budget.
+	clearOTPAttempts(body.UserID)
+
 	// Use MySQL's own clock for the expiry so verification is timezone-agnostic
 	// (the driver uses loc=Asia/Kolkata; mixing Go UTC strings caused false expiries).
 	db.Exec("UPDATE dcp_user SET twofa_code = ?, twofa_code_expires = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE userId = ?", digits, body.UserID)
@@ -346,13 +386,30 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	if storedCode == "" {
 		OK(w, map[string]any{"success": false, "error": "No active code"}); return
 	}
-	if storedCode != body.Code {
+	// A 6-digit code is only 1e6 wide: without a per-code attempt cap it can be
+	// brute-forced (per-IP rate limiting alone is not enough — an attacker with
+	// several source addresses still gets there). Burn the code after too many
+	// wrong guesses and force the user to request a fresh one.
+	if otpAttemptsExceeded(body.UserID) {
+		db.Exec("UPDATE dcp_user SET twofa_code = NULL, twofa_code_expires = NULL WHERE userId = ? LIMIT 1", body.UserID)
+		clearOTPAttempts(body.UserID)
+		OK(w, map[string]any{"success": false, "error": "Too many incorrect attempts. Please request a new code."}); return
+	}
+	// Constant-time compare so the response time can't leak the code prefix.
+	if subtle.ConstantTimeCompare([]byte(storedCode), []byte(body.Code)) != 1 {
+		left := registerOTPFailure(body.UserID)
+		if left <= 0 {
+			db.Exec("UPDATE dcp_user SET twofa_code = NULL, twofa_code_expires = NULL WHERE userId = ? LIMIT 1", body.UserID)
+			clearOTPAttempts(body.UserID)
+			OK(w, map[string]any{"success": false, "error": "Too many incorrect attempts. Please request a new code."}); return
+		}
 		OK(w, map[string]any{"success": false, "error": "Incorrect code"}); return
 	}
 	if intFromAny(user["not_expired"]) == 0 {
 		OK(w, map[string]any{"success": false, "error": "Code has expired"}); return
 	}
 
+	clearOTPAttempts(body.UserID)
 	db.Exec("UPDATE dcp_user SET twofa_code = NULL, twofa_code_expires = NULL WHERE userId = ? LIMIT 1", body.UserID)
 
 	// The username MUST be the exact email the user authenticated with — never
@@ -613,9 +670,16 @@ func ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 400, "Email is required"); return
 	}
 
+	// Always answer the same way, whether or not the address exists. Returning
+	// "No active account found with this email" let anyone enumerate which
+	// emails hold accounts on the platform — useful for targeting phishing and
+	// credential-stuffing. Failures are logged server-side instead.
+	const genericReply = "If an account exists for that email address, a password reset link has been sent."
+
 	user, _ := db.QueryOne("SELECT loginId, login_username, first_name, last_name FROM dcp_user_login WHERE login_username = ? AND is_active = 1 LIMIT 1", body.Email)
 	if user == nil {
-		Fail(w, 404, "No active account found with this email address"); return
+		log.Printf("[forgot-password] no active account for %q — returning generic reply", body.Email)
+		OK(w, map[string]any{"success": true, "message": genericReply}); return
 	}
 
 	resetToken := randHex(32)        // raw token — emailed to the user only
@@ -638,7 +702,7 @@ func ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	go email.SendPasswordReset(body.Email, resetToken, name)
 
-	OK(w, map[string]any{"success": true})
+	OK(w, map[string]any{"success": true, "message": genericReply})
 }
 
 // ── POST /api/auth/verify-reset-otp ──────────────────────────────────────────
@@ -684,7 +748,11 @@ func ResetPassword(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 500, "Hash error"); return
 	}
 	loginID := intFromAny(row["loginId"])
-	db.Exec("UPDATE dcp_user_login SET login_password = ? WHERE loginId = ?", hashed, loginID)
+	// If the password write fails, do NOT burn the token or report success —
+	// the user would be locked into believing a password that does not exist.
+	if err := db.MustExec("UPDATE dcp_user_login SET login_password = ? WHERE loginId = ?", hashed, loginID); err != nil {
+		Fail(w, 500, "Could not update your password. Please try again."); return
+	}
 	db.Exec("UPDATE dcp_password_resets SET used = 1 WHERE id = ?", intFromAny(row["id"]))
 	go activity.Log(loginID, "password_reset", "auth/reset-password", activity.GetIP(r), activity.GetUA(r), map[string]any{"method": "reset_token"})
 

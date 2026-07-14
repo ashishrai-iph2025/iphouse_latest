@@ -46,8 +46,11 @@ func WarRoomSettings(w http.ResponseWriter, r *http.Request) {
 		if body.ComparisonEnabled {
 			v = 1
 		}
-		db.Exec(`INSERT INTO war_room_client_settings (user_id, comparison_enabled) VALUES (?, ?)
-			ON DUPLICATE KEY UPDATE comparison_enabled = ?`, body.UserID, v, v)
+		if !execOK(w, "the War Room setting",
+			`INSERT INTO war_room_client_settings (user_id, comparison_enabled) VALUES (?, ?)
+			 ON DUPLICATE KEY UPDATE comparison_enabled = ?`, body.UserID, v, v) {
+			return
+		}
 		ok(w, map[string]any{"success": true})
 	default:
 		fail(w, 405, "Method not allowed")

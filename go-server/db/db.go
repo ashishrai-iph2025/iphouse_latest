@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -69,15 +70,39 @@ func QueryOne(sqlStr string, args ...any) (map[string]any, error) {
 }
 
 // Exec runs an INSERT/UPDATE/DELETE and returns lastInsertId and rowsAffected.
+//
+// Every failure is logged here, unconditionally. Many call sites historically
+// discarded the returned error and reported success to the user anyway, so a
+// rejected write (e.g. "Data too long for column") looked like a successful
+// save. Callers should still check the error — MustExec below makes that the
+// easy path — but this guarantees a failure is never completely silent.
 func Exec(sqlStr string, args ...any) (int64, int64, error) {
 	db := Get()
 	res, err := db.Exec(sqlStr, args...)
 	if err != nil {
+		log.Printf("[db] EXEC FAILED: %v | sql=%s", err, truncateSQL(sqlStr))
 		return 0, 0, err
 	}
 	lid, _ := res.LastInsertId()
 	aff, _ := res.RowsAffected()
 	return lid, aff, nil
+}
+
+// MustExec runs a write and reports whether it succeeded. Use it in handlers so
+// a failed write can be surfaced to the caller instead of being reported as a
+// success. Arguments are never logged (they carry credentials/PII).
+func MustExec(sqlStr string, args ...any) error {
+	_, _, err := Exec(sqlStr, args...)
+	return err
+}
+
+// truncateSQL keeps the log readable and avoids dumping huge statements.
+func truncateSQL(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > 160 {
+		return s[:160] + "…"
+	}
+	return s
 }
 
 // Migrate ensures required tables exist. Safe to run on every startup.

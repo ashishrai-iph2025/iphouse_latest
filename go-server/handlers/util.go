@@ -65,21 +65,40 @@ func TokenForUser(userID int64) string {
 	return t
 }
 
+// secureCookies reports whether the session cookie must carry the Secure flag.
+//
+// Default-secure: the flag is ON unless this is explicitly a local development
+// run. The previous rule (on only when the Go port is literally 443) meant a
+// production server behind a TLS-terminating reverse proxy — the normal setup,
+// where Go listens on 8080 — shipped the session JWT without Secure, so any
+// plaintext HTTP request to the domain would leak it.
+//
+// Set INSECURE_COOKIES=true (or APP_ENV=development) for http://localhost work.
+func secureCookies() bool {
+	if os.Getenv("SECURE_COOKIES") == "true" {
+		return true
+	}
+	if os.Getenv("INSECURE_COOKIES") == "true" || os.Getenv("APP_ENV") == "development" {
+		return false
+	}
+	return true
+}
+
 // SetTokenCookie sets the JWT as an HttpOnly cookie.
 func SetTokenCookie(w http.ResponseWriter, token string) {
-	secure := config.C.Port == "443" || os.Getenv("SECURE_COOKIES") == "true"
 	http.SetCookie(w, &http.Cookie{
 		Name:     "token",
 		Value:    token,
 		Path:     "/",
 		MaxAge:   config.C.SessionIdleSeconds,
 		HttpOnly: true,
-		Secure:   secure,
+		Secure:   secureCookies(),
 		SameSite: http.SameSiteLaxMode,
 	})
 }
 
-// ClearTokenCookie clears the JWT cookie.
+// ClearTokenCookie clears the JWT cookie. The attributes must match the ones
+// used when setting it, or the browser keeps the original cookie.
 func ClearTokenCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "token",
@@ -87,6 +106,8 @@ func ClearTokenCookie(w http.ResponseWriter) {
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
+		Secure:   secureCookies(),
+		SameSite: http.SameSiteLaxMode,
 	})
 }
 

@@ -1,8 +1,11 @@
 package middleware
 
 import (
+	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -58,18 +61,69 @@ func (rl *rateLimiter) allow(key string) bool {
 	return true
 }
 
-func clientIP(r *http.Request) string {
-	// Honour the first hop in X-Forwarded-For when present (Nginx sets this).
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := indexComma(xff); i >= 0 {
-			return trimSpace(xff[:i])
+// trustedProxies lists the peers whose X-Forwarded-For header may be believed,
+// from TRUSTED_PROXIES (comma-separated IPs or CIDRs). Anything else is
+// ignored: an attacker who can set XFF freely gets a brand-new rate-limit
+// bucket per request and defeats brute-force protection entirely, so XFF is
+// only honoured when the request actually arrived from our own reverse proxy.
+var trustedProxies = func() []*net.IPNet {
+	raw := os.Getenv("TRUSTED_PROXIES")
+	if raw == "" {
+		// Loopback only by default — covers the common "Nginx on the same host"
+		// deployment without trusting arbitrary senders.
+		raw = "127.0.0.1/32,::1/128"
+	}
+	var nets []*net.IPNet
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
 		}
-		return trimSpace(xff)
+		if !strings.Contains(part, "/") {
+			if ip := net.ParseIP(part); ip != nil {
+				bits := 32
+				if ip.To4() == nil {
+					bits = 128
+				}
+				part = fmt.Sprintf("%s/%d", part, bits)
+			}
+		}
+		if _, n, err := net.ParseCIDR(part); err == nil {
+			nets = append(nets, n)
+		}
 	}
+	return nets
+}()
+
+func isTrustedProxy(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, n := range trustedProxies {
+		if n.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}
+
+// clientIP returns the peer address, substituting the first X-Forwarded-For hop
+// ONLY when the immediate peer is a trusted proxy (see trustedProxies).
+func clientIP(r *http.Request) string {
+	peer := r.RemoteAddr
 	if ip, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return ip
+		peer = ip
 	}
-	return r.RemoteAddr
+	if isTrustedProxy(peer) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := indexComma(xff); i >= 0 {
+				return trimSpace(xff[:i])
+			}
+			return trimSpace(xff)
+		}
+	}
+	return peer
 }
 
 func indexComma(s string) int {

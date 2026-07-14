@@ -163,6 +163,22 @@ func fail(w http.ResponseWriter, status int, msg string) {
 	json.NewEncoder(w).Encode(map[string]any{"success": false, "error": msg})
 }
 
+// execOK runs a write and, if it fails, answers the request with an error and
+// returns false so the caller can stop instead of reporting a bogus success.
+//
+// Discarding db.Exec's error and returning {"success":true} regardless is how a
+// rejected write (constraint violation, "Data too long", a dropped column) came
+// back to the UI as "Saved successfully" while nothing changed. Every write that
+// a user is told succeeded must go through this.
+func execOK(w http.ResponseWriter, what string, sqlStr string, args ...any) bool {
+	if err := db.MustExec(sqlStr, args...); err != nil {
+		// db.Exec already logged the driver error and the statement.
+		fail(w, 500, "Could not save "+what+". The change was not applied.")
+		return false
+	}
+	return true
+}
+
 func intVal(v any) int64 {
 	switch t := v.(type) {
 	case int64:

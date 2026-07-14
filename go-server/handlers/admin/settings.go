@@ -80,8 +80,11 @@ func EmailTemplates(w http.ResponseWriter, r *http.Request) {
 			NotifyEmail string `json:"notify_email"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		db.Exec("INSERT INTO dcp_email_templates (name, event_key, subject, body_html, is_active, notify_email) VALUES (?, ?, ?, ?, ?, ?)",
-			body.Name, body.EventKey, body.Subject, body.BodyHTML, body.IsActive, body.NotifyEmail)
+		if !execOK(w, "the email template",
+			"INSERT INTO dcp_email_templates (name, event_key, subject, body_html, is_active, notify_email) VALUES (?, ?, ?, ?, ?, ?)",
+			body.Name, body.EventKey, body.Subject, body.BodyHTML, body.IsActive, body.NotifyEmail) {
+			return
+		}
 		ok(w, map[string]any{"success": true})
 	case http.MethodPut:
 		var body struct {
@@ -94,15 +97,20 @@ func EmailTemplates(w http.ResponseWriter, r *http.Request) {
 			NotifyEmail string `json:"notify_email"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		db.Exec("UPDATE dcp_email_templates SET name=?, event_key=?, subject=?, body_html=?, is_active=?, notify_email=? WHERE id=?",
-			body.Name, body.EventKey, body.Subject, body.BodyHTML, body.IsActive, body.NotifyEmail, body.ID)
+		if !execOK(w, "the email template",
+			"UPDATE dcp_email_templates SET name=?, event_key=?, subject=?, body_html=?, is_active=?, notify_email=? WHERE id=?",
+			body.Name, body.EventKey, body.Subject, body.BodyHTML, body.IsActive, body.NotifyEmail, body.ID) {
+			return
+		}
 		ok(w, map[string]any{"success": true})
 	case http.MethodDelete:
 		var body struct {
 			ID int64 `json:"id"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		db.Exec("DELETE FROM dcp_email_templates WHERE id = ?", body.ID)
+		if !execOK(w, "the email template deletion", "DELETE FROM dcp_email_templates WHERE id = ?", body.ID) {
+			return
+		}
 		ok(w, map[string]any{"success": true})
 	default:
 		fail(w, 405, "Method not allowed")
@@ -165,8 +173,11 @@ func EmailCredentials(w http.ResponseWriter, r *http.Request) {
 		if body.SMTPSecure == "" {
 			body.SMTPSecure = "tls"
 		}
-		db.Exec("INSERT INTO master_email_credentials (email_id, email_password, smtp_host, smtp_port, smtp_secure, purpose, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)",
-			ipauth.EncryptMain(body.EmailID), ipauth.EncryptMain(body.EmailPass), body.SMTPHost, body.SMTPPort, body.SMTPSecure, body.Purpose)
+		if !execOK(w, "the email credentials",
+			"INSERT INTO master_email_credentials (email_id, email_password, smtp_host, smtp_port, smtp_secure, purpose, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)",
+			ipauth.EncryptMain(body.EmailID), ipauth.EncryptMain(body.EmailPass), body.SMTPHost, body.SMTPPort, body.SMTPSecure, body.Purpose) {
+			return
+		}
 		ok(w, map[string]any{"success": true})
 	case http.MethodPut:
 		var body struct {
@@ -187,11 +198,17 @@ func EmailCredentials(w http.ResponseWriter, r *http.Request) {
 			body.SMTPSecure = "tls"
 		}
 		if body.EmailPass != "" {
-			db.Exec("UPDATE master_email_credentials SET email_id=?, email_password=?, smtp_host=?, smtp_port=?, smtp_secure=?, purpose=? WHERE id=?",
-				ipauth.EncryptMain(body.EmailID), ipauth.EncryptMain(body.EmailPass), body.SMTPHost, body.SMTPPort, body.SMTPSecure, body.Purpose, body.ID)
+			if !execOK(w, "the email credentials",
+				"UPDATE master_email_credentials SET email_id=?, email_password=?, smtp_host=?, smtp_port=?, smtp_secure=?, purpose=? WHERE id=?",
+				ipauth.EncryptMain(body.EmailID), ipauth.EncryptMain(body.EmailPass), body.SMTPHost, body.SMTPPort, body.SMTPSecure, body.Purpose, body.ID) {
+				return
+			}
 		} else {
-			db.Exec("UPDATE master_email_credentials SET email_id=?, smtp_host=?, smtp_port=?, smtp_secure=?, purpose=? WHERE id=?",
-				ipauth.EncryptMain(body.EmailID), body.SMTPHost, body.SMTPPort, body.SMTPSecure, body.Purpose, body.ID)
+			if !execOK(w, "the email credentials",
+				"UPDATE master_email_credentials SET email_id=?, smtp_host=?, smtp_port=?, smtp_secure=?, purpose=? WHERE id=?",
+				ipauth.EncryptMain(body.EmailID), body.SMTPHost, body.SMTPPort, body.SMTPSecure, body.Purpose, body.ID) {
+				return
+			}
 		}
 		ok(w, map[string]any{"success": true})
 	case http.MethodDelete:
@@ -203,7 +220,9 @@ func EmailCredentials(w http.ResponseWriter, r *http.Request) {
 			fail(w, 422, "id required")
 			return
 		}
-		db.Exec("DELETE FROM master_email_credentials WHERE id = ?", body.ID)
+		if !execOK(w, "the credential deletion", "DELETE FROM master_email_credentials WHERE id = ?", body.ID) {
+			return
+		}
 		ok(w, map[string]any{"success": true})
 	default:
 		fail(w, 405, "Method not allowed")
@@ -327,8 +346,11 @@ func Settings(w http.ResponseWriter, r *http.Request) {
 			Value string `json:"value"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		db.Exec("INSERT INTO dcp_settings (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = ?",
-			body.Key, body.Value, body.Value)
+		if !execOK(w, "the setting",
+			"INSERT INTO dcp_settings (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = ?",
+			body.Key, body.Value, body.Value) {
+			return
+		}
 		ok(w, map[string]any{"success": true})
 	default:
 		fail(w, 405, "Method not allowed")

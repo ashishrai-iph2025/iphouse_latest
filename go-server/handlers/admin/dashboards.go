@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -292,7 +293,10 @@ func PowerBIWorkspace(w http.ResponseWriter, r *http.Request) {
 
 	token, err := pbiToken(tenantId, clientId, clientSecret)
 	if err != nil {
-		fail(w, 502, "Azure auth failed: "+err.Error()); return
+		// The Azure error body can echo back the client id / tenant — log it,
+		// don't ship it to the browser.
+		log.Printf("[powerbi] azure auth failed: %v", err)
+		fail(w, 502, "PowerBI authentication failed. Check the configured credentials."); return
 	}
 
 	// Fetch workspace, reports and datasets concurrently.

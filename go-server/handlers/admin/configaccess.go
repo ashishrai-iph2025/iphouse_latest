@@ -53,6 +53,43 @@ func grantedKeys(loginID any) []string {
 	return keys
 }
 
+// HasConfigModule reports whether the request's admin login may use a given
+// configuration module. Super Admins (role 2) implicitly hold every module;
+// every other admin is default-deny and must have an explicit grant in
+// dcp_admin_config_access.
+//
+// This is the SERVER-SIDE enforcement of the grants that /admin/configuration
+// merely renders. Without it, any role>=1 login could call an admin endpoint
+// directly (curl) and reach modules — including the plaintext credential
+// reveal endpoints — that a Super Admin never shared with them.
+func HasConfigModule(r *http.Request, moduleKey string) bool {
+	claims := middleware.GetClaims(r)
+	if claims == nil || claims.Role == nil {
+		return false
+	}
+	if *claims.Role >= 2 {
+		return true
+	}
+	for _, k := range grantedKeys(claims.LoginID) {
+		if k == moduleKey {
+			return true
+		}
+	}
+	return false
+}
+
+// RequireConfigModule wraps an admin handler so it can only be reached by a
+// login actually granted that configuration module.
+func RequireConfigModule(moduleKey string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !HasConfigModule(r, moduleKey) {
+			fail(w, 403, "You do not have access to this configuration module")
+			return
+		}
+		next(w, r)
+	}
+}
+
 // GET /api/admin/my-config-access  (any admin)
 // Returns the config modules the *current* admin login is allowed to see.
 // Super Admins (role 2) implicitly get every module.

@@ -24,10 +24,13 @@ func Keepalive(w http.ResponseWriter, r *http.Request) {
 	OK(w, map[string]any{"alive": true, "expiryMs": expiryMs})
 }
 
-// GET /api/test-db
+// GET /api/test-db — health probe. This endpoint is unauthenticated, so it must
+// never echo the driver error (it names the DB host, user and schema). The
+// detail goes to the server log; the caller gets a bare ok/not-ok.
 func TestDB(w http.ResponseWriter, r *http.Request) {
 	if err := db.Get().Ping(); err != nil {
-		Fail(w, 500, "DB unreachable: "+err.Error()); return
+		log.Printf("[test-db] ping failed: %v", err)
+		Fail(w, 503, "Service unavailable"); return
 	}
 	OK(w, map[string]any{"success": true, "message": "DB OK"})
 }
@@ -198,7 +201,9 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			Fail(w, 500, "Hash error"); return
 		}
-		db.Exec("UPDATE dcp_super_admin SET password_hash = ? WHERE id = ?", hashed, intFromAny(row["id"]))
+		if err := db.MustExec("UPDATE dcp_super_admin SET password_hash = ? WHERE id = ?", hashed, intFromAny(row["id"])); err != nil {
+			Fail(w, 500, "Could not update your password. Please try again."); return
+		}
 		OK(w, map[string]any{"success": true})
 		return
 	}
@@ -224,7 +229,9 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		Fail(w, 500, "Hash error"); return
 	}
-	db.Exec("UPDATE dcp_user_login SET login_password = ? WHERE login_username = ? AND is_active = 1", hashed, claims.LoginUsername)
+	if err := db.MustExec("UPDATE dcp_user_login SET login_password = ? WHERE login_username = ? AND is_active = 1", hashed, claims.LoginUsername); err != nil {
+		Fail(w, 500, "Could not update your password. Please try again."); return
+	}
 	OK(w, map[string]any{"success": true})
 }
 
@@ -274,7 +281,8 @@ func IPTracking(w http.ResponseWriter, r *http.Request) {
 	tlsClient := &http.Client{Timeout: 60 * time.Second}
 	resp, err := tlsClient.Do(req)
 	if err != nil {
-		Fail(w, 502, "Markscan request failed: "+err.Error()); return
+		log.Printf("[ip-tracking] markscan request failed: %v", err)
+		Fail(w, 502, "Upstream request failed. Please try again."); return
 	}
 	defer resp.Body.Close()
 	rawBody, _ := io.ReadAll(resp.Body)
