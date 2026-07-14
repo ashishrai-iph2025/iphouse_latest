@@ -2,6 +2,8 @@ package email
 
 import (
 	"crypto/tls"
+	_ "embed"
+	"encoding/base64"
 	"fmt"
 	"net/smtp"
 	"regexp"
@@ -12,6 +14,21 @@ import (
 	"github.com/ip-house/iphouse-api/config"
 	"github.com/ip-house/iphouse-api/db"
 )
+
+// logoPNG is the IP House logo (same asset as the app sidebar), embedded into
+// the binary and attached inline to every email via a Content-ID, so it always
+// displays without the recipient's client having to load a remote image.
+//
+//go:embed logo.png
+var logoPNG []byte
+
+// logoCID is referenced from the HTML as <img src="cid:iphouse-logo">.
+const logoCID = "iphouse-logo"
+
+// logoBanner is prepended to every outgoing email — a white strip with the
+// centered logo above whatever the template renders.
+const logoBanner = `<div style="text-align:center;padding:20px 0 16px;background:#ffffff;">` +
+	`<img src="cid:` + logoCID + `" alt="IP House" width="150" style="width:150px;max-width:60%;height:auto;display:inline-block;" /></div>`
 
 type smtpConfig struct {
 	host   string
@@ -73,7 +90,8 @@ func send(to, subject, html string) error {
 		from = fmt.Sprintf("IP House <%s>", cfg.from)
 	}
 
-	msg := buildMessage(from, to, subject, html)
+	// Every email carries the IP House logo at the top.
+	msg := buildMessage(from, to, subject, logoBanner+html)
 	addr := fmt.Sprintf("%s:%d", cfg.host, cfg.port)
 	auth := smtp.PlainAuth("", cfg.user, cfg.pass, cfg.host)
 
@@ -110,7 +128,51 @@ func send(to, subject, html string) error {
 }
 
 func buildMessage(from, to, subject, html string) string {
-	return fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s", from, to, subject, html)
+	// When the logo is available, send a multipart/related message: the HTML
+	// part plus the logo as an inline (Content-ID) image. This is what makes the
+	// logo render in Gmail/Outlook without loading anything remote. If the asset
+	// is somehow missing, fall back to a plain HTML message.
+	if len(logoPNG) == 0 {
+		return fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s", from, to, subject, html)
+	}
+
+	const boundary = "=_iphouse_related_boundary_9c1f"
+	var b strings.Builder
+	b.WriteString("From: " + from + "\r\n")
+	b.WriteString("To: " + to + "\r\n")
+	b.WriteString("Subject: " + subject + "\r\n")
+	b.WriteString("MIME-Version: 1.0\r\n")
+	b.WriteString("Content-Type: multipart/related; boundary=\"" + boundary + "\"\r\n\r\n")
+
+	// HTML part
+	b.WriteString("--" + boundary + "\r\n")
+	b.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
+	b.WriteString("Content-Transfer-Encoding: 8bit\r\n\r\n")
+	b.WriteString(html + "\r\n")
+
+	// Inline logo part
+	b.WriteString("--" + boundary + "\r\n")
+	b.WriteString("Content-Type: image/png\r\n")
+	b.WriteString("Content-Transfer-Encoding: base64\r\n")
+	b.WriteString("Content-ID: <" + logoCID + ">\r\n")
+	b.WriteString("Content-Disposition: inline; filename=\"iphouse-logo.png\"\r\n\r\n")
+	b.WriteString(wrapBase64(base64.StdEncoding.EncodeToString(logoPNG)) + "\r\n")
+
+	b.WriteString("--" + boundary + "--\r\n")
+	return b.String()
+}
+
+// wrapBase64 splits a base64 string into 76-char lines (RFC 2045).
+func wrapBase64(s string) string {
+	const width = 76
+	var b strings.Builder
+	for len(s) > width {
+		b.WriteString(s[:width])
+		b.WriteString("\r\n")
+		s = s[width:]
+	}
+	b.WriteString(s)
+	return b.String()
 }
 
 // renderTemplate replaces {{key}} placeholders.
