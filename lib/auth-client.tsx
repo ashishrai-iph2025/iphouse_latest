@@ -176,3 +176,4 @@ export async function signOut(options?: { callbackUrl?: string; redirect?: boole
 export async function getSession(): Promise<AppSession | null> {
   return null
 }
+
