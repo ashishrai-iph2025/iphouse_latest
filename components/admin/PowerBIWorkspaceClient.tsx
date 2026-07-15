@@ -253,10 +253,6 @@ export default function PowerBIWorkspaceClient() {
             <p style={{ margin: '4px 0 0', fontSize: 13, color: C.t2 }}>Reports &amp; semantic models · Refresh history · Schedules</p>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-            <a href="/admin/powerbi-creds"
-              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '8px 14px', borderRadius: 8, background: C.card, border: `1px solid ${C.bord}`, color: C.t2, fontSize: 12, fontWeight: 600, textDecoration: 'none', whiteSpace: 'nowrap' }}>
-              <Ico name="settings" size={13} /> Credentials
-            </a>
             <button onClick={load} disabled={loading}
               style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 20px', borderRadius: 8, background: `linear-gradient(135deg,${YELLOW},${ORANGE})`, border: 'none', color: '#fff', fontSize: 12, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', boxShadow: '0 3px 10px rgba(252,147,76,0.35)', whiteSpace: 'nowrap', opacity: loading ? 0.7 : 1 }}>
               <Ico name={loading ? 'spinner' : 'refresh'} size={13} className={loading ? 'animate-spin' : ''} />
@@ -271,7 +267,6 @@ export default function PowerBIWorkspaceClient() {
         <div style={{ ...cardStyle, display: 'flex', alignItems: 'center', gap: 10, padding: '14px 18px', background: `${ROSE}08`, border: `1px solid ${ROSE}25`, marginBottom: 14 }}>
           <Ico name="alert" size={14} style={{ color: ROSE, flexShrink: 0 }} />
           <span style={{ fontSize: 12, color: ROSE, flex: 1 }}>{error}</span>
-          <a href="/admin/powerbi-creds" style={{ padding: '6px 14px', borderRadius: 7, background: ORANGE, color: '#fff', fontSize: 11, fontWeight: 700, textDecoration: 'none', whiteSpace: 'nowrap' }}>Configure →</a>
         </div>
       )}
 
@@ -567,8 +562,6 @@ export default function PowerBIWorkspaceClient() {
           <div style={{ fontSize: 16, fontWeight: 700, color: isDark ? '#e2e8f5' : NAVY }}>Click "Load Workspace" to fetch Power BI data</div>
           <div style={{ fontSize: 13, color: C.t2, maxWidth: 420, lineHeight: 1.8 }}>
             Reports, semantic models, refresh schedules and history will appear here.
-            <br />
-            First time? <a href="/admin/powerbi-creds" style={{ color: ORANGE, fontWeight: 700 }}>Configure credentials →</a>
           </div>
         </div>
       )}

@@ -34,6 +34,9 @@ func main() {
 	// War Room dataset store (Redis-backed, in-memory fallback).
 	handlers.SetWarRoomStore(store.New(config.C.RedisAddr))
 
+	// Background scheduler for automatic database backups.
+	handlers.StartBackupScheduler()
+
 	mux := http.NewServeMux()
 
 	// ── CORS + maintenance-mode wrappers ─────────────────────────────────────
@@ -226,6 +229,8 @@ func main() {
 	mux.Handle("POST /api/admin/staff-otp", saAuth(handlers.StaffOTPSetting))
 	mux.Handle("POST /api/admin/backup/run", saAuth(handlers.RunBackup))
 	mux.Handle("GET /api/admin/backup/list", saAuth(handlers.ListBackups))
+	mux.Handle("GET /api/admin/backup/schedule", saAuth(handlers.BackupSchedule))
+	mux.Handle("POST /api/admin/backup/schedule", saAuth(handlers.BackupSchedule))
 	mux.Handle("GET /api/admin/aws-credentials", saAuth(admin.AWSCredentials))
 	mux.Handle("POST /api/admin/aws-credentials", saAuth(admin.AWSCredentials))
 	mux.Handle("GET /api/admin/aws-credentials/reveal", saAuth(admin.AWSCredentialsReveal))

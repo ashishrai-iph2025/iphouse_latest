@@ -9,7 +9,7 @@ COPY . .
 RUN npm run build
 
 # ── Stage 2: Build Go binary ──────────────────────────────────────────────────
-FROM golang:1.22-alpine AS backend-builder
+FROM golang:1.24-alpine AS backend-builder
 WORKDIR /build
 
 COPY go-server/go.mod go-server/go.sum ./

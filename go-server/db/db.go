@@ -164,6 +164,24 @@ func Migrate() {
 		log.Printf("[db] migrate: aws_credentials OK")
 	}
 
+	// Automatic database-backup schedule (in-app cron). Single row (id=1); also
+	// holds the outcome of the most recent backup, manual or scheduled.
+	_, _, err = Exec("CREATE TABLE IF NOT EXISTS backup_schedule (" +
+		"id INT NOT NULL PRIMARY KEY," +
+		"enabled TINYINT(1) NOT NULL DEFAULT 0," +
+		"cron_expr VARCHAR(120) NOT NULL DEFAULT '0 2 * * *'," +
+		"last_run_at DATETIME NULL," +
+		"last_status VARCHAR(20) NULL," +
+		"last_file VARCHAR(255) NULL," +
+		"last_error TEXT NULL," +
+		"updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" +
+		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+	if err != nil {
+		log.Printf("[db] migrate backup_schedule: %v", err)
+	} else {
+		log.Printf("[db] migrate: backup_schedule OK")
+	}
+
 	// Per-admin-login Configuration-module access. Grant-based (default deny):
 	// only shared modules (granted = 1) are stored, so an admin login sees only
 	// the modules a Super Admin explicitly shares with it. Keyed by loginId so
