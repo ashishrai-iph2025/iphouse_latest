@@ -2,6 +2,7 @@
 
 import { usePathname } from '@/lib/router'
 import ClientNavbar from './ClientNavbar'
+import ImpersonationBanner from './ImpersonationBanner'
 import SideNav from './SideNav'
 import IdleTimeoutGuard from './IdleTimeoutGuard'
 import Footer from '@/components/ui/Footer'
@@ -31,6 +32,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   if (sidebar) {
     return (
       <div className="flex flex-col layout-container" style={{ minHeight: '100dvh' }}>
+        <ImpersonationBanner />
         {/* Top header (logo + profile) – hidden for without-header layout */}
         {!noHeader && <ClientNavbar />}
 
@@ -58,6 +60,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   // Horizontal layout (default)
   return (
     <div className="flex flex-col bg-[#eef2f7] dark:bg-[#0f1f3d] layout-container" style={{ minHeight: '100dvh' }}>
+      <ImpersonationBanner />
       <ClientNavbar />
       <main className="flex-1 flex flex-col overflow-hidden">
         {fullWidth ? (

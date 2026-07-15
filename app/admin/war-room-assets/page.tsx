@@ -119,6 +119,13 @@ export default function WarRoomAssetsPage() {
             {clients.length} client{clients.length !== 1 ? 's' : ''} · Asset Comparison enabled for {enabledCount}
           </p>
         </div>
+        {/* Open the War Room (admin / super admin) */}
+        <Link to="/admin/war-room"
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-white text-sm transition-all hover:opacity-90 shadow-sm"
+          style={{ background: 'linear-gradient(135deg,#14254A,#1e3a6e)' }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" strokeLinecap="round" strokeLinejoin="round"/><path d="m9 12 2 2 4-4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          Open War Room
+        </Link>
       </div>
 
       {/* Table */}

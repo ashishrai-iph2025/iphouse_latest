@@ -202,6 +202,13 @@ func main() {
 
 	mux.Handle("GET /api/admin/my-config-access", adminAuth(admin.MyConfigAccess))
 
+	// Admin "view as client" (impersonation).
+	mux.Handle("GET /api/admin/user-search", adminAuth(handlers.AdminUserSearch))
+	mux.Handle("POST /api/admin/impersonate", adminAuth(handlers.Impersonate))
+	// Exit is reachable from the (client-role) impersonation session, so it is
+	// JWT-auth and self-verifies the impersonator claim.
+	mux.Handle("POST /api/admin/impersonate/exit", auth(handlers.ExitImpersonation))
+
 	// War Room: admin generates a selected client's MarkScan token + asset list.
 	mux.Handle("POST /api/warroom/client-token", adminAuth(handlers.WarRoomClientToken))
 
@@ -225,6 +232,7 @@ func main() {
 	mux.Handle("GET /api/admin/super-admin/config-access", saAuth(admin.SuperAdminConfigAccess))
 	mux.Handle("PUT /api/admin/super-admin/config-access", saAuth(admin.SuperAdminConfigAccess))
 	mux.Handle("GET /api/admin/super-admin/accounts", saAuth(admin.SuperAdminAccounts))
+	mux.Handle("POST /api/admin/super-admin/details", saAuth(admin.SuperAdminDetails))
 	mux.Handle("POST /api/admin/maintenance", saAuth(handlers.MaintenanceUpdate))
 	mux.Handle("POST /api/admin/staff-otp", saAuth(handlers.StaffOTPSetting))
 	mux.Handle("POST /api/admin/backup/run", saAuth(handlers.RunBackup))

@@ -6,8 +6,80 @@ import (
 	"net/http"
 	"strings"
 
+	ipauth "github.com/ip-house/iphouse-api/auth"
 	"github.com/ip-house/iphouse-api/db"
 )
+
+// POST /api/admin/super-admin/details  (super admin only)
+// Update an Admin / Super Admin account's details: name, email, optional new
+// password, and active status. Email is the login identity, so it must stay
+// unique; the last active Super Admin can't be deactivated.
+func SuperAdminDetails(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		fail(w, 405, "Method not allowed"); return
+	}
+	var body struct {
+		ID       int64  `json:"id"`
+		Name     string `json:"name"`
+		Email    string `json:"email"`
+		Password string `json:"password"` // optional — blank keeps current
+		IsActive *bool  `json:"isActive"` // optional
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.ID == 0 {
+		fail(w, 422, "id is required"); return
+	}
+	name := strings.TrimSpace(body.Name)
+	email := strings.TrimSpace(body.Email)
+	if name == "" || email == "" {
+		fail(w, 422, "Name and email are required"); return
+	}
+
+	target, _ := db.QueryOne("SELECT id, email, role FROM dcp_super_admin WHERE id = ? LIMIT 1", body.ID)
+	if target == nil {
+		fail(w, 404, "Account not found"); return
+	}
+
+	// Email must remain unique across staff accounts.
+	if !strings.EqualFold(email, strVal(target["email"])) {
+		if dup, _ := db.QueryOne("SELECT id FROM dcp_super_admin WHERE email = ? AND id <> ? LIMIT 1", email, body.ID); dup != nil {
+			fail(w, 409, "Another account already uses this email address"); return
+		}
+	}
+
+	set := []string{"name = ?", "email = ?"}
+	args := []any{name, email}
+
+	if strings.TrimSpace(body.Password) != "" {
+		if len(body.Password) < 8 {
+			fail(w, 422, "Password must be at least 8 characters"); return
+		}
+		hashed, herr := ipauth.HashPassword(body.Password)
+		if herr != nil {
+			fail(w, 500, "Could not hash the new password"); return
+		}
+		set = append(set, "password_hash = ?")
+		args = append(args, hashed)
+	}
+
+	if body.IsActive != nil {
+		if !*body.IsActive && strVal(target["role"]) == "SuperAdmin" && activeSuperAdminCount() <= 1 {
+			fail(w, 422, "At least one Super Admin must remain active."); return
+		}
+		v := 0
+		if *body.IsActive {
+			v = 1
+		}
+		set = append(set, "is_active = ?")
+		args = append(args, v)
+	}
+
+	args = append(args, body.ID)
+	if err := db.MustExec("UPDATE dcp_super_admin SET "+strings.Join(set, ", ")+" WHERE id = ?", args...); err != nil {
+		fail(w, 500, "Could not update the account"); return
+	}
+	ok(w, map[string]any{"success": true})
+}
 
 // GET  /api/admin/super-admin — list all users
 // PUT  /api/admin/super-admin — grant/revoke admin

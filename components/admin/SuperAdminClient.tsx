@@ -222,6 +222,44 @@ function AdminAccountsTab() {
   const [toast,    setToast]      = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
   const [confirm,  setConfirm]    = useState<{ account: SuperAdminAccount; action: 'demote' | 'revoke' } | null>(null)
   const [accessRow, setAccessRow] = useState<SuperAdminAccount | null>(null)
+  const [editRow,  setEditRow]    = useState<SuperAdminAccount | null>(null)
+  const [editForm, setEditForm]   = useState({ name: '', email: '', password: '', isActive: true })
+  const [editBusy, setEditBusy]   = useState(false)
+
+  function openEdit(a: SuperAdminAccount) {
+    setEditForm({ name: a.name || '', email: a.email || '', password: '', isActive: a.is_active === 1 })
+    setEditRow(a)
+  }
+
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!editRow) return
+    setEditBusy(true)
+    try {
+      const res = await fetch('/api/admin/super-admin/details', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: editRow.id,
+          name: editForm.name.trim(),
+          email: editForm.email.trim(),
+          password: editForm.password,
+          isActive: editForm.isActive,
+        }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        showToast(`${editForm.name.trim() || 'Account'} updated`)
+        setEditRow(null)
+        await load()
+      } else {
+        showToast(data.error || 'Update failed', 'error')
+      }
+    } catch {
+      showToast('Network error', 'error')
+    }
+    setEditBusy(false)
+  }
 
   async function load() {
     setLoading(true)
@@ -379,6 +417,11 @@ function AdminAccountsTab() {
                     <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{a.created_at || '—'}</td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-1.5">
+                        {/* Edit account details (name, email, password, active) */}
+                        <button onClick={() => openEdit(a)} disabled={isBusy}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-gray-50 text-[#14254A] border border-gray-200 hover:bg-gray-100 disabled:opacity-50">
+                          ✎ Edit
+                        </button>
                         {/* Edit assigned Configuration-module permissions (and role) */}
                         <button onClick={() => setAccessRow(a)} disabled={isBusy}
                           className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-gray-50 text-[#14254A] border border-gray-200 hover:bg-gray-100 disabled:opacity-50">
@@ -447,6 +490,58 @@ function AdminAccountsTab() {
           onClose={() => setAccessRow(null)}
           onChanged={() => load()}
         />
+      )}
+
+      {/* Edit account details */}
+      {editRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onMouseDown={() => !editBusy && setEditRow(null)}>
+          <form onSubmit={saveEdit} onMouseDown={e => e.stopPropagation()}
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4" style={{ background: '#14254A' }}>
+              <div>
+                <h3 className="font-bold text-white text-sm">Edit Account</h3>
+                <p className="text-white/60 text-xs mt-0.5">{editRow.role === 'SuperAdmin' ? 'Super Admin' : 'Admin'} · {editRow.email}</p>
+              </div>
+              <button type="button" onClick={() => !editBusy && setEditRow(null)} className="text-white/70 hover:text-white text-xl leading-none">×</button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">Name <span className="text-red-500">*</span></label>
+                <input type="text" value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} required
+                  className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#14254A]/20" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">Email (login) <span className="text-red-500">*</span></label>
+                <input type="email" value={editForm.email} onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))} required autoComplete="off"
+                  className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#14254A]/20" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">New Password <span className="text-gray-400 font-normal">(leave blank to keep current)</span></label>
+                <input type="password" value={editForm.password} onChange={e => setEditForm(f => ({ ...f, password: e.target.value }))} autoComplete="new-password" minLength={8}
+                  placeholder="At least 8 characters"
+                  className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#14254A]/20" />
+              </div>
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <button type="button" onClick={() => setEditForm(f => ({ ...f, isActive: !f.isActive }))}
+                  role="switch" aria-checked={editForm.isActive}
+                  className={`relative inline-flex items-center h-6 w-11 rounded-full transition-colors flex-shrink-0 ${editForm.isActive ? 'bg-emerald-500' : 'bg-gray-200'}`}>
+                  <span className={`inline-block w-[18px] h-[18px] bg-white rounded-full shadow transform transition-transform ${editForm.isActive ? 'translate-x-[24px]' : 'translate-x-[3px]'}`} />
+                </button>
+                <span className="text-sm font-medium text-gray-700">{editForm.isActive ? 'Active' : 'Inactive'}</span>
+              </label>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100">
+              <button type="button" onClick={() => setEditRow(null)} disabled={editBusy}
+                className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50">Cancel</button>
+              <button type="submit" disabled={editBusy}
+                className="px-5 py-2 rounded-xl text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#14254A' }}>
+                {editBusy ? 'Saving…' : 'Save Changes'}
+              </button>
+            </div>
+          </form>
+        </div>
       )}
     </>
   )

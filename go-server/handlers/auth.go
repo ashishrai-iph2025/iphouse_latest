@@ -1031,6 +1031,10 @@ func sanitizeClaims(c ipauth.Claims) map[string]any {
 	if c.Role != nil {
 		m["role"] = *c.Role
 	}
+	if c.ImpersonatorLoginID != 0 {
+		m["impersonating"] = true
+		m["impersonatorName"] = c.ImpersonatorName
+	}
 	return m
 }
 

@@ -29,6 +29,13 @@ type Claims struct {
 	// who could read the cookie value. The token is now held server-side (in-memory
 	// cache) and re-derived from the client's stored credentials on a cache miss.
 	APIAccess bool `json:"apiAccess"` // true when a Markscan token was obtained → full data access
+	// Impersonation: when an Admin/Super Admin is viewing the platform AS a
+	// client, these carry the original staff identity so the session can be
+	// restored on exit. Zero/empty on a normal session.
+	ImpersonatorLoginID int64  `json:"impLoginId,omitempty"`
+	ImpersonatorEmail   string `json:"impEmail,omitempty"`
+	ImpersonatorName    string `json:"impName,omitempty"`
+	ImpersonatorRole    int64  `json:"impRole,omitempty"`
 	jwt.RegisteredClaims
 }
 
