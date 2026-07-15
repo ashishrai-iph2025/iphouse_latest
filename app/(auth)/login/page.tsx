@@ -200,9 +200,14 @@ function LoginForm() {
         .lp-sub {
           font-size: 12px; color: rgba(255,255,255,0.52);
           line-height: 1.6; margin-bottom: clamp(16px, 7vh, 128px);
-          white-space: nowrap; overflow: hidden;
-          text-align: center;
+          text-align: center; text-wrap: balance;
+          max-width: min(90%, 640px); margin-left: auto; margin-right: auto;
+          padding: 0 16px;
         }
+        /* Statement + "Powered by" sit together: tight gap between them,
+           the usual large gap kept only after the powered-by line. */
+        .lp-sub-tight { margin-bottom: 8px; }
+        .lp-powered   { font-size: 11px; color: rgba(255,255,255,0.4); }
 
         /* KPI strip — same width as chart */
         .lp-kpi {
@@ -438,11 +443,12 @@ function LoginForm() {
           {/* Hero */}
           <div className="lp-z lp-hero">
             <h1 className="lp-headline">
-              Online <span className="lp-headline-acc">Dashboards</span>
+              Online <span className="lp-headline-acc">Dashboard</span>
             </h1>
-            <p className="lp-sub">
-              Live infringement analytics, takedown enforcement and embedded Power BI dashboards — powered by the IP House platform.
+            <p className="lp-sub lp-sub-tight">
+              Live infringement analytics, takedown enforcement and embedded Power BI dashboards.
             </p>
+            <p className="lp-sub lp-powered">Powered by IP House</p>
 
             {/* KPI + illustration + workflow + chips — centered block */}
             <div className="lp-center-block">
