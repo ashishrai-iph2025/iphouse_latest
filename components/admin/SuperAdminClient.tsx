@@ -1,6 +1,7 @@
 ﻿'use client'
 
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import AdminPageHeader from './AdminPageHeader'
 import ManageAccessModal from './ManageAccessModal'
 
@@ -70,6 +71,22 @@ export default function SuperAdminClient() {
       />
 
       <MaintenanceCard />
+
+      {/* Quick link: platform technical & security brief (Super Admin only) */}
+      <Link to="/admin/platform-brief"
+        className="group flex items-center gap-4 rounded-2xl border border-gray-100 bg-white shadow-card p-5 mb-6 hover:border-[#FC934C]/50 hover:-translate-y-0.5 transition-all no-underline">
+        <div className="w-11 h-11 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+          style={{ background: '#FC934C18' }}>
+          🛡️
+        </div>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-semibold text-sm text-[#14254A]">Technical &amp; Security Brief</h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            A presentable overview of the platform — architecture, modules, and the full security control matrix. Ideal for stakeholder and leadership review.
+          </p>
+        </div>
+        <span className="text-sm font-bold text-[#FC934C] group-hover:translate-x-0.5 transition-transform flex-shrink-0">Open →</span>
+      </Link>
 
       {/* Tab switcher */}
       <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit mb-6">
@@ -204,6 +221,7 @@ function AdminAccountsTab() {
   const [busy,     setBusy]       = useState<number | null>(null)
   const [toast,    setToast]      = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
   const [confirm,  setConfirm]    = useState<{ account: SuperAdminAccount; action: 'demote' | 'revoke' } | null>(null)
+  const [accessRow, setAccessRow] = useState<SuperAdminAccount | null>(null)
 
   async function load() {
     setLoading(true)
@@ -360,24 +378,31 @@ function AdminAccountsTab() {
                     <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{a.last_login || '—'}</td>
                     <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{a.created_at || '—'}</td>
                     <td className="px-4 py-3">
-                      {protectedLast ? (
-                        <span className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 inline-flex items-center gap-1">
-                          🔒 Last Super Admin — protected
-                        </span>
-                      ) : (
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {a.role === 'SuperAdmin' && (
-                            <button onClick={() => setConfirm({ account: a, action: 'demote' })} disabled={isBusy}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 disabled:opacity-50">
-                              ⬇ Demote to Admin
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {/* Edit assigned Configuration-module permissions (and role) */}
+                        <button onClick={() => setAccessRow(a)} disabled={isBusy}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-gray-50 text-[#14254A] border border-gray-200 hover:bg-gray-100 disabled:opacity-50">
+                          🔑 Manage Access
+                        </button>
+                        {protectedLast ? (
+                          <span className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 inline-flex items-center gap-1">
+                            🔒 Last Super Admin
+                          </span>
+                        ) : (
+                          <>
+                            {a.role === 'SuperAdmin' && (
+                              <button onClick={() => setConfirm({ account: a, action: 'demote' })} disabled={isBusy}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 disabled:opacity-50">
+                                ⬇ Demote to Admin
+                              </button>
+                            )}
+                            <button onClick={() => setConfirm({ account: a, action: 'revoke' })} disabled={isBusy}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 disabled:opacity-50">
+                              {isBusy ? '…' : '✕ Revoke'}
                             </button>
-                          )}
-                          <button onClick={() => setConfirm({ account: a, action: 'revoke' })} disabled={isBusy}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 disabled:opacity-50">
-                            {isBusy ? '…' : '✕ Revoke'}
-                          </button>
-                        </div>
-                      )}
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )
@@ -411,6 +436,17 @@ function AdminAccountsTab() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Manage a person's role + assigned Configuration-module permissions */}
+      {accessRow && (
+        <ManageAccessModal
+          loginUsername={accessRow.email}
+          displayName={accessRow.name || accessRow.email}
+          initialRole={accessRow.role === 'SuperAdmin' ? 2 : 1}
+          onClose={() => setAccessRow(null)}
+          onChanged={() => load()}
+        />
       )}
     </>
   )

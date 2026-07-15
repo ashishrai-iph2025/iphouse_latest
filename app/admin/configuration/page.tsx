@@ -5,10 +5,19 @@ import { Link } from 'react-router-dom'
 import AdminPageHeader from '@/components/admin/AdminPageHeader'
 import { CONFIG_MODULES } from '@/lib/configModules'
 
+// Cards shown only to Super Admins — not part of the grant-based module system.
+const SUPER_ADMIN_CARDS = [
+  { key: 'aws-credentials', href: '/admin/aws-credentials', icon: '🔐', title: 'AWS Credentials',
+    desc: 'Securely store the AWS keys used for S3 database backups (encrypted at rest).', color: '#F59E0B' },
+  { key: 'database-backup', href: '/admin/database-backup', icon: '🗄️', title: 'Database Backup',
+    desc: 'Take an on-demand database backup to Amazon S3 and view stored backups.', color: '#0EA5E9' },
+]
+
 export default function ConfigurationPage() {
   // Modules the current admin is allowed to see (grant-based: default deny).
   // A Super Admin shares specific modules; an admin sees only those.
   const [granted, setGranted] = useState<Set<string> | null>(null)
+  const [role,    setRole]    = useState<number>(0)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -17,13 +26,18 @@ export default function ConfigurationPage() {
       .then(d => {
         if (d.success && Array.isArray(d.granted)) setGranted(new Set(d.granted))
         else setGranted(new Set())
+        setRole(Number(d.role ?? 0))
       })
       .catch(() => setGranted(new Set()))
       .finally(() => setLoading(false))
   }, [])
 
-  // Until access loads, show nothing (avoids flashing cards the admin can't open).
-  const cards = granted ? CONFIG_MODULES.filter(c => granted.has(c.key)) : []
+  // Grant-based cards (default deny), plus any Super-Admin-only cards.
+  const grantCards = granted ? CONFIG_MODULES.filter(c => granted.has(c.key)) : []
+  const cards = [
+    ...grantCards,
+    ...(role === 2 ? SUPER_ADMIN_CARDS : []),
+  ]
 
   return (
     <div className="p-6 fade-in">

@@ -147,6 +147,23 @@ func Migrate() {
 		log.Printf("[db] migrate: dcp_settings OK")
 	}
 
+	// AWS credentials for the S3 database-backup feature. Access key id and
+	// secret are stored AES-256-CBC encrypted (same as every other stored
+	// credential); region and S3 target are plain. Single active row.
+	_, _, err = Exec("CREATE TABLE IF NOT EXISTS aws_credentials (" +
+		"id INT AUTO_INCREMENT PRIMARY KEY," +
+		"access_key_id VARCHAR(512)," +
+		"secret_access_key VARCHAR(512)," +
+		"region VARCHAR(64)," +
+		"s3_uri VARCHAR(255)," +
+		"updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" +
+		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+	if err != nil {
+		log.Printf("[db] migrate aws_credentials: %v", err)
+	} else {
+		log.Printf("[db] migrate: aws_credentials OK")
+	}
+
 	// Per-admin-login Configuration-module access. Grant-based (default deny):
 	// only shared modules (granted = 1) are stored, so an admin login sees only
 	// the modules a Super Admin explicitly shares with it. Keyed by loginId so

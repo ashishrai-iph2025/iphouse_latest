@@ -5,6 +5,7 @@ import { Routes, Route, Navigate, Outlet, useParams } from 'react-router-dom'
 import { useSession } from '@/lib/auth-client'
 import { usePathname } from '@/lib/router'
 import { NAV_ITEMS, isNavItemActive } from '@/lib/navItems'
+import { CONFIG_MODULES } from '@/lib/configModules'
 import PageLoader from '@/components/ui/PageLoader'
 import ClientShell from '@/components/client/ClientShell'
 import AdminShell from '@/components/admin/AdminShell'
@@ -55,6 +56,9 @@ const SettingsPage         = lazy(() => import('@/app/admin/settings/page'))
 const IdleTimeoutPage      = lazy(() => import('@/app/admin/idle-timeout/page'))
 const AssetAccessPage      = lazy(() => import('@/app/admin/asset-access/page'))
 const WarRoomAssetsPage    = lazy(() => import('@/app/admin/war-room-assets/page'))
+const PlatformBriefPage    = lazy(() => import('@/app/admin/platform-brief/page'))
+const DatabaseBackupPage   = lazy(() => import('@/app/admin/database-backup/page'))
+const AwsCredentialsPage   = lazy(() => import('@/app/admin/aws-credentials/page'))
 const ApiCredsPage         = lazy(() => import('@/app/admin/api-credentials/page'))
 const MasterApiPage        = lazy(() => import('@/app/admin/master-api/page'))
 const ActivityPage         = lazy(() => import('@/app/admin/activity/page'))
@@ -212,6 +216,53 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
   return <>{children}</>
 }
 
+// ── Admin permission guard (admin routes) ──────────────────────────────────────
+// RequireAdmin only proves role >= 1. This additionally enforces, per page:
+//   • Super-Admin-only pages require role === 2.
+//   • Configuration-module pages require the specific grant (Super Admin passes
+//     implicitly). This mirrors the server-side grant enforcement so a plain
+//     Admin can't reach a page — by pasting its URL — that they weren't granted.
+// Every other admin page stays available to any admin (role >= 1).
+const SUPER_ADMIN_PATHS = ['/admin/super-admin', '/admin/platform-brief', '/admin/database-backup', '/admin/aws-credentials']
+
+function AdminAccessGuard({ children }: { children: ReactNode }) {
+  const pathname = usePathname()
+  const { data: session, status } = useSession()
+  const role = (session?.user as any)?.role
+  const [granted, setGranted] = useState<Set<string> | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    fetch('/api/admin/my-config-access', { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => { if (alive) setGranted(new Set<string>(d?.success && Array.isArray(d.granted) ? d.granted : [])) })
+      .catch(() => { if (alive) setGranted(new Set<string>()) })
+    return () => { alive = false }
+  }, [])
+
+  if (status === 'loading') return <PageLoader />
+
+  const denied = (label: string) => (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+      <AccessDenied moduleName={label} />
+    </div>
+  )
+
+  // Super-Admin-only pages.
+  if (SUPER_ADMIN_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'))) {
+    return role === 2 ? <>{children}</> : denied('Super Admin')
+  }
+
+  // Configuration-module pages: require the module grant (Super Admin implicit).
+  const mod = CONFIG_MODULES.find(m => pathname === m.href || pathname.startsWith(m.href + '/'))
+  if (mod && role !== 2) {
+    if (granted === null) return <PageLoader />
+    if (!granted.has(mod.key)) return denied(mod.title)
+  }
+
+  return <>{children}</>
+}
+
 // ── Maintenance mode guard ────────────────────────────────────────────────────
 // Polls /api/maintenance; while the flag is on, non-admin visitors get the
 // full-screen maintenance page on every route except /login (kept reachable so
@@ -275,7 +326,9 @@ function ClientLayout() {
 function AdminLayout() {
   return (
     <RequireAdmin>
-      <AdminShell><Outlet /></AdminShell>
+      <AdminShell>
+        <AdminAccessGuard><Outlet /></AdminAccessGuard>
+      </AdminShell>
     </RequireAdmin>
   )
 }
@@ -449,6 +502,9 @@ export default function App() {
           <Route path="/admin/idle-timeout"               element={<IdleTimeoutPage />} />
           <Route path="/admin/asset-access"               element={<AssetAccessPage />} />
           <Route path="/admin/war-room-assets"            element={<WarRoomAssetsPage />} />
+          <Route path="/admin/platform-brief"             element={<PlatformBriefPage />} />
+          <Route path="/admin/database-backup"            element={<DatabaseBackupPage />} />
+          <Route path="/admin/aws-credentials"            element={<AwsCredentialsPage />} />
           <Route path="/admin/api-credentials"            element={<ApiCredsPage />} />
           <Route path="/admin/master-api"                 element={<MasterApiPage />} />
           <Route path="/admin/activity"                   element={<ActivityPage />} />
