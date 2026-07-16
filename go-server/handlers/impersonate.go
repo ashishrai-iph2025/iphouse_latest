@@ -31,12 +31,19 @@ func AdminUserSearch(w http.ResponseWriter, r *http.Request) {
 		OK(w, map[string]any{"success": true, "users": []any{}}); return
 	}
 	like := "%" + q + "%"
+	// Clients only — never surface Admin / Super Admin logins in the "access a
+	// client" search. dcp_user.role = 0/NULL keeps clients (1 = Admin, 2 = Super
+	// Admin), and the NOT EXISTS against dcp_super_admin (the ground-truth staff
+	// table the impersonate flow also checks) excludes any staff login whose
+	// mirrored dcp_user.role is stale.
 	rows, _ := db.Query(`
 		SELECT l.loginId, l.userId, l.login_username, l.first_name, l.last_name,
 		       l.designation, l.login_type, u.name AS client_name, u.email AS client_email
 		FROM dcp_user_login l
 		INNER JOIN dcp_user u ON u.userId = l.userId
-		WHERE l.is_active = 1 AND u.deleted = 0 AND (u.role IS NULL OR u.role != 1)
+		WHERE l.is_active = 1 AND u.deleted = 0 AND (u.role IS NULL OR u.role = 0)
+		  AND NOT EXISTS (SELECT 1 FROM dcp_super_admin sa
+		                  WHERE sa.email = l.login_username COLLATE utf8mb4_general_ci)
 		  AND (l.login_username LIKE ? OR u.name LIKE ?
 		       OR CONCAT(COALESCE(l.first_name,''), ' ', COALESCE(l.last_name,'')) LIKE ?)
 		ORDER BY u.name ASC, l.login_username ASC

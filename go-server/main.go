@@ -152,6 +152,11 @@ func main() {
 	mux.Handle("GET /api/admin/powerbi-workspace", cfg("powerbi-workspace", admin.PowerBIWorkspace))
 	mux.Handle("POST /api/admin/powerbi-workspace", cfg("powerbi-workspace", admin.PowerBIWorkspace))
 	mux.Handle("GET /api/admin/powerbi-workspace/activity", cfg("powerbi-workspace", admin.PowerBIWorkspaceActivity))
+	mux.Handle("POST /api/admin/powerbi-workspace/import", cfg("powerbi-workspace", admin.PowerBIImport))
+	mux.Handle("GET /api/admin/powerbi-workspace/import-status", cfg("powerbi-workspace", admin.PowerBIImportStatus))
+	mux.Handle("POST /api/admin/powerbi-workspace/schedule", cfg("powerbi-workspace", admin.PowerBISchedule))
+	mux.Handle("POST /api/admin/powerbi-workspace/refresh", cfg("powerbi-workspace", admin.PowerBIRefreshNow))
+	mux.Handle("POST /api/admin/powerbi-workspace/delete", cfg("powerbi-workspace", admin.PowerBIDeleteItem))
 
 	mux.Handle("GET /api/admin/email-templates", cfg("email-templates", admin.EmailTemplates))
 	mux.Handle("POST /api/admin/email-templates", cfg("email-templates", admin.EmailTemplates))

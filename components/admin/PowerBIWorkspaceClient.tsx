@@ -1,5 +1,5 @@
 'use client'
-import React, { useState, useMemo, useCallback } from 'react'
+import React, { useState, useMemo, useCallback, useRef } from 'react'
 import { useTheme } from '@/lib/ThemeContext'
 
 /* ─── brand palette (IP House) ─────────────────────────────────────────────── */
@@ -192,6 +192,45 @@ export default function PowerBIWorkspaceClient() {
   const toggleDs = (id: string) => setExpandedDs(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
   const setTab   = (id: string, tab: 'history' | 'schedule') => setActiveTab(prev => ({ ...prev, [id]: tab }))
 
+  /* ── management (import / refresh / schedule / delete) ── */
+  const [toast, setToast]               = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
+  const showToast = useCallback((msg: string, type: 'success' | 'error' = 'success') => {
+    setToast({ msg, type }); window.setTimeout(() => setToast(null), 4500)
+  }, [])
+  const [importOpen,   setImportOpen]   = useState(false)
+  const [scheduleDs,   setScheduleDs]   = useState<Dataset | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ type: 'report' | 'dataset'; id: string; name: string } | null>(null)
+  const [rowBusy,      setRowBusy]      = useState<string | null>(null)
+
+  const doRefreshNow = useCallback(async (ds: Dataset) => {
+    setRowBusy('refresh:' + ds.id)
+    try {
+      const res = await fetch('/api/admin/powerbi-workspace/refresh', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ datasetId: ds.id }),
+      })
+      const d = await res.json()
+      if (d.success) showToast(`Refresh started for “${ds.name}”`)
+      else showToast(d.error || 'Refresh failed', 'error')
+    } catch { showToast('Network error', 'error') }
+    setRowBusy(null)
+  }, [showToast])
+
+  const doDelete = useCallback(async () => {
+    if (!deleteTarget) return
+    setRowBusy('delete:' + deleteTarget.id)
+    try {
+      const res = await fetch('/api/admin/powerbi-workspace/delete', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: deleteTarget.type, id: deleteTarget.id }),
+      })
+      const d = await res.json()
+      if (d.success) { showToast(`Deleted “${deleteTarget.name}”`); setDeleteTarget(null); await load() }
+      else showToast(d.error || 'Delete failed', 'error')
+    } catch { showToast('Network error', 'error') }
+    setRowBusy(null)
+  }, [deleteTarget, showToast, load])
+
   interface FlatItem { itemType: 'Report' | 'SemanticModel'; report?: Report; dataset?: Dataset; name: string; id: string }
   const allItems: FlatItem[] = useMemo(() => {
     const out: FlatItem[] = []
@@ -227,7 +266,7 @@ export default function PowerBIWorkspaceClient() {
   }, [data])
 
   const hasData = allItems.length > 0
-  const COLS = '30px 1.8fr 140px 190px 170px 160px 52px'
+  const COLS = '30px 1.6fr 130px 175px 150px 140px 128px'
   const thStyle: React.CSSProperties = { fontSize: 9, fontWeight: 700, color: '#fff', letterSpacing: '0.08em', textTransform: 'uppercase', padding: '0 10px', lineHeight: 1.4 }
 
   return (
@@ -253,6 +292,11 @@ export default function PowerBIWorkspaceClient() {
             <p style={{ margin: '4px 0 0', fontSize: 13, color: C.t2 }}>Reports &amp; semantic models · Refresh history · Schedules</p>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+            <button onClick={() => setImportOpen(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 18px', borderRadius: 8, background: isDark ? '#1a2d4e' : '#fff', border: `1px solid ${TEAL}55`, color: TEAL, fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              <Ico name="external" size={13} style={{ transform: 'rotate(180deg)' }} />
+              Import .pbix
+            </button>
             <button onClick={load} disabled={loading}
               style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 20px', borderRadius: 8, background: `linear-gradient(135deg,${YELLOW},${ORANGE})`, border: 'none', color: '#fff', fontSize: 12, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', boxShadow: '0 3px 10px rgba(252,147,76,0.35)', whiteSpace: 'nowrap', opacity: loading ? 0.7 : 1 }}>
               <Ico name={loading ? 'spinner' : 'refresh'} size={13} className={loading ? 'animate-spin' : ''} />
@@ -359,7 +403,7 @@ export default function PowerBIWorkspaceClient() {
             <div style={thStyle}>Last Refreshed</div>
             <div style={thStyle}>Next Refresh</div>
             <div style={thStyle}>Status</div>
-            <div style={thStyle} />
+            <div style={{ ...thStyle, textAlign: 'center' }}>Actions</div>
           </div>
 
           {filtered.length === 0 && (
@@ -434,20 +478,30 @@ export default function PowerBIWorkspaceClient() {
                         <div style={{ fontSize: 9, color: ROSE, marginTop: 3, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={failReason}>{failReason}</div>
                       )}
                     </div>
-                    {/* action */}
-                    <div style={{ padding: '0 10px', display: 'flex', justifyContent: 'center' }}>
+                    {/* actions */}
+                    <div style={{ padding: '0 8px', display: 'flex', justifyContent: 'center', gap: 5 }}>
                       {isReport && rpt?.webUrl && (
                         <a href={rpt.webUrl} target="_blank" rel="noreferrer" title="Open report"
-                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 6, background: `${ORANGE}18`, border: `1px solid ${ORANGE}40`, color: ORANGE, textDecoration: 'none' }}>
+                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, borderRadius: 6, background: `${ORANGE}18`, border: `1px solid ${ORANGE}40`, color: ORANGE, textDecoration: 'none' }}>
                           <Ico name="external" size={12} />
                         </a>
                       )}
-                      {isDs && (
-                        <button onClick={() => toggleDs(entry.id)} title="View details"
-                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 6, background: `${TEAL}14`, border: `1px solid ${TEAL}35`, color: TEAL, cursor: 'pointer' }}>
-                          <Ico name="info" size={12} />
-                        </button>
+                      {isDs && ds && (
+                        <>
+                          <button onClick={() => doRefreshNow(ds)} disabled={!ds.isRefreshable || rowBusy === 'refresh:' + ds.id} title={ds.isRefreshable ? 'Refresh now' : 'Not refreshable'}
+                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, borderRadius: 6, background: `${BLUE}14`, border: `1px solid ${BLUE}35`, color: BLUE, cursor: ds.isRefreshable ? 'pointer' : 'not-allowed', opacity: ds.isRefreshable ? 1 : 0.4 }}>
+                            <Ico name="refresh" size={12} className={rowBusy === 'refresh:' + ds.id ? 'animate-spin' : ''} />
+                          </button>
+                          <button onClick={() => setScheduleDs(ds)} title="Edit refresh schedule"
+                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, borderRadius: 6, background: `${TEAL}14`, border: `1px solid ${TEAL}35`, color: TEAL, cursor: 'pointer' }}>
+                            <Ico name="calendar" size={12} />
+                          </button>
+                        </>
                       )}
+                      <button onClick={() => setDeleteTarget({ type: isReport ? 'report' : 'dataset', id: entry.id, name: entry.name })} title={isReport ? 'Delete report' : 'Delete dataset'}
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, borderRadius: 6, background: `${ROSE}12`, border: `1px solid ${ROSE}35`, color: ROSE, cursor: 'pointer' }}>
+                        <Ico name="x" size={12} />
+                      </button>
                     </div>
                   </div>
 
@@ -565,6 +619,370 @@ export default function PowerBIWorkspaceClient() {
           </div>
         </div>
       )}
+
+      {/* ── TOAST ── */}
+      {toast && (
+        <div style={{ position: 'fixed', top: 18, right: 18, zIndex: 1200, display: 'flex', alignItems: 'center', gap: 9, padding: '12px 16px', borderRadius: 10, background: toast.type === 'success' ? GREEN : ROSE, color: '#fff', fontSize: 12.5, fontWeight: 700, boxShadow: '0 8px 24px rgba(0,0,0,0.25)', maxWidth: 380 }}>
+          <Ico name={toast.type === 'success' ? 'tick' : 'alert'} size={14} />
+          <span>{toast.msg}</span>
+        </div>
+      )}
+
+      {/* ── MODALS ── */}
+      {importOpen && (
+        <ImportModal C={C} isDark={isDark} onClose={() => setImportOpen(false)} onDone={load} showToast={showToast} />
+      )}
+      {scheduleDs && (
+        <ScheduleModal C={C} isDark={isDark} ds={scheduleDs} onClose={() => setScheduleDs(null)} onDone={load} showToast={showToast} />
+      )}
+      {deleteTarget && (
+        <ConfirmDeleteModal C={C} isDark={isDark} target={deleteTarget} busy={rowBusy === 'delete:' + deleteTarget.id}
+          onCancel={() => setDeleteTarget(null)} onConfirm={doDelete} />
+      )}
+    </div>
+  )
+}
+
+/* ═══ management modals ═══════════════════════════════════════════════════════ */
+
+type ModalCtx = { C: Colors; isDark: boolean; showToast: (m: string, t?: 'success' | 'error') => void }
+
+const overlay: React.CSSProperties = {
+  position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(9,16,32,0.55)',
+  backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+}
+function modalCard(C: Colors, width = 460): React.CSSProperties {
+  return { background: C.card, border: `1px solid ${C.bord}`, borderRadius: 14, width: '100%', maxWidth: width, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 60px rgba(0,0,0,0.35)' }
+}
+function fieldLabel(C: Colors): React.CSSProperties {
+  return { fontSize: 10, fontWeight: 800, color: C.t3, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6, display: 'block' }
+}
+function primaryBtn(disabled: boolean): React.CSSProperties {
+  return { padding: '9px 20px', borderRadius: 8, background: disabled ? SLATE : `linear-gradient(135deg,${YELLOW},${ORANGE})`, border: 'none', color: '#fff', fontSize: 12.5, fontWeight: 700, cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.7 : 1 }
+}
+function ghostBtn(C: Colors): React.CSSProperties {
+  return { padding: '9px 18px', borderRadius: 8, background: 'transparent', border: `1px solid ${C.bord}`, color: C.t2, fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }
+}
+
+const fmtBytes = (n: number) =>
+  n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`
+
+const CONFLICT_OPTS: { val: string; icon: IcoName; title: string; desc: string }[] = [
+  { val: 'CreateOrOverwrite',  icon: 'refresh', title: 'Update existing',    desc: 'Overwrite the report/dataset that already has this name.' },
+  { val: 'GenerateUniqueName', icon: 'copy',    title: 'Keep both',          desc: 'Publish a new copy under a uniquely-generated name.' },
+  { val: 'Abort',              icon: 'x',       title: 'Cancel on conflict', desc: 'Abort the import if a report with this name exists.' },
+]
+
+/* Import a .pbix into the workspace, then poll the import to completion. */
+function ImportModal({ C, isDark, onClose, onDone, showToast }: ModalCtx & { onClose: () => void; onDone: () => void }) {
+  const [file, setFile]         = useState<File | null>(null)
+  const [name, setName]         = useState('')
+  const [conflict, setConflict] = useState('CreateOrOverwrite')
+  const [busy, setBusy]         = useState(false)
+  const [phase, setPhase]       = useState('')
+  const [drag, setDrag]         = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  function pick(f: File | null) {
+    if (!f) return
+    if (!/\.pbix$/i.test(f.name)) { showToast('The file must be a .pbix report.', 'error'); return }
+    setFile(f)
+    setName(prev => prev || f.name.replace(/\.pbix$/i, ''))
+  }
+
+  async function submit() {
+    if (!file) { showToast('Choose a .pbix file first.', 'error'); return }
+    if (!/\.pbix$/i.test(file.name)) { showToast('The file must be a .pbix report.', 'error'); return }
+    setBusy(true); setPhase('Uploading…')
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('name', name.trim() || file.name.replace(/\.pbix$/i, ''))
+      fd.append('nameConflict', conflict)
+      const res = await fetch('/api/admin/powerbi-workspace/import', { method: 'POST', credentials: 'include', body: fd })
+      const d = await res.json()
+      if (!d.success) { showToast(d.error || 'Import failed', 'error'); setBusy(false); setPhase(''); return }
+
+      if (d.importId) {
+        setPhase('Publishing to Power BI…')
+        let done = false
+        for (let i = 0; i < 40 && !done; i++) {
+          await new Promise(r => setTimeout(r, 1500))
+          try {
+            const sres = await fetch('/api/admin/powerbi-workspace/import-status?id=' + encodeURIComponent(d.importId), { credentials: 'include' })
+            const sd   = await sres.json()
+            const st   = String(sd.importState || '').toLowerCase()
+            if (st === 'succeeded') done = true
+            else if (st === 'failed') { showToast('Power BI could not publish the file.', 'error'); setBusy(false); setPhase(''); return }
+          } catch { /* keep polling */ }
+        }
+      }
+      showToast(`“${d.name}” imported successfully.`)
+      onDone(); onClose()
+    } catch { showToast('Network error during upload.', 'error') }
+    setBusy(false); setPhase('')
+  }
+
+  const inputBase: React.CSSProperties = {
+    width: '100%', padding: '10px 12px', borderRadius: 9, border: `1px solid ${C.bord}`,
+    background: isDark ? '#0f1f3d' : '#fff', color: C.t1, fontSize: 13, outline: 'none', boxSizing: 'border-box',
+  }
+
+  return (
+    <div style={overlay} onMouseDown={() => !busy && onClose()}>
+      <div style={modalCard(C, 500)} onMouseDown={e => e.stopPropagation()}>
+
+        {/* Header — gradient accent band */}
+        <div style={{ padding: '20px 24px', display: 'flex', alignItems: 'center', gap: 14, background: `linear-gradient(135deg, ${NAVY}, ${isDark ? '#1e3a6e' : '#20386b'})`, position: 'relative' }}>
+          <div style={{ width: 40, height: 40, borderRadius: 11, background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', flexShrink: 0 }}>
+            <Ico name="external" size={18} style={{ transform: 'rotate(180deg)' }} />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: '#fff' }}>Import a .pbix report</div>
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 2 }}>Upload a Power BI Desktop file into this workspace.</div>
+          </div>
+          <button onClick={() => !busy && onClose()} title="Close"
+            style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', width: 28, height: 28, borderRadius: 7, cursor: busy ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Ico name="x" size={14} />
+          </button>
+        </div>
+
+        <div style={{ padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+          {/* ── Dropzone / selected file ── */}
+          <input ref={inputRef} type="file" accept=".pbix" disabled={busy} style={{ display: 'none' }}
+            onChange={e => pick(e.target.files?.[0] ?? null)} />
+
+          {!file ? (
+            <div
+              onClick={() => !busy && inputRef.current?.click()}
+              onDragOver={e => { e.preventDefault(); if (!busy) setDrag(true) }}
+              onDragLeave={() => setDrag(false)}
+              onDrop={e => { e.preventDefault(); setDrag(false); if (!busy) pick(e.dataTransfer.files?.[0] ?? null) }}
+              style={{
+                border: `2px dashed ${drag ? ORANGE : C.bord}`, borderRadius: 14, padding: '30px 20px',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, textAlign: 'center',
+                cursor: busy ? 'not-allowed' : 'pointer', transition: 'all 0.15s',
+                background: drag ? (isDark ? 'rgba(252,147,76,0.10)' : `${ORANGE}0a`) : (isDark ? 'rgba(255,255,255,0.02)' : '#fafbfc'),
+              }}>
+              <div style={{ width: 52, height: 52, borderRadius: '50%', background: `${ORANGE}18`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: ORANGE }}>
+                <Ico name="external" size={22} style={{ transform: 'rotate(180deg)' }} />
+              </div>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: isDark ? '#e2e8f5' : NAVY }}>
+                {drag ? 'Drop the file to select it' : 'Drag & drop your .pbix here'}
+              </div>
+              <div style={{ fontSize: 11.5, color: C.t3 }}>
+                or <span style={{ color: ORANGE, fontWeight: 700 }}>browse</span> to choose a file · up to 1&nbsp;GB
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 12, border: `1px solid ${TEAL}40`, background: `${TEAL}0e` }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: `${TEAL}1c`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: TEAL, flexShrink: 0 }}>
+                <Ico name="report" size={18} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: isDark ? '#e2e8f5' : NAVY, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={file.name}>{file.name}</div>
+                <div style={{ fontSize: 11, color: C.t3, marginTop: 2, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <Ico name="tick" size={11} style={{ color: GREEN }} /> Ready · {fmtBytes(file.size)}
+                </div>
+              </div>
+              {!busy && (
+                <button onClick={() => { setFile(null); if (inputRef.current) inputRef.current.value = '' }} title="Remove file"
+                  style={{ background: 'none', border: `1px solid ${C.bord}`, color: C.t3, width: 28, height: 28, borderRadius: 7, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <Ico name="x" size={13} />
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* ── Display name ── */}
+          <div>
+            <label style={fieldLabel(C)}>Display name</label>
+            <input value={name} onChange={e => setName(e.target.value)} disabled={busy} placeholder="Report / dataset name"
+              style={inputBase} />
+          </div>
+
+          {/* ── Conflict handling — selectable cards ── */}
+          <div>
+            <label style={fieldLabel(C)}>If a report with this name already exists</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {CONFLICT_OPTS.map(opt => {
+                const on = conflict === opt.val
+                return (
+                  <button key={opt.val} type="button" onClick={() => !busy && setConflict(opt.val)} disabled={busy}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 11, textAlign: 'left',
+                      border: `1.5px solid ${on ? ORANGE : C.bord}`, background: on ? (isDark ? 'rgba(252,147,76,0.10)' : `${ORANGE}0a`) : 'transparent',
+                      cursor: busy ? 'not-allowed' : 'pointer', transition: 'all 0.12s', width: '100%',
+                    }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: on ? ORANGE : (isDark ? 'rgba(255,255,255,0.05)' : '#f1f3f7'), color: on ? '#fff' : C.t3 }}>
+                      <Ico name={opt.icon} size={14} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: on ? (isDark ? '#fff' : NAVY) : C.t1 }}>{opt.title}</div>
+                      <div style={{ fontSize: 11, color: C.t3, marginTop: 1 }}>{opt.desc}</div>
+                    </div>
+                    <span style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, border: `2px solid ${on ? ORANGE : C.bord}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {on && <span style={{ width: 8, height: 8, borderRadius: '50%', background: ORANGE }} />}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: '16px 24px', borderTop: `1px solid ${C.bord}`, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
+          {phase && <span style={{ marginRight: 'auto', fontSize: 12, fontWeight: 600, color: TEAL, display: 'flex', alignItems: 'center', gap: 7 }}><Ico name="spinner" size={13} className="animate-spin" />{phase}</span>}
+          <button onClick={onClose} disabled={busy} style={ghostBtn(C)}>Cancel</button>
+          <button onClick={submit} disabled={busy || !file} style={primaryBtn(busy || !file)}>{busy ? 'Working…' : 'Import report'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+const TIME_SLOTS = Array.from({ length: 48 }, (_, i) => `${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`)
+const COMMON_TZ = ['UTC', 'India Standard Time', 'GMT Standard Time', 'Eastern Standard Time', 'Central Standard Time', 'Pacific Standard Time', 'W. Europe Standard Time', 'Singapore Standard Time']
+
+/* Edit a dataset's scheduled refresh (days / times / timezone / notify). */
+function ScheduleModal({ C, isDark, ds, onClose, onDone, showToast }: ModalCtx & { ds: Dataset; onClose: () => void; onDone: () => void }) {
+  const s = ds.refreshSchedule
+  const [enabled, setEnabled] = useState<boolean>(s?.enabled ?? true)
+  const [days, setDays]       = useState<string[]>(s?.days ?? [])
+  const [times, setTimes]     = useState<string[]>(s?.times ?? [])
+  const [tz, setTz]           = useState<string>(s?.localTimeZoneId || 'UTC')
+  const [notify, setNotify]   = useState<string>(s?.notifyOption || 'NoNotification')
+  const [newTime, setNewTime] = useState('06:00')
+  const [busy, setBusy]       = useState(false)
+
+  const toggleDay  = (d: string) => setDays(p => p.includes(d) ? p.filter(x => x !== d) : [...p, d])
+  const addTime    = () => { if (newTime && !times.includes(newTime)) setTimes(p => [...p, newTime].sort()) }
+  const removeTime = (t: string) => setTimes(p => p.filter(x => x !== t))
+
+  async function save() {
+    if (enabled && (days.length === 0 || times.length === 0)) { showToast('Pick at least one day and one time.', 'error'); return }
+    setBusy(true)
+    try {
+      const res = await fetch('/api/admin/powerbi-workspace/schedule', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ datasetId: ds.id, enabled, days, times, localTimeZoneId: tz, notifyOption: notify }),
+      })
+      const d = await res.json()
+      if (d.success) { showToast(`Schedule updated for “${ds.name}”.`); onDone(); onClose() }
+      else showToast(d.error || 'Schedule update failed', 'error')
+    } catch { showToast('Network error', 'error') }
+    setBusy(false)
+  }
+
+  return (
+    <div style={overlay} onMouseDown={() => !busy && onClose()}>
+      <div style={modalCard(C, 520)} onMouseDown={e => e.stopPropagation()}>
+        <div style={{ padding: '18px 22px', borderBottom: `1px solid ${C.bord}`, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ color: TEAL, display: 'flex' }}><Ico name="calendar" size={16} /></span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: isDark ? '#e2e8f5' : NAVY }}>Refresh schedule</div>
+            <div style={{ fontSize: 11, color: C.t3, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={ds.name}>{ds.name}</div>
+          </div>
+        </div>
+
+        <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {/* enabled toggle */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+            <span onClick={() => setEnabled(v => !v)} style={{ position: 'relative', width: 42, height: 24, borderRadius: 999, background: enabled ? GREEN : SLATE, transition: 'background 0.15s', flexShrink: 0 }}>
+              <span style={{ position: 'absolute', top: 3, left: enabled ? 21 : 3, width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left 0.15s' }} />
+            </span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: C.t1 }}>{enabled ? 'Scheduled refresh enabled' : 'Scheduled refresh disabled'}</span>
+          </label>
+
+          {/* days */}
+          <div>
+            <label style={fieldLabel(C)}>Days</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {WEEK_DAYS.map(d => {
+                const on = days.includes(d)
+                return (
+                  <button key={d} onClick={() => toggleDay(d)} disabled={!enabled}
+                    style={{ padding: '6px 11px', borderRadius: 7, fontSize: 11.5, fontWeight: 700, cursor: enabled ? 'pointer' : 'not-allowed', opacity: enabled ? 1 : 0.5, background: on ? `${ORANGE}18` : 'transparent', border: `1px solid ${on ? ORANGE : C.bord}`, color: on ? ORANGE : C.t2 }}>
+                    {d.slice(0, 3)}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* times */}
+          <div>
+            <label style={fieldLabel(C)}>Times <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 600, color: C.t3 }}>(on the hour or half-hour)</span></label>
+            <div style={{ display: 'flex', gap: 6, marginBottom: times.length ? 10 : 0 }}>
+              <select value={newTime} onChange={e => setNewTime(e.target.value)} disabled={!enabled}
+                style={{ padding: '8px 10px', borderRadius: 8, border: `1px solid ${C.bord}`, background: isDark ? '#0f1f3d' : '#fff', color: C.t1, fontSize: 12.5, outline: 'none' }}>
+                {TIME_SLOTS.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <button onClick={addTime} disabled={!enabled} style={{ padding: '8px 14px', borderRadius: 8, background: `${TEAL}14`, border: `1px solid ${TEAL}45`, color: TEAL, fontSize: 12, fontWeight: 700, cursor: enabled ? 'pointer' : 'not-allowed', opacity: enabled ? 1 : 0.5 }}>+ Add</button>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {times.map(t => (
+                <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 8px 5px 11px', borderRadius: 7, background: `${NAVY}${isDark ? '55' : '10'}`, border: `1px solid ${C.bord}`, fontSize: 12, fontWeight: 700, color: isDark ? '#e2e8f5' : NAVY }}>
+                  {t}
+                  <button onClick={() => removeTime(t)} disabled={!enabled} style={{ background: 'none', border: 'none', color: ROSE, cursor: enabled ? 'pointer' : 'not-allowed', display: 'flex', padding: 0 }}><Ico name="x" size={11} /></button>
+                </span>
+              ))}
+              {times.length === 0 && <span style={{ fontSize: 11.5, color: C.t3 }}>No times added yet.</span>}
+            </div>
+          </div>
+
+          {/* timezone + notify */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <label style={fieldLabel(C)}>Time zone</label>
+              <input list="pbi-tz" value={tz} onChange={e => setTz(e.target.value)} disabled={!enabled}
+                style={{ width: '100%', padding: '9px 11px', borderRadius: 8, border: `1px solid ${C.bord}`, background: isDark ? '#0f1f3d' : '#fff', color: C.t1, fontSize: 12.5, outline: 'none', boxSizing: 'border-box' }} />
+              <datalist id="pbi-tz">{COMMON_TZ.map(z => <option key={z} value={z} />)}</datalist>
+            </div>
+            <div>
+              <label style={fieldLabel(C)}>On failure</label>
+              <select value={notify} onChange={e => setNotify(e.target.value)} disabled={!enabled}
+                style={{ width: '100%', padding: '9px 11px', borderRadius: 8, border: `1px solid ${C.bord}`, background: isDark ? '#0f1f3d' : '#fff', color: C.t1, fontSize: 12.5, outline: 'none', boxSizing: 'border-box' }}>
+                <option value="NoNotification">No email</option>
+                <option value="MailOnFailure">Email me on failure</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ padding: '16px 22px', borderTop: `1px solid ${C.bord}`, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
+          <button onClick={onClose} disabled={busy} style={ghostBtn(C)}>Cancel</button>
+          <button onClick={save} disabled={busy} style={primaryBtn(busy)}>{busy ? 'Saving…' : 'Save schedule'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* Confirm deletion of a report or dataset. */
+function ConfirmDeleteModal({ C, isDark, target, busy, onCancel, onConfirm }: { C: Colors; isDark: boolean; target: { type: 'report' | 'dataset'; id: string; name: string }; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div style={overlay} onMouseDown={() => !busy && onCancel()}>
+      <div style={modalCard(C, 420)} onMouseDown={e => e.stopPropagation()}>
+        <div style={{ padding: '22px 22px 8px', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ width: 40, height: 40, borderRadius: 10, background: `${ROSE}14`, border: `1px solid ${ROSE}35`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: ROSE, flexShrink: 0 }}><Ico name="alert" size={18} /></span>
+          <div style={{ fontSize: 15, fontWeight: 800, color: isDark ? '#e2e8f5' : NAVY }}>Delete this {target.type}?</div>
+        </div>
+        <div style={{ padding: '4px 22px 18px 74px', fontSize: 12.5, color: C.t2, lineHeight: 1.6 }}>
+          <div style={{ fontWeight: 700, color: C.t1, marginBottom: 4 }}>{target.name}</div>
+          This permanently removes the {target.type} from the Power BI workspace. This action cannot be undone.
+        </div>
+        <div style={{ padding: '14px 22px', borderTop: `1px solid ${C.bord}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+          <button onClick={onCancel} disabled={busy} style={ghostBtn(C)}>Cancel</button>
+          <button onClick={onConfirm} disabled={busy}
+            style={{ padding: '9px 20px', borderRadius: 8, background: ROSE, border: 'none', color: '#fff', fontSize: 12.5, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.7 : 1 }}>
+            {busy ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

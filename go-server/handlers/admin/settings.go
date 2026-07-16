@@ -613,6 +613,40 @@ func MasterAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// user_activity_log.user_id can reference three different identity tables:
+//   - dcp_user_login.loginId  (client / staff-with-login portal actions)
+//   - dcp_super_admin.id       (hand-seeded staff whose loginId is 0)
+//   - dcp_user.userId          (legacy client-dashboard rows)
+// These shared fragments resolve every actor row from a SINGLE consistent
+// source (login → staff → user → placeholder) so a row's name and email never
+// come from different accounts. `l` must alias user_activity_log in the query.
+const actorJoins = `
+	LEFT JOIN dcp_user_login  ul ON ul.loginId = l.user_id
+	LEFT JOIN dcp_user        u2 ON u2.userId  = ul.userId
+	LEFT JOIN dcp_super_admin sa ON sa.id      = l.user_id
+	LEFT JOIN dcp_user        u  ON u.userId   = l.user_id`
+
+const actorName = `CASE
+	WHEN ul.loginId IS NOT NULL THEN COALESCE(NULLIF(u2.name,''), NULLIF(TRIM(CONCAT(COALESCE(ul.first_name,''),' ',COALESCE(ul.last_name,''))),''), ul.login_username)
+	WHEN sa.id      IS NOT NULL THEN COALESCE(NULLIF(sa.name,''), sa.email)
+	WHEN u.userId   IS NOT NULL THEN COALESCE(NULLIF(u.name,''), u.email)
+	ELSE CONCAT('Unknown user #', l.user_id) END`
+
+const actorUsername = `CASE
+	WHEN ul.loginId IS NOT NULL THEN ul.login_username
+	WHEN sa.id      IS NOT NULL THEN sa.email
+	WHEN u.userId   IS NOT NULL THEN u.email
+	ELSE CONCAT('uid:', l.user_id) END`
+
+const actorEmail = `CASE
+	WHEN ul.loginId IS NOT NULL THEN COALESCE(NULLIF(ul.login_username,''), u2.email, '')
+	WHEN sa.id      IS NOT NULL THEN sa.email
+	WHEN u.userId   IS NOT NULL THEN COALESCE(u.email,'')
+	ELSE '' END`
+
+// actorClient — the client/company behind a login (blank for staff/unknown).
+const actorClient = `CASE WHEN ul.loginId IS NOT NULL THEN COALESCE(u2.name,'') ELSE '' END`
+
 // GET /api/admin/activity-stats
 func ActivityStats(w http.ResponseWriter, r *http.Request) {
 	rows, _ := db.Query("SELECT user_id, action, page_url, ip_address, created_at FROM user_activity_log ORDER BY created_at DESC LIMIT 200")
@@ -658,19 +692,16 @@ func Tracking(w http.ResponseWriter, r *http.Request) {
 		args = append(args, to+" 23:59:59")
 	}
 	if search != "" {
-		conds = append(conds, "(l.ip_address LIKE ? OR ul.login_username LIKE ? OR ul.first_name LIKE ? OR ul.last_name LIKE ? OR u.name LIKE ? OR u.email LIKE ?)")
-		args = append(args, "%"+search+"%", "%"+search+"%", "%"+search+"%", "%"+search+"%", "%"+search+"%", "%"+search+"%")
+		conds = append(conds, "(l.ip_address LIKE ? OR ul.login_username LIKE ? OR ul.first_name LIKE ? OR ul.last_name LIKE ? OR u.name LIKE ? OR u.email LIKE ? OR sa.name LIKE ? OR sa.email LIKE ?)")
+		args = append(args, "%"+search+"%", "%"+search+"%", "%"+search+"%", "%"+search+"%", "%"+search+"%", "%"+search+"%", "%"+search+"%", "%"+search+"%")
 	}
 	where := ""
 	if len(conds) > 0 {
 		where = "WHERE " + strings.Join(conds, " AND ")
 	}
 
-	// user_id in the log may be a dcp_user.userId (client dashboard views) or a
-	// dcp_user_login.loginId (admin/portal actions) — join both and resolve.
-	join := `FROM user_activity_log l
-		LEFT JOIN dcp_user u ON u.userId = l.user_id
-		LEFT JOIN dcp_user_login ul ON ul.loginId = l.user_id`
+	// user_id in the log may be a login id, a staff id or a user id — resolve all.
+	join := `FROM user_activity_log l` + actorJoins
 
 	countArgs := make([]any, len(args))
 	copy(countArgs, args)
@@ -683,14 +714,9 @@ func Tracking(w http.ResponseWriter, r *http.Request) {
 	queryArgs := append(args, limit, offset)
 	logs, _ := db.Query(`
 		SELECT l.id, l.user_id,
-		       COALESCE(
-		           NULLIF(TRIM(CONCAT(COALESCE(ul.first_name,''),' ',COALESCE(ul.last_name,''))), ''),
-		           u.name,
-		           ul.login_username,
-		           CONCAT('UID ', l.user_id)
-		       ) AS full_name,
-		       COALESCE(NULLIF(u.email, ''), ul.login_username, '') AS email,
-		       COALESCE(ul.login_username, u.email, CONCAT('uid:', l.user_id)) AS username,
+		       `+actorName+` AS full_name,
+		       `+actorEmail+` AS email,
+		       `+actorUsername+` AS username,
 		       l.page_url, l.action, l.ip_address, l.user_agent,
 		       DATE_FORMAT(l.created_at, '%Y-%m-%d %H:%i:%s') AS created_at
 		`+join+` `+where+`
@@ -712,7 +738,7 @@ func TrackingAnalytics(w http.ResponseWriter, r *http.Request) {
 	actionCounts, _ := db.Query("SELECT action, COUNT(*) AS count FROM user_activity_log GROUP BY action ORDER BY count DESC")
 	dailyTrend, _ := db.Query("SELECT DATE(created_at) AS date, COUNT(*) AS count FROM user_activity_log WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) GROUP BY DATE(created_at) ORDER BY date ASC")
 	topPages, _ := db.Query("SELECT page_url, COUNT(*) AS count FROM user_activity_log GROUP BY page_url ORDER BY count DESC LIMIT 10")
-	topUsers, _ := db.Query(`SELECT COALESCE(ul.login_username, u.email, CONCAT('uid_', l.user_id)) AS username, COUNT(*) AS count, MAX(DATE_FORMAT(l.created_at, '%Y-%m-%d %H:%i')) AS last_seen FROM user_activity_log l LEFT JOIN dcp_user_login ul ON ul.loginId = l.user_id LEFT JOIN dcp_user u ON u.userId = l.user_id GROUP BY l.user_id ORDER BY count DESC LIMIT 10`)
+	topUsers, _ := db.Query(`SELECT `+actorUsername+` AS username, COUNT(*) AS count, MAX(DATE_FORMAT(l.created_at, '%Y-%m-%d %H:%i')) AS last_seen FROM user_activity_log l`+actorJoins+` GROUP BY l.user_id ORDER BY count DESC LIMIT 10`)
 	dashboardAccess, _ := db.Query("SELECT dashboard_name AS title, COUNT(*) AS count FROM user_dashboard_access GROUP BY report_id ORDER BY count DESC LIMIT 10")
 	hourlyDist, _ := db.Query("SELECT HOUR(created_at) AS hour, COUNT(*) AS count FROM user_activity_log GROUP BY HOUR(created_at) ORDER BY hour ASC")
 	ok(w, map[string]any{
@@ -744,8 +770,11 @@ func HomeAnalytics(w http.ResponseWriter, r *http.Request) {
 	// KPI counts
 	totalClients, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_user WHERE (role IS NULL OR role < 1) AND deleted = 0")
 	clientAccounts, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_user_login l INNER JOIN dcp_user u ON u.userId = l.userId WHERE l.is_active = 1 AND u.deleted = 0 AND (u.role IS NULL OR u.role < 1)")
-	admins, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_user WHERE role = 1 AND deleted = 0")
-	superAdmins, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_user WHERE role = 2 AND deleted = 0")
+	// Portal staff live in dcp_super_admin (the ground truth the Super Admin
+	// Control tab uses), NOT dcp_user.role — which is not kept in sync for
+	// hand-seeded staff, so counting it under-reports Admins/Super Admins.
+	admins, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_super_admin WHERE role = 'Admin' AND is_active = 1")
+	superAdmins, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_super_admin WHERE role = 'SuperAdmin' AND is_active = 1")
 	totalLogins, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_user_login WHERE is_active = 1")
 	activeLogins, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_user_login l INNER JOIN dcp_user u ON u.userId = l.userId WHERE l.is_active = 1 AND u.deleted = 0")
 	loginsThisWeek, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_login WHERE loginTime >= DATE_SUB(NOW(), INTERVAL 7 DAY)")
@@ -772,33 +801,26 @@ func HomeAnalytics(w http.ResponseWriter, r *http.Request) {
 	// always populated — dcp_login may be empty/absent). user_id may be a userId or loginId.
 	topClients, _ := db.Query(`
 		SELECT l.user_id AS loginId,
-		       COALESCE(NULLIF(u.name,''), ul.login_username, CONCAT('UID ', l.user_id)) AS name,
-		       COALESCE(ul.login_username, u.email, CONCAT('uid:', l.user_id)) AS username,
+		       ` + actorName + ` AS name,
+		       ` + actorUsername + ` AS username,
 		       COUNT(*) AS total_logins,
 		       MAX(DATE_FORMAT(l.created_at, '%Y-%m-%d %H:%i')) AS last_login,
 		       COALESCE(MAX(ul.is_active), 1) AS is_active
-		FROM user_activity_log l
-		LEFT JOIN dcp_user u ON u.userId = l.user_id
-		LEFT JOIN dcp_user_login ul ON ul.loginId = l.user_id
+		FROM user_activity_log l` + actorJoins + `
 		GROUP BY l.user_id
 		ORDER BY total_logins DESC LIMIT 20`)
 
 	// Top login users — ranked by login events in the activity log.
 	topLoginUsers, _ := db.Query(`
 		SELECT l.user_id AS loginId,
-		       COALESCE(
-		           NULLIF(TRIM(CONCAT(COALESCE(ul.first_name,''),' ',COALESCE(ul.last_name,''))), ''),
-		           u.name, ul.login_username, CONCAT('UID ', l.user_id)
-		       ) AS name,
-		       COALESCE(ul.login_username, u.email, CONCAT('uid:', l.user_id)) AS username,
-		       COALESCE(u.name, '') AS client,
+		       ` + actorName + ` AS name,
+		       ` + actorUsername + ` AS username,
+		       ` + actorClient + ` AS client,
 		       COALESCE(ul.login_type, 0) AS login_type,
 		       COUNT(*) AS logins,
 		       MAX(DATE_FORMAT(l.created_at, '%Y-%m-%d %H:%i')) AS last_login,
-		       COALESCE(ul.is_active, 1) AS is_active
-		FROM user_activity_log l
-		LEFT JOIN dcp_user u ON u.userId = l.user_id
-		LEFT JOIN dcp_user_login ul ON ul.loginId = l.user_id
+		       COALESCE(MAX(ul.is_active), 1) AS is_active
+		FROM user_activity_log l` + actorJoins + `
 		WHERE l.action = 'login'
 		GROUP BY l.user_id
 		ORDER BY logins DESC LIMIT 20`)
@@ -806,16 +828,21 @@ func HomeAnalytics(w http.ResponseWriter, r *http.Request) {
 	// Module usage
 	moduleUsage, _ := db.Query(`SELECT md.moduleName, COUNT(mp.userId) AS users, SUM(mp.active) AS active FROM dcp_module md LEFT JOIN dcp_user_module_map mp ON mp.moduleId = md.moduleId AND mp.active = 1 WHERE md.deleted = 0 GROUP BY md.moduleId ORDER BY users DESC`)
 
-	// Recent logins — sourced from the activity log (action='login'), which is
-	// always populated; dcp_login may be empty. user_id may be a userId or loginId.
+	// Recent logins — sourced from the activity log (action='login'). The logged
+	// user_id is a dcp_user_login.loginId for client/staff-with-login accounts,
+	// or a dcp_super_admin.id for hand-seeded staff (loginId 0). Resolve each row
+	// from a SINGLE consistent source so the name and email never desync:
+	//   1. login account  → company/person name + login username
+	//   2. portal staff    → staff name + staff email
+	//   3. dcp_user        → user name + email
+	//   4. otherwise       → "UID <n>" placeholder (deleted/unknown account)
+	// (loginId and dcp_super_admin.id share a numeric space; login accounts win.)
 	recentLogins, _ := db.Query(`
 		SELECT l.id AS loginId,
-		       COALESCE(u.name, ul.login_username, CONCAT('UID ', l.user_id)) AS client,
-		       COALESCE(ul.login_username, u.email, CONCAT('uid:', l.user_id)) AS username,
+		       ` + actorName + ` AS client,
+		       ` + actorUsername + ` AS username,
 		       DATE_FORMAT(l.created_at, '%Y-%m-%d %H:%i:%s') AS loginTime
-		FROM user_activity_log l
-		LEFT JOIN dcp_user u ON u.userId = l.user_id
-		LEFT JOIN dcp_user_login ul ON ul.loginId = l.user_id
+		FROM user_activity_log l` + actorJoins + `
 		WHERE l.action = 'login'
 		ORDER BY l.created_at DESC LIMIT 15`)
 
@@ -825,16 +852,31 @@ func HomeAnalytics(w http.ResponseWriter, r *http.Request) {
 	// PowerBI dashboard views — from user_dashboard_access (logged by the embed-token handler)
 	dashboardAccess, _ := db.Query("SELECT COALESCE(NULLIF(dashboard_name,''), CONCAT('Report ', report_id)) AS title, COUNT(*) AS count FROM user_dashboard_access GROUP BY report_id ORDER BY count DESC LIMIT 10")
 
-	// Who viewed which dashboard, most recent first
+	// Who viewed which dashboard, most recent first. The actor is identified by
+	// a.login_id (login account) or a.user_id (staff / dcp_user) — resolve from a
+	// single consistent source, mirroring the actor* fragments (which key off
+	// user_activity_log.user_id and so can't be reused for this table directly).
 	recentDashboardViews, _ := db.Query(`
 		SELECT a.id,
-		       COALESCE(u.name, ul.login_username, CONCAT('UID ', a.user_id)) AS client,
-		       COALESCE(ul.login_username, u.email, '') AS username,
+		       CASE
+		         WHEN ul.loginId IS NOT NULL THEN COALESCE(NULLIF(u2.name,''), NULLIF(TRIM(CONCAT(COALESCE(ul.first_name,''),' ',COALESCE(ul.last_name,''))),''), ul.login_username)
+		         WHEN sa.id      IS NOT NULL THEN COALESCE(NULLIF(sa.name,''), sa.email)
+		         WHEN u.userId   IS NOT NULL THEN COALESCE(NULLIF(u.name,''), u.email)
+		         ELSE CONCAT('Unknown user #', a.user_id)
+		       END AS client,
+		       CASE
+		         WHEN ul.loginId IS NOT NULL THEN ul.login_username
+		         WHEN sa.id      IS NOT NULL THEN sa.email
+		         WHEN u.userId   IS NOT NULL THEN u.email
+		         ELSE CONCAT('uid:', a.user_id)
+		       END AS username,
 		       COALESCE(NULLIF(a.dashboard_name,''), CONCAT('Report ', a.report_id)) AS report,
 		       DATE_FORMAT(a.accessed_at, '%Y-%m-%d %H:%i:%s') AS viewedAt
 		FROM user_dashboard_access a
-		LEFT JOIN dcp_user u ON u.userId = a.user_id
-		LEFT JOIN dcp_user_login ul ON ul.loginId = a.login_id
+		LEFT JOIN dcp_user_login  ul ON ul.loginId = a.login_id
+		LEFT JOIN dcp_user        u2 ON u2.userId  = ul.userId
+		LEFT JOIN dcp_super_admin sa ON sa.id      = a.user_id
+		LEFT JOIN dcp_user        u  ON u.userId   = a.user_id
 		ORDER BY a.accessed_at DESC LIMIT 15`)
 
 	// Login type breakdown
