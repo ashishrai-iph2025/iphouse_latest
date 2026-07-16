@@ -91,7 +91,7 @@ func clientsCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lid, _, err := db.Exec(
-		"INSERT INTO dcp_user (name, email, role, deleted, api_user_name, api_password, IsSecure) VALUES (?, ?, 2, 0, ?, ?, 0)",
+		"INSERT INTO dcp_user (name, email, role, deleted, api_user_name, api_password, IsSecure) VALUES (?, ?, 0, 0, ?, ?, 0)",
 		body.Name, body.Email, body.APIUserName, body.APIPassword,
 	)
 	if err != nil {
