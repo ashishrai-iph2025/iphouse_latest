@@ -175,6 +175,11 @@ func main() {
 	mux.Handle("DELETE /api/admin/email-credentials", cfg("settings", admin.EmailCredentials))
 	mux.Handle("GET /api/admin/email-credentials/reveal", cfg("settings", admin.EmailCredentialsReveal))
 
+	mux.Handle("GET /api/admin/ses-credentials", cfg("settings", admin.SESCredentials))
+	mux.Handle("POST /api/admin/ses-credentials", cfg("settings", admin.SESCredentials))
+	mux.Handle("GET /api/admin/ses-credentials/reveal", cfg("settings", admin.SESCredentialsReveal))
+	mux.Handle("POST /api/admin/ses-credentials/test", cfg("settings", admin.SESCredentialsTest))
+
 	mux.Handle("GET /api/admin/api-credentials", cfg("api-credentials", admin.APICredentials))
 	mux.Handle("POST /api/admin/api-credentials", cfg("api-credentials", admin.APICredentials))
 	mux.Handle("PUT /api/admin/api-credentials", cfg("api-credentials", admin.APICredentials))

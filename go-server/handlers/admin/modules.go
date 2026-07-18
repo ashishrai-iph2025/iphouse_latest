@@ -139,7 +139,7 @@ func ModulePermissions(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.ModuleName == "" { fail(w, 422, "moduleName required"); return }
-		db.Exec("INSERT INTO module_permission (ModuleName, pageName, status, created, updated) VALUES (?, ?, 0, NOW(), NOW())",
+		db.Exec("INSERT INTO module_permission (ModuleName, pageName, status, created, updated) VALUES (?, ?, 0, UTC_TIMESTAMP(), UTC_TIMESTAMP())",
 			body.ModuleName, body.PageName)
 		ok(w, map[string]any{"success": true})
 	case http.MethodPut:
@@ -152,10 +152,10 @@ func ModulePermissions(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.ID == 0 { fail(w, 422, "id required"); return }
 		if body.Restore {
-			db.Exec("UPDATE module_permission SET status = 0, updated = NOW() WHERE Id = ?", body.ID)
+			db.Exec("UPDATE module_permission SET status = 0, updated = UTC_TIMESTAMP() WHERE Id = ?", body.ID)
 		} else {
 			if body.ModuleName == "" { fail(w, 422, "moduleName required"); return }
-			db.Exec("UPDATE module_permission SET ModuleName = ?, pageName = ?, updated = NOW() WHERE Id = ?",
+			db.Exec("UPDATE module_permission SET ModuleName = ?, pageName = ?, updated = UTC_TIMESTAMP() WHERE Id = ?",
 				body.ModuleName, body.PageName, body.ID)
 		}
 		ok(w, map[string]any{"success": true})
@@ -163,7 +163,7 @@ func ModulePermissions(w http.ResponseWriter, r *http.Request) {
 		var body struct { ID int64 `json:"id"` }
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.ID == 0 { fail(w, 422, "id required"); return }
-		db.Exec("UPDATE module_permission SET status = 1, updated = NOW() WHERE Id = ?", body.ID)
+		db.Exec("UPDATE module_permission SET status = 1, updated = UTC_TIMESTAMP() WHERE Id = ?", body.ID)
 		ok(w, map[string]any{"success": true})
 	default:
 		fail(w, 405, "Method not allowed")

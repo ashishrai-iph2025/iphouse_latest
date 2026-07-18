@@ -352,9 +352,9 @@ func SendOTP(w http.ResponseWriter, r *http.Request) {
 	// A newly issued code starts with a clean attempt budget.
 	clearOTPAttempts(body.UserID)
 
-	// Use MySQL's own clock for the expiry so verification is timezone-agnostic
-	// (the driver uses loc=Asia/Kolkata; mixing Go UTC strings caused false expiries).
-	db.Exec("UPDATE dcp_user SET twofa_code = ?, twofa_code_expires = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE userId = ?", digits, body.UserID)
+	// Use MySQL's own clock (explicitly UTC_TIMESTAMP(), not NOW()) for the expiry
+	// so verification never depends on the connection's or server's tz config.
+	db.Exec("UPDATE dcp_user SET twofa_code = ?, twofa_code_expires = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE) WHERE userId = ?", digits, body.UserID)
 
 	// Greet the person signing in (login first/last name). Fall back to the email
 	// address, then the client/company name, if no personal name is on the login.
@@ -395,7 +395,7 @@ func sendStaffOTP(w http.ResponseWriter, sa map[string]any) {
 	clearOTPAttempts(staffOTPKey(id))
 
 	if err := db.MustExec(
-		"UPDATE dcp_super_admin SET twofa_code = ?, twofa_code_expires = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE id = ?",
+		"UPDATE dcp_super_admin SET twofa_code = ?, twofa_code_expires = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE) WHERE id = ?",
 		digits, id); err != nil {
 		Fail(w, 500, "Could not start verification. Please try again."); return
 	}
@@ -437,9 +437,9 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 400, "Missing parameters"); return
 	}
 
-	// Compute the expiry check in SQL using MySQL's clock — avoids any Go/driver
-	// timezone mismatch (loc=Asia/Kolkata) that previously caused false expiries.
-	user, _ := db.QueryOne("SELECT userId, twofa_code, (twofa_code_expires IS NOT NULL AND twofa_code_expires > NOW()) AS not_expired FROM dcp_user WHERE userId = ? LIMIT 1", body.UserID)
+	// Compute the expiry check in SQL using MySQL's own UTC_TIMESTAMP() — avoids
+	// any Go/driver timezone dependency entirely.
+	user, _ := db.QueryOne("SELECT userId, twofa_code, (twofa_code_expires IS NOT NULL AND twofa_code_expires > UTC_TIMESTAMP()) AS not_expired FROM dcp_user WHERE userId = ? LIMIT 1", body.UserID)
 	if user == nil {
 		OK(w, map[string]any{"success": false, "error": "User not found"}); return
 	}
@@ -505,7 +505,7 @@ func verifyStaffOTP(w http.ResponseWriter, r *http.Request, sa map[string]any, c
 	id := intFromAny(sa["id"])
 	key := staffOTPKey(id)
 
-	row, _ := db.QueryOne("SELECT twofa_code, (twofa_code_expires IS NOT NULL AND twofa_code_expires > NOW()) AS not_expired FROM dcp_super_admin WHERE id = ? LIMIT 1", id)
+	row, _ := db.QueryOne("SELECT twofa_code, (twofa_code_expires IS NOT NULL AND twofa_code_expires > UTC_TIMESTAMP()) AS not_expired FROM dcp_super_admin WHERE id = ? LIMIT 1", id)
 	if row == nil {
 		OK(w, map[string]any{"success": false, "error": "Account not found"}); return
 	}
@@ -540,8 +540,8 @@ func verifyStaffOTP(w http.ResponseWriter, r *http.Request, sa map[string]any, c
 	if err != nil {
 		Fail(w, 500, "Token error"); return
 	}
-	go db.Exec("UPDATE dcp_super_admin SET last_login = NOW() WHERE id = ?", id)
-	go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (?, ?, NOW())", claims.UserID, claims.LoginID)
+	go db.Exec("UPDATE dcp_super_admin SET last_login = UTC_TIMESTAMP() WHERE id = ?", id)
+	go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (?, ?, UTC_TIMESTAMP())", claims.UserID, claims.LoginID)
 	go activity.Log(claims.LoginID, "login", "auth/verify-otp", activity.GetIP(r), activity.GetUA(r), map[string]any{"method": "otp"})
 
 	SetTokenCookie(w, tok)
@@ -612,8 +612,8 @@ func SelectLogin(w http.ResponseWriter, r *http.Request) {
 	loginID := intFromAny(row["loginId"])
 	userID := intFromAny(row["userId"])
 
-	go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (?, ?, NOW())", userID, loginID)
-	go db.Exec("UPDATE dcp_user_login SET last_seen_at = NOW() WHERE loginId = ?", loginID)
+	go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (?, ?, UTC_TIMESTAMP())", userID, loginID)
+	go db.Exec("UPDATE dcp_user_login SET last_seen_at = UTC_TIMESTAMP() WHERE loginId = ?", loginID)
 	go activity.Log(loginID, "login", "auth/login", ip, ua, map[string]any{"method": "select"})
 
 	if apiTok != "" {
@@ -680,8 +680,8 @@ func Login(w http.ResponseWriter, r *http.Request) {
 			markscan.SetCachedToken(userID, apiTok)
 		}
 
-		go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (?, ?, NOW())", userID, loginID)
-		go db.Exec("UPDATE dcp_user_login SET last_seen_at = NOW() WHERE loginId = ?", loginID)
+		go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (?, ?, UTC_TIMESTAMP())", userID, loginID)
+		go db.Exec("UPDATE dcp_user_login SET last_seen_at = UTC_TIMESTAMP() WHERE loginId = ?", loginID)
 		go activity.Log(loginID, "login", "auth/login", ip, ua, map[string]any{"method": "select"})
 
 		claims := buildClaims(row, apiTok)
@@ -704,8 +704,8 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		id := intFromAny(sa["id"])
 		upgradeLegacyHash(body.Password, hash, "UPDATE dcp_super_admin SET password_hash = ? WHERE id = ?", id)
 		claims := claimsForSuperAdminRow(sa)
-		go db.Exec("UPDATE dcp_super_admin SET last_login = NOW() WHERE id = ?", id)
-		go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (?, ?, NOW())", claims.UserID, claims.LoginID)
+		go db.Exec("UPDATE dcp_super_admin SET last_login = UTC_TIMESTAMP() WHERE id = ?", id)
+		go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (?, ?, UTC_TIMESTAMP())", claims.UserID, claims.LoginID)
 		go activity.Log(claims.LoginID, "login", "auth/login", activity.GetIP(r), activity.GetUA(r), map[string]any{"method": "password"})
 		tok, _ := ipauth.SignToken(claims)
 		SetTokenCookie(w, tok)
@@ -739,8 +739,8 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	loginID := intFromAny(row["loginId"])
 	userID := intFromAny(row["userId"])
-	go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (?, ?, NOW())", userID, loginID)
-	go db.Exec("UPDATE dcp_user_login SET last_seen_at = NOW() WHERE loginId = ?", loginID)
+	go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (?, ?, UTC_TIMESTAMP())", userID, loginID)
+	go db.Exec("UPDATE dcp_user_login SET last_seen_at = UTC_TIMESTAMP() WHERE loginId = ?", loginID)
 	go activity.Log(loginID, "login", "auth/login", ip, ua, map[string]any{"method": "password"})
 
 	if apiTok != "" {
@@ -817,7 +817,7 @@ func ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	// Scope the cleanup to the same account (type + id) so a client and a staff
 	// account whose ids happen to collide don't clobber each other's tokens.
 	db.Exec("DELETE FROM dcp_password_resets WHERE userId = ? AND account_type = ?", targetID, accountType)
-	if _, _, err := db.Exec("INSERT INTO dcp_password_resets (userId, account_type, token, expires_at, used) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE), 0)", targetID, accountType, storedToken); err != nil {
+	if _, _, err := db.Exec("INSERT INTO dcp_password_resets (userId, account_type, token, expires_at, used) VALUES (?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE), 0)", targetID, accountType, storedToken); err != nil {
 		log.Printf("[forgot-password] insert token failed for %s id=%d: %v", accountType, targetID, err)
 		Fail(w, 500, "Could not create reset token. Please try again."); return
 	}
@@ -846,7 +846,7 @@ func ResetPassword(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 400, "Reset token required"); return
 	}
 
-	row, err := db.QueryOne("SELECT id, userId AS targetId, COALESCE(account_type, 'login') AS account_type, used, (expires_at > NOW()) AS not_expired FROM dcp_password_resets WHERE token = ? LIMIT 1", hashResetToken(body.ResetToken))
+	row, err := db.QueryOne("SELECT id, userId AS targetId, COALESCE(account_type, 'login') AS account_type, used, (expires_at > UTC_TIMESTAMP()) AS not_expired FROM dcp_password_resets WHERE token = ? LIMIT 1", hashResetToken(body.ResetToken))
 	if err != nil {
 		log.Printf("[reset-password] DB error looking up token: %v", err)
 		Fail(w, 500, "Database error. Please try again."); return
@@ -927,7 +927,7 @@ func Register(w http.ResponseWriter, r *http.Request) {
 
 	_, _, err := db.Exec(`
 		INSERT INTO user_registration_requests (first_name, last_name, email, designation, remarks, status, created_at)
-		VALUES (?, ?, ?, ?, ?, 'pending', NOW())`,
+		VALUES (?, ?, ?, ?, ?, 'pending', UTC_TIMESTAMP())`,
 		fn, ln, mail, trimStr(body.Designation), trimStr(body.Remarks))
 	if err != nil {
 		Fail(w, 500, "Registration failed"); return

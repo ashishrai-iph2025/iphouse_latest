@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import SettingsClient from '@/components/admin/SettingsClient'
+import SESSettingsClient from '@/components/admin/SESSettingsClient'
 
 export default function SettingsPage() {
   const [creds, setCreds] = useState<any[]>([])
@@ -13,5 +14,12 @@ export default function SettingsPage() {
       .catch(() => {})
   }, [])
 
-  return <SettingsClient initialCreds={creds} />
+  return (
+    <>
+      <SettingsClient initialCreds={creds} />
+      <div className="px-6 pb-6">
+        <SESSettingsClient />
+      </div>
+    </>
+  )
 }

@@ -29,7 +29,13 @@ func Init() error {
 }
 
 func newPool() (*sql.DB, error) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Asia%%2FKolkata&charset=utf8mb4",
+	// loc=UTC matches the DB server's own system time zone (confirmed via
+	// NOW() == UTC_TIMESTAMP() on the server) — every DATETIME/TIMESTAMP value
+	// read into a Go time.Time is tagged with this location. It previously said
+	// Asia/Kolkata, which mistagged already-UTC values as IST on every read
+	// (5.5h skew) and would have written explicit time.Time params in IST wall
+	// clock into columns everything else assumes are UTC.
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=UTC&charset=utf8mb4",
 		config.C.DBUser, config.C.DBPass, config.C.DBHost, config.C.DBPort, config.C.DBName)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -164,6 +170,28 @@ func Migrate() {
 		log.Printf("[db] migrate: aws_credentials OK")
 	}
 
+	// Amazon SES credentials for outbound email. Kept separate from
+	// aws_credentials (S3 backups) since it's a distinct integration that may use
+	// a scoped-down IAM user; access key id and secret are AES-256-CBC encrypted.
+	// Sending only switches over to SES once is_active=1 — until then the
+	// existing SMTP path (master_email_credentials / env SMTP_*) keeps working
+	// unchanged, so SES can be configured ahead of the cutover.
+	_, _, err = Exec("CREATE TABLE IF NOT EXISTS ses_credentials (" +
+		"id INT AUTO_INCREMENT PRIMARY KEY," +
+		"access_key_id VARCHAR(512)," +
+		"secret_access_key VARCHAR(512)," +
+		"region VARCHAR(64)," +
+		"from_email VARCHAR(255)," +
+		"from_name VARCHAR(255)," +
+		"is_active TINYINT(1) NOT NULL DEFAULT 0," +
+		"updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" +
+		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+	if err != nil {
+		log.Printf("[db] migrate ses_credentials: %v", err)
+	} else {
+		log.Printf("[db] migrate: ses_credentials OK")
+	}
+
 	// Automatic database-backup schedule (in-app cron). Single row (id=1); also
 	// holds the outcome of the most recent backup, manual or scheduled.
 	_, _, err = Exec("CREATE TABLE IF NOT EXISTS backup_schedule (" +
@@ -206,6 +234,18 @@ func Migrate() {
 	if _, _, aerr := Exec("ALTER TABLE dcp_admin_config_access CHANGE COLUMN userId loginId INT NOT NULL"); aerr == nil {
 		log.Printf("[db] migrate: dcp_admin_config_access userId→loginId renamed")
 	}
+
+	// dcp_user_login had no timestamp columns at all in production — logins
+	// could be created or edited with no record of when. Both are stamped
+	// explicitly by the application (UTC_TIMESTAMP()) on every insert/update
+	// rather than relying on a column DEFAULT, so the value is correct
+	// regardless of the connection's or server's time zone configuration.
+	addColumnIfMissing("dcp_user_login", "created_at", "DATETIME NULL")
+	addColumnIfMissing("dcp_user_login", "updated_at", "DATETIME NULL")
+
+	// dcp_user (client companies) has createdOn but never had an update
+	// timestamp — same gap as dcp_user_login, same fix.
+	addColumnIfMissing("dcp_user", "updated_at", "DATETIME NULL")
 
 	// api_user_name/api_password hold AES+base64 ciphertext (~80–110 chars for
 	// typical inputs). Older production schemas used VARCHAR(100), which made

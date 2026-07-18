@@ -323,7 +323,7 @@ func ActiveSessions(w http.ResponseWriter, r *http.Request) {
 		FROM dcp_user_login l
 		JOIN dcp_user u ON u.userId = l.userId
 		WHERE l.is_active = 1 AND u.deleted = 0
-		  AND l.last_seen_at >= DATE_SUB(NOW(), INTERVAL 30 MINUTE)
+		  AND l.last_seen_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 30 MINUTE)
 		ORDER BY l.last_seen_at DESC`)
 	if rows == nil {
 		rows = []map[string]any{}
@@ -340,7 +340,7 @@ func ForceLogout(w http.ResponseWriter, r *http.Request) {
 	if body.LoginID == 0 {
 		fail(w, 422, "loginId required"); return
 	}
-	db.Exec("UPDATE dcp_user_login SET force_logout_at = NOW() WHERE loginId = ?", body.LoginID)
+	db.Exec("UPDATE dcp_user_login SET force_logout_at = UTC_TIMESTAMP() WHERE loginId = ?", body.LoginID)
 	ok(w, map[string]any{"success": true})
 }
 

@@ -129,7 +129,7 @@ func performBackup(ctx context.Context, trigger string) (file, dest, dur string,
 		return "", "", "", cerr
 	}
 
-	file = fmt.Sprintf("%s_%s.sql", cfg.name, time.Now().Format("2006-01-02_15-04-05"))
+	file = fmt.Sprintf("%s_%s.sql", cfg.name, time.Now().UTC().Format("2006-01-02_15-04-05"))
 	key := cfg.key(file)
 
 	// Stream the dump straight into the S3 uploader via an in-memory pipe — the
@@ -163,8 +163,8 @@ func performBackup(ctx context.Context, trigger string) (file, dest, dur string,
 // row (creating it with defaults if it doesn't exist yet).
 func recordBackupRun(status, file, errMsg string) {
 	db.Exec(`INSERT INTO backup_schedule (id, last_run_at, last_status, last_file, last_error)
-		VALUES (1, NOW(), ?, ?, ?)
-		ON DUPLICATE KEY UPDATE last_run_at=NOW(), last_status=?, last_file=?, last_error=?`,
+		VALUES (1, UTC_TIMESTAMP(), ?, ?, ?)
+		ON DUPLICATE KEY UPDATE last_run_at=UTC_TIMESTAMP(), last_status=?, last_file=?, last_error=?`,
 		status, file, errMsg, status, file, errMsg)
 }
 

@@ -233,7 +233,7 @@ func processWarRoom(ctx context.Context, token string, ownerID int64, body warRo
 	// Process each selected asset. Every asset maintains its own store key so
 	// per-asset incremental refresh works independently. Results are merged before
 	// aggregation so the dashboard always shows the combined view.
-	fetchStart := time.Now()
+	fetchStart := time.Now().UTC()
 	totalPulled := 0
 	anyFull := false
 

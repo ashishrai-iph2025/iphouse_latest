@@ -167,8 +167,8 @@ func SuperAdminConfigAccess(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.Grant {
 			db.Exec(`INSERT INTO dcp_admin_config_access (loginId, module_key, granted, updated_at)
-				VALUES (?, ?, 1, NOW())
-				ON DUPLICATE KEY UPDATE granted = 1, updated_at = NOW()`, body.LoginID, body.ModuleKey)
+				VALUES (?, ?, 1, UTC_TIMESTAMP())
+				ON DUPLICATE KEY UPDATE granted = 1, updated_at = UTC_TIMESTAMP()`, body.LoginID, body.ModuleKey)
 		} else {
 			db.Exec("DELETE FROM dcp_admin_config_access WHERE loginId = ? AND module_key = ?", body.LoginID, body.ModuleKey)
 		}

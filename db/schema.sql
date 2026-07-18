@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS `dcp_user_login` (
   `login_type`     TINYINT      NOT NULL DEFAULT 0 COMMENT '0=email OTP, 1=TOTP, 2=password',
   `twofa_secret`   VARCHAR(64)  DEFAULT NULL,
   `is_active`      TINYINT      NOT NULL DEFAULT 1,
-  `created_at`     DATETIME     DEFAULT CURRENT_TIMESTAMP,
+  `created_at`     DATETIME     DEFAULT NULL COMMENT 'stamped by the app with UTC_TIMESTAMP() on insert',
+  `updated_at`     DATETIME     DEFAULT NULL COMMENT 'stamped by the app with UTC_TIMESTAMP() on every update',
   KEY `idx_username` (`login_username`),
   CONSTRAINT `fk_login_user` FOREIGN KEY (`userId`) REFERENCES `dcp_user` (`userId`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

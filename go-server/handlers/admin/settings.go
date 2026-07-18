@@ -544,7 +544,7 @@ func AssetAccess(w http.ResponseWriter, r *http.Request) {
 			}
 			db.Exec("DELETE FROM dcp_client_assets WHERE client_user_id = ?", body.ClientUserID)
 			assetsJSON, _ := json.Marshal(assets)
-			db.Exec("INSERT INTO dcp_client_assets (client_user_id, client_name, api_token, assets, created_at) VALUES (?, ?, ?, ?, NOW())",
+			db.Exec("INSERT INTO dcp_client_assets (client_user_id, client_name, api_token, assets, created_at) VALUES (?, ?, ?, ?, UTC_TIMESTAMP())",
 				body.ClientUserID, strVal(user["name"]), token, string(assetsJSON))
 			ok(w, map[string]any{"success": true, "assets_count": len(assets)})
 		case "get_assets":
@@ -581,7 +581,7 @@ func AssetAccess(w http.ResponseWriter, r *http.Request) {
 				clientName = strVal(client["name"])
 			}
 			db.Exec(`INSERT INTO dcp_assigned_assets (login_id, client_user_id, client_name, assigned_assets, assigned_count)
-				VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE assigned_assets=VALUES(assigned_assets), assigned_count=VALUES(assigned_count), assigned_at=CURRENT_TIMESTAMP`,
+				VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE assigned_assets=VALUES(assigned_assets), assigned_count=VALUES(assigned_count), assigned_at=UTC_TIMESTAMP()`,
 				body.LoginID, body.ClientUserID, clientName, string(assetsJSON), len(body.Assets))
 			ok(w, map[string]any{"success": true, "count": len(body.Assets)})
 		case "delete_access":
@@ -736,7 +736,7 @@ func TrackingAnalytics(w http.ResponseWriter, r *http.Request) {
 		return rows
 	}
 	actionCounts, _ := db.Query("SELECT action, COUNT(*) AS count FROM user_activity_log GROUP BY action ORDER BY count DESC")
-	dailyTrend, _ := db.Query("SELECT DATE(created_at) AS date, COUNT(*) AS count FROM user_activity_log WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) GROUP BY DATE(created_at) ORDER BY date ASC")
+	dailyTrend, _ := db.Query("SELECT DATE(created_at) AS date, COUNT(*) AS count FROM user_activity_log WHERE created_at >= DATE_SUB(UTC_DATE(), INTERVAL 30 DAY) GROUP BY DATE(created_at) ORDER BY date ASC")
 	topPages, _ := db.Query("SELECT page_url, COUNT(*) AS count FROM user_activity_log GROUP BY page_url ORDER BY count DESC LIMIT 10")
 	topUsers, _ := db.Query(`SELECT `+actorUsername+` AS username, COUNT(*) AS count, MAX(DATE_FORMAT(l.created_at, '%Y-%m-%d %H:%i')) AS last_seen FROM user_activity_log l`+actorJoins+` GROUP BY l.user_id ORDER BY count DESC LIMIT 10`)
 	dashboardAccess, _ := db.Query("SELECT dashboard_name AS title, COUNT(*) AS count FROM user_dashboard_access GROUP BY report_id ORDER BY count DESC LIMIT 10")
@@ -777,8 +777,8 @@ func HomeAnalytics(w http.ResponseWriter, r *http.Request) {
 	superAdmins, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_super_admin WHERE role = 'SuperAdmin' AND is_active = 1")
 	totalLogins, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_user_login WHERE is_active = 1")
 	activeLogins, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_user_login l INNER JOIN dcp_user u ON u.userId = l.userId WHERE l.is_active = 1 AND u.deleted = 0")
-	loginsThisWeek, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_login WHERE loginTime >= DATE_SUB(NOW(), INTERVAL 7 DAY)")
-	loginsThisMonth, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_login WHERE loginTime >= DATE_SUB(NOW(), INTERVAL 30 DAY)")
+	loginsThisWeek, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_login WHERE loginTime >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 7 DAY)")
+	loginsThisMonth, _ := db.QueryOne("SELECT COUNT(*) AS cnt FROM dcp_login WHERE loginTime >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 30 DAY)")
 
 	counts := map[string]any{
 		"totalClients":    cnt(totalClients),
@@ -792,10 +792,10 @@ func HomeAnalytics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Weekly logins (last 14 days)
-	weeklyLogins, _ := db.Query("SELECT DATE(loginTime) AS date, COUNT(*) AS count FROM dcp_login WHERE loginTime >= DATE_SUB(NOW(), INTERVAL 14 DAY) GROUP BY DATE(loginTime) ORDER BY date ASC")
+	weeklyLogins, _ := db.Query("SELECT DATE(loginTime) AS date, COUNT(*) AS count FROM dcp_login WHERE loginTime >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 14 DAY) GROUP BY DATE(loginTime) ORDER BY date ASC")
 
 	// Monthly logins (last 12 months)
-	monthlyLogins, _ := db.Query("SELECT DATE_FORMAT(loginTime, '%Y-%m') AS month, COUNT(*) AS count FROM dcp_login WHERE loginTime >= DATE_SUB(NOW(), INTERVAL 12 MONTH) GROUP BY month ORDER BY month ASC")
+	monthlyLogins, _ := db.Query("SELECT DATE_FORMAT(loginTime, '%Y-%m') AS month, COUNT(*) AS count FROM dcp_login WHERE loginTime >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 12 MONTH) GROUP BY month ORDER BY month ASC")
 
 	// Top users by total portal activity (sourced from the activity log, which is
 	// always populated — dcp_login may be empty/absent). user_id may be a userId or loginId.
@@ -847,7 +847,7 @@ func HomeAnalytics(w http.ResponseWriter, r *http.Request) {
 		ORDER BY l.created_at DESC LIMIT 15`)
 
 	// Registration trend (last 30 days)
-	registrationTrend, _ := db.Query("SELECT DATE(created_at) AS date, COUNT(*) AS count FROM user_registration_requests WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND status = 'approved' GROUP BY DATE(created_at) ORDER BY date ASC")
+	registrationTrend, _ := db.Query("SELECT DATE(created_at) AS date, COUNT(*) AS count FROM user_registration_requests WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 30 DAY) AND status = 'approved' GROUP BY DATE(created_at) ORDER BY date ASC")
 
 	// PowerBI dashboard views — from user_dashboard_access (logged by the embed-token handler)
 	dashboardAccess, _ := db.Query("SELECT COALESCE(NULLIF(dashboard_name,''), CONCAT('Report ', report_id)) AS title, COUNT(*) AS count FROM user_dashboard_access GROUP BY report_id ORDER BY count DESC LIMIT 10")
@@ -976,7 +976,7 @@ func registrationsUpdate(w http.ResponseWriter, r *http.Request) {
 			ok(w, map[string]any{"success": false, "error": "A login with this username already exists"})
 			return
 		}
-		lid, _, err := db.Exec("INSERT INTO dcp_user_login (userId, first_name, last_name, designation, login_username, login_password, login_type, is_active) VALUES (NULL, ?, ?, ?, ?, ?, 0, 1)",
+		lid, _, err := db.Exec("INSERT INTO dcp_user_login (userId, first_name, last_name, designation, login_username, login_password, login_type, is_active, created_at, updated_at) VALUES (NULL, ?, ?, ?, ?, ?, 0, 1, UTC_TIMESTAMP(), UTC_TIMESTAMP())",
 			strVal(req["first_name"]), strVal(req["last_name"]), nullStr(strVal(req["designation"])), username, hashed)
 		if err != nil {
 			fail(w, 500, err.Error())
@@ -984,7 +984,7 @@ func registrationsUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		db.Exec("UPDATE user_registration_requests SET status='approved' WHERE id=?", body.RequestID)
 
-		go email.SendRegistrationApproved(emailAddr, fullName, username, rawPass, "/login")
+		go email.SendRegistrationApproved(emailAddr, fullName, username, rawPass, email.DashboardURL)
 
 		ok(w, map[string]any{"success": true, "loginId": lid})
 		return
@@ -1088,7 +1088,7 @@ func SharedLogins(w http.ResponseWriter, r *http.Request) {
 				hashed = h
 			}
 			for _, uid := range body.UserIDs {
-				db.Exec(`INSERT INTO dcp_user_login (userId, login_username, login_password, login_type, twofa_secret, first_name, last_name, designation, is_active) VALUES (?,?,?,?,?,?,?,?,1)`,
+				db.Exec(`INSERT INTO dcp_user_login (userId, login_username, login_password, login_type, twofa_secret, first_name, last_name, designation, is_active, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,1,UTC_TIMESTAMP(),UTC_TIMESTAMP())`,
 					uid, body.LoginUsername, hashed, body.LoginType,
 					encNullStr(body.TwofaSecret), nullStr(body.FirstName), nullStr(body.LastName), nullStr(body.Designation))
 			}
@@ -1115,7 +1115,7 @@ func SharedLogins(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			// Update credentials on existing rows
-			db.Exec(`UPDATE dcp_user_login SET login_password=?, login_type=?, twofa_secret=?, first_name=?, last_name=?, designation=? WHERE login_username=? AND is_active=1`,
+			db.Exec(`UPDATE dcp_user_login SET login_password=?, login_type=?, twofa_secret=?, first_name=?, last_name=?, designation=?, updated_at=UTC_TIMESTAMP() WHERE login_username=? AND is_active=1`,
 				hashed, body.LoginType, encNullStr(body.TwofaSecret), nullStr(body.FirstName), nullStr(body.LastName), nullStr(body.Designation), body.LoginUsername)
 			// Get current user IDs
 			currentRows, _ := db.Query("SELECT userId FROM dcp_user_login WHERE login_username = ? AND is_active = 1", body.LoginUsername)
@@ -1130,7 +1130,7 @@ func SharedLogins(w http.ResponseWriter, r *http.Request) {
 			// Insert new users
 			for _, uid := range body.UserIDs {
 				if !currentMap[uid] {
-					db.Exec(`INSERT INTO dcp_user_login (userId, login_username, login_password, login_type, twofa_secret, first_name, last_name, designation, is_active) VALUES (?,?,?,?,?,?,?,?,1)`,
+					db.Exec(`INSERT INTO dcp_user_login (userId, login_username, login_password, login_type, twofa_secret, first_name, last_name, designation, is_active, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,1,UTC_TIMESTAMP(),UTC_TIMESTAMP())`,
 						uid, body.LoginUsername, hashed, body.LoginType,
 						encNullStr(body.TwofaSecret), nullStr(body.FirstName), nullStr(body.LastName), nullStr(body.Designation))
 				}
@@ -1141,11 +1141,11 @@ func SharedLogins(w http.ResponseWriter, r *http.Request) {
 			for _, r := range currentRows {
 				uid := intVal(r["userId"])
 				if uid == 0 {
-					db.Exec("UPDATE dcp_user_login SET is_active = 0 WHERE login_username = ? AND userId IS NULL", body.LoginUsername)
+					db.Exec("UPDATE dcp_user_login SET is_active = 0, updated_at = UTC_TIMESTAMP() WHERE login_username = ? AND userId IS NULL", body.LoginUsername)
 					continue
 				}
 				if !newMap[uid] {
-					db.Exec("UPDATE dcp_user_login SET is_active = 0 WHERE login_username = ? AND userId = ?", body.LoginUsername, uid)
+					db.Exec("UPDATE dcp_user_login SET is_active = 0, updated_at = UTC_TIMESTAMP() WHERE login_username = ? AND userId = ?", body.LoginUsername, uid)
 				}
 			}
 			ok(w, map[string]any{"success": true})
@@ -1155,7 +1155,7 @@ func SharedLogins(w http.ResponseWriter, r *http.Request) {
 				fail(w, 422, "login_username required")
 				return
 			}
-			db.Exec("UPDATE dcp_user_login SET is_active = 0 WHERE login_username = ?", body.LoginUsername)
+			db.Exec("UPDATE dcp_user_login SET is_active = 0, updated_at = UTC_TIMESTAMP() WHERE login_username = ?", body.LoginUsername)
 			ok(w, map[string]any{"success": true})
 
 		default:

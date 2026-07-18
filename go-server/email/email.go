@@ -1,6 +1,7 @@
 package email
 
 import (
+	"context"
 	"crypto/tls"
 	_ "embed"
 	"encoding/base64"
@@ -9,6 +10,12 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2"
+	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
 
 	ipauth "github.com/ip-house/iphouse-api/auth"
 	"github.com/ip-house/iphouse-api/config"
@@ -71,7 +78,108 @@ func getDBSmtp() *smtpConfig {
 	}
 }
 
+type sesConfig struct {
+	key, secret, region, fromEmail, fromName string
+}
+
+// getSESConfig returns the stored SES config only when it has been explicitly
+// switched on (is_active=1). Saving SES credentials alone does not change
+// where mail goes — that keeps the existing SMTP path working unchanged until
+// an admin flips the toggle on the Settings page.
+func getSESConfig() *sesConfig {
+	row, err := db.QueryOne(
+		"SELECT access_key_id, secret_access_key, region, from_email, from_name FROM ses_credentials WHERE is_active = 1 ORDER BY id DESC LIMIT 1",
+	)
+	if err != nil || row == nil {
+		return nil
+	}
+	key := decryptOrRaw(strField(row["access_key_id"]))
+	secret := decryptOrRaw(strField(row["secret_access_key"]))
+	region := strField(row["region"])
+	fromEmail := strField(row["from_email"])
+	if key == "" || secret == "" || region == "" || fromEmail == "" {
+		return nil
+	}
+	return &sesConfig{key: key, secret: secret, region: region, fromEmail: fromEmail, fromName: strField(row["from_name"])}
+}
+
+func strField(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func decryptOrRaw(s string) string {
+	if s == "" {
+		return ""
+	}
+	if d := ipauth.DecryptMain(s); d != "" {
+		return d
+	}
+	return s
+}
+
+// sendSES delivers via Amazon SES, reusing the same multipart/related raw MIME
+// message (with inline logo) built for SMTP, so the two paths render identically.
+func sendSES(cfg *sesConfig, to, subject, html string) error {
+	from := cfg.fromEmail
+	if cfg.fromName != "" {
+		from = fmt.Sprintf("%s <%s>", cfg.fromName, cfg.fromEmail)
+	}
+	raw := buildMessage(from, to, subject, logoBanner+html)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRegion(cfg.region),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.key, cfg.secret, "")),
+	)
+	if err != nil {
+		return err
+	}
+	client := sesv2.NewFromConfig(awsCfg)
+	_, err = client.SendEmail(ctx, &sesv2.SendEmailInput{
+		FromEmailAddress: awssdk.String(from),
+		Destination:      &sesv2types.Destination{ToAddresses: []string{to}},
+		Content:          &sesv2types.EmailContent{Raw: &sesv2types.RawMessage{Data: []byte(raw)}},
+	})
+	return err
+}
+
+// SendSESTest sends a one-off test email through explicitly supplied SES
+// credentials (used by the Settings page "Send test email" action to verify a
+// configuration before it's switched on for real sending).
+func SendSESTest(ctx context.Context, accessKey, secretKey, region, fromEmail, fromName, to string) error {
+	cfg := &sesConfig{key: accessKey, secret: secretKey, region: region, fromEmail: fromEmail, fromName: fromName}
+	from := cfg.fromEmail
+	if cfg.fromName != "" {
+		from = fmt.Sprintf("%s <%s>", cfg.fromName, cfg.fromEmail)
+	}
+	html := `<div style="font-family:Poppins,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;background:#fff;border-radius:12px;border:1px solid #e5e7eb;"><h2 style="color:#14254A;">SES Test Email</h2><p style="color:#5f768b;">This is a test message confirming your Amazon SES configuration for IP House is working correctly.</p></div>`
+	raw := buildMessage(from, to, "IP House – SES Test Email", logoBanner+html)
+
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRegion(region),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
+	)
+	if err != nil {
+		return err
+	}
+	client := sesv2.NewFromConfig(awsCfg)
+	_, err = client.SendEmail(ctx, &sesv2.SendEmailInput{
+		FromEmailAddress: awssdk.String(from),
+		Destination:      &sesv2types.Destination{ToAddresses: []string{to}},
+		Content:          &sesv2types.EmailContent{Raw: &sesv2types.RawMessage{Data: []byte(raw)}},
+	})
+	return err
+}
+
 func send(to, subject, html string) error {
+	// SES only takes over once explicitly activated on the Settings page —
+	// otherwise every existing SMTP-based flow keeps working unchanged.
+	if sesCfg := getSESConfig(); sesCfg != nil {
+		return sendSES(sesCfg, to, subject, html)
+	}
+
 	var cfg *smtpConfig
 
 	if dbCfg := getDBSmtp(); dbCfg != nil {
@@ -207,6 +315,11 @@ func sendTemplate(eventKey, to string, vars map[string]string, fallbackSubject, 
 	return send(to, subject, html)
 }
 
+// DashboardURL is the public login URL sent in credentials emails. The
+// backend has no notion of its own public hostname, so this is hard-coded
+// rather than derived from the request.
+const DashboardURL = "https://reports.markscan.co.in/login"
+
 // ── Named helpers ─────────────────────────────────────────────────────────────
 
 func SendOTP(to, code, userName string) error {
@@ -269,7 +382,7 @@ func SendInfringementClientConfirmation(to, name, platform, assetName, remarks s
 		"name": name, "user_name": name, "platform": platform,
 		"asset_name": assetName, "remarks": remarksHTML,
 		"url_count": urlCount, "urls_list": urlsListHTML(urls),
-		"date": time.Now().Format("02 Jan 2006, 15:04"),
+		"date": time.Now().UTC().Format("02 Jan 2006, 15:04"),
 	},
 		"Infringement Submission Confirmation",
 		fmt.Sprintf(`<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;"><div style="background:#14254A;padding:22px 28px;"><h2 style="color:#fff;margin:0;font-size:18px;">Takedown Request Received</h2></div><div style="padding:28px;color:#14254A;"><p>Dear <strong>%s</strong>,</p><p>Your takedown request has been submitted successfully.</p><table style="width:100%%;font-size:14px;border-collapse:collapse;margin:12px 0;"><tr><td style="padding:6px 0;color:#5f768b;">Platform</td><td style="padding:6px 0;font-weight:600;">%s</td></tr><tr><td style="padding:6px 0;color:#5f768b;">Asset</td><td style="padding:6px 0;font-weight:600;">%s</td></tr><tr><td style="padding:6px 0;color:#5f768b;">URLs</td><td style="padding:6px 0;font-weight:600;">%d</td></tr></table>%s</div></div>`,
@@ -285,7 +398,7 @@ func SendInfringementUserNotification(to, userName, platform, assetName string, 
 		"user_name": userName, "name": userName, "platform": platform,
 		"asset_name": assetName, "url_count": urlCount,
 		"urls_list": urlsListHTML(urls),
-		"date":      time.Now().Format("02 Jan 2006, 15:04"),
+		"date":      time.Now().UTC().Format("02 Jan 2006, 15:04"),
 	},
 		"Your Infringement Submission Has Been Recorded",
 		fmt.Sprintf(`<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;"><div style="background:#14254A;padding:22px 28px;"><h2 style="color:#fff;margin:0;font-size:18px;">Submission Recorded</h2></div><div style="padding:28px;color:#14254A;"><p>Hi <strong>%s</strong>,</p><p>Your takedown submission has been recorded.</p><table style="width:100%%;font-size:14px;border-collapse:collapse;margin:12px 0;"><tr><td style="padding:6px 0;color:#5f768b;">Platform</td><td style="padding:6px 0;font-weight:600;">%s</td></tr><tr><td style="padding:6px 0;color:#5f768b;">Asset</td><td style="padding:6px 0;font-weight:600;">%s</td></tr><tr><td style="padding:6px 0;color:#5f768b;">URLs</td><td style="padding:6px 0;font-weight:600;">%d</td></tr></table>%s</div></div>`,
@@ -306,7 +419,7 @@ func SendRegistrationReceivedApplicant(firstName, lastName, emailAddr, designati
 		"full_name":   fullName,
 		"email":       emailAddr,
 		"designation": designation,
-		"date":        time.Now().Format("02 Jan 2006, 15:04"),
+		"date":        time.Now().UTC().Format("02 Jan 2006, 15:04"),
 	},
 		"IP House - Account Registration for Analytics Report Received",
 		fmt.Sprintf(`<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
@@ -348,7 +461,7 @@ func SendRegistrationReceivedAdmin(firstName, lastName, emailAddr, designation, 
 		"email":       emailAddr,
 		"designation": designation,
 		"remarks":     remarks,
-		"date":        time.Now().Format("02 Jan 2006, 15:04"),
+		"date":        time.Now().UTC().Format("02 Jan 2006, 15:04"),
 	},
 		"Client Dashboard Account Creation Request",
 		fmt.Sprintf(`<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
@@ -363,7 +476,7 @@ func SendRegistrationReceivedAdmin(firstName, lastName, emailAddr, designation, 
     <tr><td style="padding:7px 0;color:#5f768b;">Submitted On</td><td style="padding:7px 0;">%s</td></tr>
   </table>
   <a href="/admin/registration-requests" style="display:inline-block;margin-top:8px;padding:10px 24px;background:#FC934C;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">Review Request →</a>
-</div></div>`, fullName, emailAddr, designation, remarks, time.Now().Format("02 Jan 2006, 15:04")),
+</div></div>`, fullName, emailAddr, designation, remarks, time.Now().UTC().Format("02 Jan 2006, 15:04")),
 	)
 }
 

@@ -3,20 +3,22 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from '@/lib/router'
 import { Link } from 'react-router-dom'
-
-interface ClientOption { userId: number; name: string; email: string }
+import UserPicker, { type MasterUser } from '@/components/admin/UserPicker'
 
 export default function AddUserPage() {
   const router = useRouter()
-  const [clients,  setClients]  = useState<ClientOption[]>([])
+  const [clients,  setClients]  = useState<MasterUser[]>([])
   const [form, setForm] = useState({
-    userId: '', firstName: '', lastName: '',
+    userIds: [] as number[], firstName: '', lastName: '', email: '',
     loginUsername: '', loginPassword: '', loginType: '0',
   })
   const [error,   setError]   = useState('')
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
+    // Client companies only — same list the approval module's shared-login
+    // assignment picker uses, so a login created here can't be attached to a
+    // staff/portal-role account.
     fetch('/api/admin/clients?list=1', { credentials: 'include' })
       .then(r => r.json())
       .then(d => { if (d.success) setClients(d.items) })
@@ -29,6 +31,7 @@ export default function AddUserPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
+    if (form.userIds.length === 0) { setError('Select at least one client to assign'); return }
     setLoading(true)
     try {
       const res  = await fetch('/api/admin/users', {
@@ -61,14 +64,11 @@ export default function AddUserPage() {
 
       <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-card border border-gray-100 p-6 space-y-5">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Parent Account (Client) *</label>
-          <select name="userId" value={form.userId} onChange={handle} required
-            className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-            <option value="">— Select client —</option>
-            {clients.map(c => (
-              <option key={c.userId} value={c.userId}>{c.name} ({c.email})</option>
-            ))}
-          </select>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Assign Client(s) <span className="text-red-500">*</span>
+          </label>
+          <UserPicker users={clients} selected={form.userIds}
+            onChange={ids => setForm(f => ({ ...f, userIds: ids }))} />
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -84,6 +84,14 @@ export default function AddUserPage() {
                 className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
           ))}
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
+          <input autoComplete="off" name="email" type="email" placeholder="Where login credentials will be sent"
+            value={form.email} onChange={handle} required
+            className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <p className="text-xs text-gray-400 mt-1">The username and password below are emailed here as soon as the login is created.</p>
         </div>
 
         <div>

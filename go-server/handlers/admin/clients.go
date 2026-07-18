@@ -91,14 +91,14 @@ func clientsCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lid, _, err := db.Exec(
-		"INSERT INTO dcp_user (name, email, role, deleted, api_user_name, api_password, IsSecure) VALUES (?, ?, 0, 0, ?, ?, 0)",
+		"INSERT INTO dcp_user (name, email, role, deleted, api_user_name, api_password, IsSecure, updated_at) VALUES (?, ?, 0, 0, ?, ?, 0, UTC_TIMESTAMP())",
 		body.Name, body.Email, body.APIUserName, body.APIPassword,
 	)
 	if err != nil {
 		fail(w, 500, err.Error()); return
 	}
 	db.Exec(
-		"INSERT INTO dcp_user_login (userId, first_name, login_username, login_password, login_type, is_active) VALUES (?, ?, ?, ?, 0, 1)",
+		"INSERT INTO dcp_user_login (userId, first_name, login_username, login_password, login_type, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 1, UTC_TIMESTAMP(), UTC_TIMESTAMP())",
 		lid, body.Name, body.Username, hashed,
 	)
 	ok(w, map[string]any{"success": true, "userId": lid})
@@ -118,7 +118,7 @@ func clientsUpdate(w http.ResponseWriter, r *http.Request) {
 		fail(w, 422, "userId required"); return
 	}
 	db.Exec(
-		"UPDATE dcp_user SET name=?, email=?, api_user_name=?, api_password=?, deleted=? WHERE userId=?",
+		"UPDATE dcp_user SET name=?, email=?, api_user_name=?, api_password=?, deleted=?, updated_at=UTC_TIMESTAMP() WHERE userId=?",
 		body.Name, body.Email, body.APIUserName, body.APIPassword, body.Deleted, body.UserID,
 	)
 	ok(w, map[string]any{"success": true})
@@ -132,7 +132,7 @@ func clientsDelete(w http.ResponseWriter, r *http.Request) {
 	if body.UserID == 0 {
 		fail(w, 422, "userId required"); return
 	}
-	db.Exec("UPDATE dcp_user SET deleted = 1 WHERE userId = ?", body.UserID)
+	db.Exec("UPDATE dcp_user SET deleted = 1, updated_at = UTC_TIMESTAMP() WHERE userId = ?", body.UserID)
 	ok(w, map[string]any{"success": true})
 }
 

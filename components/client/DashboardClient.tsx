@@ -76,12 +76,20 @@ export default function DashboardClient({ userName, modules }: Props) {
     const reportId = extractReportId(mod.link)
     try {
       const res  = await fetch(`/api/embed-token?reportId=${encodeURIComponent(reportId)}`)
-      if (!res.ok) {
-        const text = await res.text().catch(() => '')
-        throw new Error(text || `Server error (${res.status}) — please try again or contact support.`)
+      const ct   = res.headers.get('content-type') || ''
+
+      if (!ct.includes('application/json')) {
+        // A non-JSON response means something in front of the app (a security
+        // check, proxy, or gateway) intercepted the request before it reached
+        // our API — never surface that raw payload to the user.
+        throw new Error(
+          res.ok
+            ? 'Unexpected response from the server — please try again.'
+            : `The dashboard service is temporarily unavailable (error ${res.status}). Please try again in a moment, or contact support if this persists.`
+        )
       }
       const data = await res.json().catch(() => { throw new Error('Invalid response from server — please try again.') })
-      if (data.error) throw new Error(data.error)
+      if (!res.ok || data.error) throw new Error(data.error || `Server error (${res.status}) — please try again or contact support.`)
 
       const pbi = (window as any).powerbi
       pbi.reset(containerRef.current)

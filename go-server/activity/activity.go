@@ -27,7 +27,7 @@ func Log(loginID int64, action, pageURL, ip, ua string, meta map[string]any) {
 		}
 		db.Exec(
 			`INSERT INTO user_activity_log (user_id, page_url, action, ip_address, user_agent, metadata, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+			 VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())`,
 			loginID, pageURL, action, ip, ua, metaJSON,
 		)
 	}()
