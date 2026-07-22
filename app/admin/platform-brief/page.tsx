@@ -15,6 +15,27 @@ export default function PlatformBriefPage() {
   const role = (session?.user as any)?.role
   const rootRef = useRef<HTMLDivElement>(null)
   const [showStackPurpose, setShowStackPurpose] = useState(false)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [modalTitle, setModalTitle] = useState('')
+  const [modalContent, setModalContent] = useState('')
+  const [modalLoading, setModalLoading] = useState(false)
+
+  const openGuide = async (filename: string, title: string) => {
+    setModalLoading(true)
+    setModalTitle(title)
+    try {
+      const response = await fetch(`/guides/${filename}`)
+      const content = await response.text()
+      setModalContent(content)
+      setModalOpen(true)
+    } catch (error) {
+      console.error('Failed to load guide:', error)
+      setModalContent('Failed to load guide. Please try again.')
+      setModalOpen(true)
+    } finally {
+      setModalLoading(false)
+    }
+  }
 
   useEffect(() => {
     const root = rootRef.current
@@ -221,10 +242,10 @@ export default function PlatformBriefPage() {
               <div className="rbody"><h5>{r.title}</h5><p>{r.desc}</p></div>
               <div className="pb-road-actions">
                 {r.guide && (
-                  <a href={`/guides/${r.guide}`} target="_blank" rel="noopener noreferrer" className="pb-guide-btn" title="View implementation guide">
+                  <button onClick={() => openGuide(r.guide!, r.title)} className="pb-guide-btn" title="View implementation guide">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10z" strokeLinecap="round" strokeLinejoin="round"/><polyline points="14 2 14 10 22 10" strokeLinecap="round" strokeLinejoin="round"/></svg>
                     View Guide
-                  </a>
+                  </button>
                 )}
                 <span className={`prio ${r.pk}`}>{r.prio}</span>
               </div>
@@ -240,6 +261,40 @@ export default function PlatformBriefPage() {
         </div>
         <div className="mono right">Technical &amp; Security Brief<br />Generated for leadership review</div>
       </footer>
+
+      {/* Guide Modal */}
+      {modalOpen && (
+        <div className="pb-modal-overlay" onClick={() => setModalOpen(false)}>
+          <div className="pb-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="pb-modal-header">
+              <h3>{modalTitle}</h3>
+              <button className="pb-modal-close" onClick={() => setModalOpen(false)}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div className="pb-modal-body">
+              {modalLoading ? (
+                <div className="pb-modal-loading">Loading guide...</div>
+              ) : (
+                <div className="pb-markdown">
+                  {modalContent.split('\n').map((line, i) => {
+                    if (line.startsWith('# ')) return <h1 key={i}>{line.substring(2)}</h1>
+                    if (line.startsWith('## ')) return <h2 key={i}>{line.substring(3)}</h2>
+                    if (line.startsWith('### ')) return <h3 key={i}>{line.substring(4)}</h3>
+                    if (line.startsWith('#### ')) return <h4 key={i}>{line.substring(5)}</h4>
+                    if (line.startsWith('- ')) return <li key={i}>{line.substring(2)}</li>
+                    if (line.startsWith('✅ ')) return <li key={i} className="checkmark">{line.substring(2)}</li>
+                    if (line.startsWith('❌ ')) return <li key={i} className="error">{line.substring(2)}</li>
+                    if (line.trim() === '') return <br key={i} />
+                    if (line.startsWith('```')) return null
+                    return <p key={i}>{line}</p>
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -534,9 +589,32 @@ const PBRIEF_CSS = `
 .pb-road-item .prio.done{color:var(--pb-ok);background:var(--pb-okbg);}
 
 .pb-road-actions{display:flex;align-items:center;gap:10px;}
-.pb-guide-btn{display:inline-flex;align-items:center;gap:6px;font-family:var(--pb-mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;font-weight:700;color:var(--pb-info);text-decoration:none;padding:6px 12px;border:1px solid var(--pb-info);border-radius:6px;transition:all .2s ease;white-space:nowrap;}
-.pb-guide-btn:hover{background:var(--pb-infobg);color:var(--pb-info);}
+.pb-guide-btn{display:inline-flex;align-items:center;gap:6px;font-family:var(--pb-mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;font-weight:700;color:var(--pb-info);padding:6px 12px;border:1px solid var(--pb-info);border-radius:6px;background:transparent;cursor:pointer;transition:all .2s ease;white-space:nowrap;}
+.pb-guide-btn:hover{background:var(--pb-infobg);}
 .pb-guide-btn svg{width:12px;height:12px;}
+
+.pb-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:1000;backdrop-filter:blur(2px);}
+.pb-modal{background:var(--pb-surface);border-radius:16px;box-shadow:var(--pb-shadowlg);width:90%;max-width:900px;max-height:80vh;display:flex;flex-direction:column;animation:slideIn .3s ease;}
+@keyframes slideIn{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}
+.pb-modal-header{display:flex;align-items:center;justify-content:space-between;padding:24px;border-bottom:1px solid var(--pb-border);flex-shrink:0;}
+.pb-modal-header h3{margin:0;font-size:20px;color:var(--pb-ink);font-family:var(--pb-disp);}
+.pb-modal-close{background:transparent;border:none;color:var(--pb-muted);cursor:pointer;padding:4px;display:flex;align-items:center;transition:color .2s ease;}
+.pb-modal-close:hover{color:var(--pb-ink);}
+.pb-modal-body{overflow-y:auto;padding:24px;flex:1;color:var(--pb-body);font-size:13.5px;line-height:1.6;}
+.pb-modal-loading{text-align:center;padding:40px;color:var(--pb-muted);}
+.pb-markdown h1,.pb-markdown h2,.pb-markdown h3,.pb-markdown h4{color:var(--pb-ink);font-family:var(--pb-disp);margin:20px 0 10px;font-weight:600;}
+.pb-markdown h1{font-size:18px;}
+.pb-markdown h2{font-size:16px;}
+.pb-markdown h3{font-size:14px;}
+.pb-markdown p{margin:10px 0;}
+.pb-markdown li{margin-left:20px;margin-bottom:5px;list-style:disc;}
+.pb-markdown li.checkmark::before{content:"✅ ";margin-right:4px;}
+.pb-markdown li.error::before{content:"❌ ";margin-right:4px;}
+.pb-markdown code{background:var(--pb-surface2);padding:2px 6px;border-radius:4px;font-family:var(--pb-mono);font-size:12px;color:var(--pb-accent);}
+.pb-markdown pre{background:var(--pb-surface2);padding:12px;border-radius:8px;overflow-x:auto;margin:10px 0;border-left:3px solid var(--pb-info);}
+.pb-markdown hr{border:none;border-top:1px solid var(--pb-border);margin:20px 0;}
+
+@media (max-width:768px){.pb-modal{width:95%;max-height:90vh;}.pb-modal-header{padding:16px;}.pb-modal-body{padding:16px;}}
 
 .pb-foot{padding:32px 40px 44px;display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;}
 .pb-foot .status{display:inline-flex;align-items:center;gap:8px;font-family:var(--pb-mono);font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--pb-ok);font-weight:600;}
@@ -548,7 +626,7 @@ const PBRIEF_CSS = `
 @media (max-width:560px){.pb-road-item{grid-template-columns:auto 1fr;}.pb-road-actions{grid-column:1/-1;justify-self:start;}}
 
 @media print{
-  .pb-toolbar,.pb-view-btn{display:none;}
+  .pb-toolbar,.pb-view-btn,.pb-modal-overlay{display:none;}
   .pbrief{margin:0;background:#fff;}
   .pbrief section,.pb-hero{break-inside:avoid;}
   .pb-mod,.pb-cat,.pb-fix,.pb-road-item{break-inside:avoid;}
