@@ -1,0 +1,2415 @@
+{
+  "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:8544576a-98ea-42d5-ac23-c517a9bbbb96",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-07-21T16:44:47.888Z",
+    "lifecycles": [
+      {
+        "phase": "build"
+      }
+    ],
+    "tools": [
+      {
+        "vendor": "npm",
+        "name": "cli",
+        "version": "10.9.2"
+      }
+    ],
+    "component": {
+      "bom-ref": "iphouse@0.0.0",
+      "type": "library",
+      "name": "iphouse_Latest",
+      "version": "0.0.0",
+      "scope": "required",
+      "purl": "pkg:npm/iphouse@0.0.0",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": ""
+        },
+        {
+          "name": "cdx:npm:package:private",
+          "value": "true"
+        }
+      ],
+      "externalReferences": []
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "@babel/runtime@7.29.7",
+      "type": "library",
+      "name": "@babel/runtime",
+      "version": "7.29.7",
+      "scope": "required",
+      "author": "The Babel Team",
+      "description": "babel's modular runtime helpers",
+      "purl": "pkg:npm/%40babel/runtime@7.29.7",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@babel/runtime"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.7.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/babel/babel.git"
+        },
+        {
+          "type": "website",
+          "url": "https://babel.dev/docs/en/next/babel-runtime"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/babel/babel/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "36af0e8465a264864657a84b1e8c8028b2dc26284fff115e04c189a14af14d7da9b08f1d0a27f32e16484856fe5564b7c053110e6086c3947e74ec920aa3cb87"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "@remix-run/router@1.23.3",
+      "type": "library",
+      "name": "@remix-run/router",
+      "version": "1.23.3",
+      "scope": "required",
+      "author": "Remix Software",
+      "description": "Nested/Data-driven/Framework-agnostic Routing",
+      "purl": "pkg:npm/%40remix-run/router@1.23.3",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@remix-run/router"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@remix-run/router/-/router-1.23.3.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/remix-run/react-router.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/remix-run/react-router#readme"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/remix-run/react-router/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "e009fbd6d773f57f3edec23842aa9dd8b59df6f4b7f49eeca9df4453849cc3b4c913fa81d74165bff52ea9b3d581f415f57a0af0da7a8cdaae662b6766ae62f9"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "@types/d3-array@3.2.2",
+      "type": "library",
+      "name": "@types/d3-array",
+      "version": "3.2.2",
+      "scope": "required",
+      "description": "TypeScript definitions for d3-array",
+      "purl": "pkg:npm/%40types/d3-array@3.2.2",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@types/d3-array"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@types/d3-array/-/d3-array-3.2.2.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/DefinitelyTyped/DefinitelyTyped.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/d3-array"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "84e2d655b9bbb91cdad01617a48216e69c5faca7b45be0f996b162004611fa96fac373764b048c6896d77547d212ff9d4f831f1c12ed9f98ecd0b01668eea8b7"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "@types/d3-color@3.1.3",
+      "type": "library",
+      "name": "@types/d3-color",
+      "version": "3.1.3",
+      "scope": "required",
+      "description": "TypeScript definitions for d3-color",
+      "purl": "pkg:npm/%40types/d3-color@3.1.3",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@types/d3-color"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@types/d3-color/-/d3-color-3.1.3.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/DefinitelyTyped/DefinitelyTyped.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/d3-color"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "88ef74b1cb61f5601b9a0bfba20a2ae7b3bd6292a61416e6a04a021c3076c4c058d3efca56ba806820f2084d7a754b2978ebc8c4515123ed2c12da83ab2d9be0"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "@types/d3-ease@3.0.2",
+      "type": "library",
+      "name": "@types/d3-ease",
+      "version": "3.0.2",
+      "scope": "required",
+      "description": "TypeScript definitions for d3-ease",
+      "purl": "pkg:npm/%40types/d3-ease@3.0.2",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@types/d3-ease"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@types/d3-ease/-/d3-ease-3.0.2.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/DefinitelyTyped/DefinitelyTyped.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/d3-ease"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "35c5752633b9a03ce82b6ea83336c82c4e875bbb955ce1cb42f1ec841516e1431d6467e263abf905e43087d6bdb42ceff8279e7d940726de524602b5e7846d88"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "@types/d3-interpolate@3.0.4",
+      "type": "library",
+      "name": "@types/d3-interpolate",
+      "version": "3.0.4",
+      "scope": "required",
+      "description": "TypeScript definitions for d3-interpolate",
+      "purl": "pkg:npm/%40types/d3-interpolate@3.0.4",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@types/d3-interpolate"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@types/d3-interpolate/-/d3-interpolate-3.0.4.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/DefinitelyTyped/DefinitelyTyped.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/d3-interpolate"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "9a02cf11396ba55575611248825af8133e3b83b6318e5d658fb60ab223026f6ed5247f56f0d54ce816fd77c924a46fee0104b90266c0e3cab6200a2528aa3530"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "@types/d3-path@3.1.1",
+      "type": "library",
+      "name": "@types/d3-path",
+      "version": "3.1.1",
+      "scope": "required",
+      "description": "TypeScript definitions for d3-path",
+      "purl": "pkg:npm/%40types/d3-path@3.1.1",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@types/d3-path"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@types/d3-path/-/d3-path-3.1.1.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/DefinitelyTyped/DefinitelyTyped.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/d3-path"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "54c64163242f6c6996c9655e6b4107b3f0702e0c5cf8c2a2d732c308e364b28cc8e1824c713b7c644b8847849bd4c31313c30c5b8f6fd08c08e7e6fb4667d696"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "@types/d3-scale@4.0.9",
+      "type": "library",
+      "name": "@types/d3-scale",
+      "version": "4.0.9",
+      "scope": "required",
+      "description": "TypeScript definitions for d3-scale",
+      "purl": "pkg:npm/%40types/d3-scale@4.0.9",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@types/d3-scale"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@types/d3-scale/-/d3-scale-4.0.9.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/DefinitelyTyped/DefinitelyTyped.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/d3-scale"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "74b9adc01f3390078efe3b8031f9d5fac22d2a396cc3694a759555cba2d1af470199e8314800622c4a4656648927c3b4f22e3eb0647aa90b5be96b6ec0976f57"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "@types/d3-shape@3.1.8",
+      "type": "library",
+      "name": "@types/d3-shape",
+      "version": "3.1.8",
+      "scope": "required",
+      "description": "TypeScript definitions for d3-shape",
+      "purl": "pkg:npm/%40types/d3-shape@3.1.8",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@types/d3-shape"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@types/d3-shape/-/d3-shape-3.1.8.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/DefinitelyTyped/DefinitelyTyped.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/d3-shape"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "95a7b48967dc0de47baadeeb03cf01362a9dbcf4b9a4554fa68e4e7e3125c0d693db2c9e91b3340bdbcafb2a81a84987afa9439119d83684c162502025aedae3"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "@types/d3-time@3.0.4",
+      "type": "library",
+      "name": "@types/d3-time",
+      "version": "3.0.4",
+      "scope": "required",
+      "description": "TypeScript definitions for d3-time",
+      "purl": "pkg:npm/%40types/d3-time@3.0.4",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@types/d3-time"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@types/d3-time/-/d3-time-3.0.4.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/DefinitelyTyped/DefinitelyTyped.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/d3-time"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "caecd9ba0d6790001a0650418a42994e0cc2780fa4d6ecb8645c1600d39f2b0e73e4b46157480d03b80d90a9bb1e82be1d1374c17dc49311a4d1fa5b5a1981ee"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "@types/d3-timer@3.0.2",
+      "type": "library",
+      "name": "@types/d3-timer",
+      "version": "3.0.2",
+      "scope": "required",
+      "description": "TypeScript definitions for d3-timer",
+      "purl": "pkg:npm/%40types/d3-timer@3.0.2",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@types/d3-timer"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@types/d3-timer/-/d3-timer-3.0.2.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/DefinitelyTyped/DefinitelyTyped.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/d3-timer"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "3ecdd3f04f1d6436a6e9f5323623247a42b75d4b1a5048a4fa274ef7f6233ed7e3daaaee17cb450574bb5e1b44e2221704bc6198b8cfdd25e92e155fdb523d2f"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "clsx@2.1.1",
+      "type": "library",
+      "name": "clsx",
+      "version": "2.1.1",
+      "scope": "required",
+      "author": "Luke Edwards",
+      "description": "A tiny (239B) utility for constructing className strings conditionally.",
+      "purl": "pkg:npm/clsx@2.1.1",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/clsx"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/clsx/-/clsx-2.1.1.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/lukeed/clsx.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/lukeed/clsx#readme"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/lukeed/clsx/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "7989b441606d52b0566561b4777f3a386030d7a67df793e2395a3607b6e35926c779d1a5e5ed1959aabae6438681448d7ac1080e407d2126d383f24af5d84264"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "d3-array@3.2.4",
+      "type": "library",
+      "name": "d3-array",
+      "version": "3.2.4",
+      "scope": "required",
+      "author": "Mike Bostock",
+      "description": "Array manipulation, ordering, searching, summarizing, etc.",
+      "purl": "pkg:npm/d3-array@3.2.4",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/d3-array"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/d3-array/-/d3-array-3.2.4.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/d3/d3-array.git"
+        },
+        {
+          "type": "website",
+          "url": "https://d3js.org/d3-array/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/d3/d3-array/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "b5d4009b2035f22e09ef0a6ba58abc0a5731672dd20b7d5031e072c8217246dec1547751110679969ce87b998511865459efa8abc1c1be4f498e989bc8457826"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "d3-color@3.1.0",
+      "type": "library",
+      "name": "d3-color",
+      "version": "3.1.0",
+      "scope": "required",
+      "author": "Mike Bostock",
+      "description": "Color spaces! RGB, HSL, Cubehelix, Lab and HCL (Lch).",
+      "purl": "pkg:npm/d3-color@3.1.0",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/d3-color"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/d3-color/-/d3-color-3.1.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/d3/d3-color.git"
+        },
+        {
+          "type": "website",
+          "url": "https://d3js.org/d3-color/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/d3/d3-color/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "ce0fdc85b5f2781b4c4352db0ff592a16d83a42dc8d26a663dd5beca74538ffc760c0598ac863ba9e6481e2768cf0576e26e226afaf5e653702302f14663b184"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "d3-ease@3.0.1",
+      "type": "library",
+      "name": "d3-ease",
+      "version": "3.0.1",
+      "scope": "required",
+      "author": "Mike Bostock",
+      "description": "Easing functions for smooth animation.",
+      "purl": "pkg:npm/d3-ease@3.0.1",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/d3-ease"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/d3-ease/-/d3-ease-3.0.1.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/d3/d3-ease.git"
+        },
+        {
+          "type": "website",
+          "url": "https://d3js.org/d3-ease/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/d3/d3-ease/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "c11fd72b70f75dc2c8670a5bbd0c10e5f2bef1891db358a9ec0d93c5ed32c6771749dab52fdb24706edb95c79d90e5fe65c83118098b5f516b4466c00f0ce2d3"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "d3-format@3.1.2",
+      "type": "library",
+      "name": "d3-format",
+      "version": "3.1.2",
+      "scope": "required",
+      "author": "Mike Bostock",
+      "description": "Format numbers for human consumption.",
+      "purl": "pkg:npm/d3-format@3.1.2",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/d3-format"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/d3-format/-/d3-format-3.1.2.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/d3/d3-format.git"
+        },
+        {
+          "type": "website",
+          "url": "https://d3js.org/d3-format/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/d3/d3-format/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "0090dd60e767c910d5e5be80ae297308f3f07357a3907728c856abaa53ea4fbcd162385abdc4f7b92aea70cbec821d828283db2b7442c321da572c5870fd80ae"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "d3-interpolate@3.0.1",
+      "type": "library",
+      "name": "d3-interpolate",
+      "version": "3.0.1",
+      "scope": "required",
+      "author": "Mike Bostock",
+      "description": "Interpolate numbers, colors, strings, arrays, objects, whatever!",
+      "purl": "pkg:npm/d3-interpolate@3.0.1",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/d3-interpolate"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/d3-interpolate/-/d3-interpolate-3.0.1.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/d3/d3-interpolate.git"
+        },
+        {
+          "type": "website",
+          "url": "https://d3js.org/d3-interpolate/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/d3/d3-interpolate/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "ddb62cd6b383df7ba8f1aa897ca3f72563c089b830f199b6f8bf6f04a107276460faf89347ba39326bf999972278df854586803965f94890135fa9353d6cfbda"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "d3-path@3.1.0",
+      "type": "library",
+      "name": "d3-path",
+      "version": "3.1.0",
+      "scope": "required",
+      "author": "Mike Bostock",
+      "description": "Serialize Canvas path commands to SVG.",
+      "purl": "pkg:npm/d3-path@3.1.0",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/d3-path"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/d3-path/-/d3-path-3.1.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/d3/d3-path.git"
+        },
+        {
+          "type": "website",
+          "url": "https://d3js.org/d3-path/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/d3/d3-path/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "a7728fe4709ffdbbe305248ab9789de99aa28f1ef021f356f89fe668fb3e8b0477e5ab792426cb513d0bcc5d5c9e36c21d686acd04c83762697bca5179b20415"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "d3-scale@4.0.2",
+      "type": "library",
+      "name": "d3-scale",
+      "version": "4.0.2",
+      "scope": "required",
+      "author": "Mike Bostock",
+      "description": "Encodings that map abstract data to visual representation.",
+      "purl": "pkg:npm/d3-scale@4.0.2",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/d3-scale"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/d3-scale/-/d3-scale-4.0.2.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/d3/d3-scale.git"
+        },
+        {
+          "type": "website",
+          "url": "https://d3js.org/d3-scale/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/d3/d3-scale/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "1995b8eb8835487eda83763b8578dff11a14b80148aa494e02adcc465e0e69669b4c5258f4f37f1356249615cb87e390ddf33dc92da73a40a84be58b67a92fc5"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "d3-shape@3.2.0",
+      "type": "library",
+      "name": "d3-shape",
+      "version": "3.2.0",
+      "scope": "required",
+      "author": "Mike Bostock",
+      "description": "Graphical primitives for visualization, such as lines and areas.",
+      "purl": "pkg:npm/d3-shape@3.2.0",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/d3-shape"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/d3-shape/-/d3-shape-3.2.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/d3/d3-shape.git"
+        },
+        {
+          "type": "website",
+          "url": "https://d3js.org/d3-shape/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/d3/d3-shape/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "49a2c1bb01a6dcc395891ab600193778ba31c1910ba47eb3865dc56c0a09ed59b58287cac7a125d486f9cf6dcd504845f40b0697bcbe7732dee42c36000ac64c"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "d3-time@3.1.0",
+      "type": "library",
+      "name": "d3-time",
+      "version": "3.1.0",
+      "scope": "required",
+      "author": "Mike Bostock",
+      "description": "A calculator for humanity’s peculiar conventions of time.",
+      "purl": "pkg:npm/d3-time@3.1.0",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/d3-time"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/d3-time/-/d3-time-3.1.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/d3/d3-time.git"
+        },
+        {
+          "type": "website",
+          "url": "https://d3js.org/d3-time/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/d3/d3-time/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "56a2a3cc12de8db48c4f82206e65600e3a6462b3565182676c21a8f3be2eecc30a216b082d15fe3a95ff81393c32a8e94f503f73a1d8d9d080efb64dd25910d9"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "d3-time-format@4.1.0",
+      "type": "library",
+      "name": "d3-time-format",
+      "version": "4.1.0",
+      "scope": "required",
+      "author": "Mike Bostock",
+      "description": "A JavaScript time formatter and parser inspired by strftime and strptime.",
+      "purl": "pkg:npm/d3-time-format@4.1.0",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/d3-time-format"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/d3-time-format/-/d3-time-format-4.1.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/d3/d3-time-format.git"
+        },
+        {
+          "type": "website",
+          "url": "https://d3js.org/d3-time-format/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/d3/d3-time-format/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "749c4f065cc2ecdba00763c32f0a3d43c2624d1dccddee3f5c0364ade29253117cbef5caaa6d587eae10e5d97c6ee765ba745595451a0d4805b7b780f03e8d2e"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "d3-timer@3.0.1",
+      "type": "library",
+      "name": "d3-timer",
+      "version": "3.0.1",
+      "scope": "required",
+      "author": "Mike Bostock",
+      "description": "An efficient queue capable of managing thousands of concurrent animations.",
+      "purl": "pkg:npm/d3-timer@3.0.1",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/d3-timer"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/d3-timer/-/d3-timer-3.0.1.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/d3/d3-timer.git"
+        },
+        {
+          "type": "website",
+          "url": "https://d3js.org/d3-timer/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/d3/d3-timer/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "9dd7c9fc9c7131dde7c37d6ec8aa18da76a2bc5fabdbd57e2dcd2cbd9c5ed49bef2119a2f2152caccbdd3b0812d68eae0479a2cfdd60790d3294f3f46a3d5550"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "date-fns@3.6.0",
+      "type": "library",
+      "name": "date-fns",
+      "version": "3.6.0",
+      "scope": "required",
+      "description": "Modern JavaScript date utility library",
+      "purl": "pkg:npm/date-fns@3.6.0",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/date-fns"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/date-fns/-/date-fns-3.6.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/date-fns/date-fns.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/date-fns/date-fns#readme"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/date-fns/date-fns/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "7d11d31bc83f1a27fe912879d2068611d4e87a681f8fbe1a457decc2d8a8b9ba22a792432c0c8313d175d671cc21cbce69778e0ba0fb4a93618bbb85c81ed4c3"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "decimal.js-light@2.5.1",
+      "type": "library",
+      "name": "decimal.js-light",
+      "version": "2.5.1",
+      "scope": "required",
+      "author": "Michael Mclaughlin",
+      "description": "An arbitrary-precision Decimal type for JavaScript.",
+      "purl": "pkg:npm/decimal.js-light@2.5.1",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/decimal.js-light"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/decimal.js-light/-/decimal.js-light-2.5.1.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/MikeMcl/decimal.js-light.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/MikeMcl/decimal.js-light#readme"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/MikeMcl/decimal.js-light/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "a88305a533199a7cbe30c222b4007a0fb8953c4a2b570e984115a4bdaad3913e2d05e48b2e21f37308faab4326612142895a62a8f253244608ae970fcd5108be"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "dom-helpers@5.2.1",
+      "type": "library",
+      "name": "dom-helpers",
+      "version": "5.2.1",
+      "scope": "required",
+      "author": "Jason Quense",
+      "description": "tiny modular DOM lib for ie9+",
+      "purl": "pkg:npm/dom-helpers@5.2.1",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/dom-helpers"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/dom-helpers/-/dom-helpers-5.2.1.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/react-bootstrap/dom-helpers.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/react-bootstrap/dom-helpers#readme"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/react-bootstrap/dom-helpers/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "9d109aec22b7553accd8d986908cb871b2bb219960044fcf60c9f9e6bad779faf9c570cfd0b76d7cf9db9450e855d7007ec949ee8afa8aa0149f1d0208621640"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "eventemitter3@4.0.7",
+      "type": "library",
+      "name": "eventemitter3",
+      "version": "4.0.7",
+      "scope": "required",
+      "author": "Arnout Kazemier",
+      "description": "EventEmitter3 focuses on performance while maintaining a Node.js AND browser compatible interface.",
+      "purl": "pkg:npm/eventemitter3@4.0.7",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/eventemitter3"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/eventemitter3/-/eventemitter3-4.0.7.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git://github.com/primus/eventemitter3.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/primus/eventemitter3#readme"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/primus/eventemitter3/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "f20b870590b02a716161d1ebdb2b2e45612b4f08683765fc5c42d196b470a667de6368e3b94378b5a40cb142ca515a352b80ef665fb4a607f2a32b07c6f9af13"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "fast-equals@5.4.0",
+      "type": "library",
+      "name": "fast-equals",
+      "version": "5.4.0",
+      "scope": "required",
+      "author": "tony_quetano@planttheidea.com",
+      "description": "A blazing fast equality comparison, either shallow or deep",
+      "purl": "pkg:npm/fast-equals@5.4.0",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/fast-equals"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/fast-equals/-/fast-equals-5.4.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/planttheidea/fast-equals.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/planttheidea/fast-equals#readme"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/planttheidea/fast-equals/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "8edd835bf68d14dc247bb01477e67e7baa73dfd28ee6bcdd6db142836b0669f4b89a4d77308ed9f0ee73f5c003367e658463832202f0ba0e9364ed9cb5fee473"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "internmap@2.0.3",
+      "type": "library",
+      "name": "internmap",
+      "version": "2.0.3",
+      "scope": "required",
+      "author": "Mike Bostock",
+      "description": "Map and Set with automatic key interning",
+      "purl": "pkg:npm/internmap@2.0.3",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/internmap"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/internmap/-/internmap-2.0.3.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/mbostock/internmap.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/mbostock/internmap/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/mbostock/internmap/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "e4787b635c106ef639a281a03db0da2f98982c03f331352b8ccba5b241cb1fac27bff03ed6ae6b8046a2baa12307ea3119721566cd4517e47f28f37765241862"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "lodash@4.18.1",
+      "type": "library",
+      "name": "lodash",
+      "version": "4.18.1",
+      "scope": "required",
+      "author": "John-David Dalton",
+      "description": "Lodash modular utilities.",
+      "purl": "pkg:npm/lodash@4.18.1",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/lodash"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/lodash/-/lodash-4.18.1.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/lodash/lodash.git"
+        },
+        {
+          "type": "website",
+          "url": "https://lodash.com/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/lodash/lodash/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "74c22789c4cf544f1dd5ee68b5fc269a3971919a14a6254bc32793754b22fc26a3fe07f3cdb941702139b111d5fc0b23b829b15abb5ed93346498b82782abed1"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "loose-envify@1.4.0",
+      "type": "library",
+      "name": "loose-envify",
+      "version": "1.4.0",
+      "scope": "required",
+      "author": "Andres Suarez",
+      "description": "Fast (and loose) selective `process.env` replacer using js-tokens instead of an AST",
+      "purl": "pkg:npm/loose-envify@1.4.0",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/loose-envify"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/loose-envify/-/loose-envify-1.4.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git://github.com/zertosh/loose-envify.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/zertosh/loose-envify"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/zertosh/loose-envify/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "972bb13c6aff59f86b95e9b608bfd472751cd7372a280226043cee918ed8e45ff242235d928ebe7d12debe5c351e03324b0edfeb5d54218e34f04b71452a0add"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "prop-types@15.8.1",
+      "type": "library",
+      "name": "prop-types",
+      "version": "15.8.1",
+      "scope": "required",
+      "description": "Runtime type checking for React props and similar objects.",
+      "purl": "pkg:npm/prop-types@15.8.1",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/prop-types"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/prop-types/-/prop-types-15.8.1.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/facebook/prop-types.git"
+        },
+        {
+          "type": "website",
+          "url": "https://facebook.github.io/react/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/facebook/prop-types/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "a23f3b0a064809dba5528868815011ec08e50b4df6ed4e1e9782fa780bcea827ae74c0d553435384d695f9bf437f87578123f58173139cf7617deff6a831f972"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "react-is@16.13.1",
+      "type": "library",
+      "name": "react-is",
+      "version": "16.13.1",
+      "scope": "required",
+      "description": "Brand checking of React Elements.",
+      "purl": "pkg:npm/react-is@16.13.1",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/prop-types/node_modules/react-is"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/react-is/-/react-is-16.13.1.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/facebook/react.git"
+        },
+        {
+          "type": "website",
+          "url": "https://reactjs.org/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/facebook/react/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "db87baca71361fe38ab7892ab0ebcd77c901a55eb9ce8c5b038055b04381dc0455590922fc31f3694a02e4ab8e37f06271c0da0824d906e39c7d9b3bd2447c6d"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "react@18.3.1",
+      "type": "library",
+      "name": "react",
+      "version": "18.3.1",
+      "scope": "required",
+      "description": "React is a JavaScript library for building user interfaces.",
+      "purl": "pkg:npm/react@18.3.1",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/react"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/react/-/react-18.3.1.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/facebook/react.git"
+        },
+        {
+          "type": "website",
+          "url": "https://reactjs.org/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/facebook/react/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "c12fa1020252851d0a844bcf240adfb8f54dd7e1f3d6dd18ea7e632eb1906e46f8bab80f13fd11bdefb590c075bffa16807826e1621c57e8bb176a53563fb689"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "react-dom@18.3.1",
+      "type": "library",
+      "name": "react-dom",
+      "version": "18.3.1",
+      "scope": "required",
+      "description": "React package for working with the DOM.",
+      "purl": "pkg:npm/react-dom@18.3.1",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/react-dom"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/react-dom/-/react-dom-18.3.1.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/facebook/react.git"
+        },
+        {
+          "type": "website",
+          "url": "https://reactjs.org/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/facebook/react/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "e66e2740aa7ead945bd3d2cd1f9f463380714e1f76e75ff295b2886e97bb4e91b17c9fbd92fe812e42c15c88e3b296e06e720136a948db7b519d3593d2c9d423"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "react-is@18.3.1",
+      "type": "library",
+      "name": "react-is",
+      "version": "18.3.1",
+      "scope": "required",
+      "description": "Brand checking of React Elements.",
+      "purl": "pkg:npm/react-is@18.3.1",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/react-is"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/react-is/-/react-is-18.3.1.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/facebook/react.git"
+        },
+        {
+          "type": "website",
+          "url": "https://reactjs.org/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/facebook/react/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "fcb2cc5726acd258e302da1888fa9888bf15597cd451d4e1ae6539fa7db40d9bfe6be0a54687af533c3927153e21e879fdcf3bcada13055f46d4588a7cd25d9a"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "react-router@6.30.4",
+      "type": "library",
+      "name": "react-router",
+      "version": "6.30.4",
+      "scope": "required",
+      "author": "Remix Software",
+      "description": "Declarative routing for React",
+      "purl": "pkg:npm/react-router@6.30.4",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/react-router"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/react-router/-/react-router-6.30.4.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/remix-run/react-router.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/remix-run/react-router#readme"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/remix-run/react-router/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "49552c0def83c9b1ccfd6998288558859875a390dcb9fd7ac8ce968c6d3643d5d514c6482721d8870aebe9b1415d99153facfaf64364332042ba3b7c15a14b24"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "react-router-dom@6.30.4",
+      "type": "library",
+      "name": "react-router-dom",
+      "version": "6.30.4",
+      "scope": "required",
+      "author": "Remix Software",
+      "description": "Declarative routing for React web applications",
+      "purl": "pkg:npm/react-router-dom@6.30.4",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/react-router-dom"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/react-router-dom/-/react-router-dom-6.30.4.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/remix-run/react-router.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/remix-run/react-router#readme"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/remix-run/react-router/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "ab81ef365fa69837644b483e32a88164db5e4090ae8a65a83b21cccb84ff4502c09fd676f7e13dd505d16b13ae8de325d874f34524b42853ddee5c57dcf8d5d1"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "react-smooth@4.0.4",
+      "type": "library",
+      "name": "react-smooth",
+      "version": "4.0.4",
+      "scope": "required",
+      "author": "JasonHzq",
+      "description": "react animation library",
+      "purl": "pkg:npm/react-smooth@4.0.4",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/react-smooth"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/react-smooth/-/react-smooth-4.0.4.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/recharts/react-smooth.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/recharts/react-smooth#readme"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/recharts/react-smooth/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "82718a4e9630a8bd088a2d3d807a1b36896f5f82a2ab83cac7a7960426188b1fbc71dc3e706a37768f74ea5d4d04f2a4496c750e0842d5d9561bd2f6b8677ad5"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "react-transition-group@4.4.5",
+      "type": "library",
+      "name": "react-transition-group",
+      "version": "4.4.5",
+      "scope": "required",
+      "description": "A react component toolset for managing animations",
+      "purl": "pkg:npm/react-transition-group@4.4.5",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/react-transition-group"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/react-transition-group/-/react-transition-group-4.4.5.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/reactjs/react-transition-group.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/reactjs/react-transition-group#readme"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/reactjs/react-transition-group/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "a5971dd4c089a222a2051d8d471782460d77b825dbc9d3e7981e0439e46b63be3cd2a3563bc2088101bace50e49bab9132c5115cfb8aab4196b62339f5ae50ea"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "recharts@2.15.4",
+      "type": "library",
+      "name": "recharts",
+      "version": "2.15.4",
+      "scope": "required",
+      "author": "recharts group",
+      "description": "React charts",
+      "purl": "pkg:npm/recharts@2.15.4",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/recharts"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/recharts/-/recharts-2.15.4.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/recharts/recharts.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/recharts/recharts"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/recharts/recharts/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "513feae9fc12ddcd5d1db5efdae160609f413051eeddfc2777b01865a110857b98438860b312efb145f319d29e66b5b9c68a730c2bee036378d5627cf08ef323"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "recharts-scale@0.4.5",
+      "type": "library",
+      "name": "recharts-scale",
+      "version": "0.4.5",
+      "scope": "required",
+      "author": "recharts group",
+      "description": "Scale of Cartesian Coordinates",
+      "purl": "pkg:npm/recharts-scale@0.4.5",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/recharts-scale"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/recharts-scale/-/recharts-scale-0.4.5.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/recharts/recharts-scale.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/recharts/recharts-scale"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/recharts/recharts-scale/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "922bcd14efb439c50dbbb8d0aae2d7031cf5148c198fc9eb8fe62438a739ebde0d6e30af713e9a499888ccdcddd8aba5e28e2b4eda3c41547d94c36dc43e06d7"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "scheduler@0.23.2",
+      "type": "library",
+      "name": "scheduler",
+      "version": "0.23.2",
+      "scope": "required",
+      "description": "Cooperative scheduler for the browser environment.",
+      "purl": "pkg:npm/scheduler@0.23.2",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/scheduler"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/scheduler/-/scheduler-0.23.2.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/facebook/react.git"
+        },
+        {
+          "type": "website",
+          "url": "https://reactjs.org/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/facebook/react/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "50e4a1b0fc33ecdacc52a851eadd215a315dbaf3b36edbfbb680c7d7f848adf44d2030679c159dd02c094c6bd3a67815966c0609d3fdfd997fb55ac3a9cb98cd"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "tiny-invariant@1.3.3",
+      "type": "library",
+      "name": "tiny-invariant",
+      "version": "1.3.3",
+      "scope": "required",
+      "author": "Alex Reardon",
+      "description": "A tiny invariant function",
+      "purl": "pkg:npm/tiny-invariant@1.3.3",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/tiny-invariant"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/tiny-invariant/-/tiny-invariant-1.3.3.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/alexreardon/tiny-invariant.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/alexreardon/tiny-invariant#readme"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/alexreardon/tiny-invariant/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "f856c13c4d68f50018bef89abbfa82e5213771ac36d6adf192f58a06d8dae6f82a3962071c9de2a1aab554f7e7fd2cea72dcf66d4fe861e29df7fcf904bf8f56"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "victory-vendor@36.9.2",
+      "type": "library",
+      "name": "victory-vendor",
+      "version": "36.9.2",
+      "scope": "required",
+      "author": "Formidable",
+      "description": "Vendored dependencies for Victory",
+      "purl": "pkg:npm/victory-vendor@36.9.2",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/victory-vendor"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/victory-vendor/-/victory-vendor-36.9.2.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/FormidableLabs/victory.git"
+        },
+        {
+          "type": "website",
+          "url": "https://commerce.nearform.com/open-source/victory"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/FormidableLabs/victory/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "3e7a5040cbb197061da1c0bc7c826a557be4795887633a2d23e349ac2b9abf4658168abdd76647064de609eba3fb9fd5a6874e8cf7b5cf4164da2860ce55ea8d"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT AND ISC"
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "iphouse@0.0.0",
+      "dependsOn": [
+        "date-fns@3.6.0",
+        "react@18.3.1",
+        "react-dom@18.3.1",
+        "react-router-dom@6.30.4",
+        "recharts@2.15.4"
+      ]
+    },
+    {
+      "ref": "@babel/runtime@7.29.7",
+      "dependsOn": []
+    },
+    {
+      "ref": "@remix-run/router@1.23.3",
+      "dependsOn": []
+    },
+    {
+      "ref": "@types/d3-array@3.2.2",
+      "dependsOn": []
+    },
+    {
+      "ref": "@types/d3-color@3.1.3",
+      "dependsOn": []
+    },
+    {
+      "ref": "@types/d3-ease@3.0.2",
+      "dependsOn": []
+    },
+    {
+      "ref": "@types/d3-interpolate@3.0.4",
+      "dependsOn": [
+        "@types/d3-color@3.1.3"
+      ]
+    },
+    {
+      "ref": "@types/d3-path@3.1.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "@types/d3-scale@4.0.9",
+      "dependsOn": [
+        "@types/d3-time@3.0.4"
+      ]
+    },
+    {
+      "ref": "@types/d3-shape@3.1.8",
+      "dependsOn": [
+        "@types/d3-path@3.1.1"
+      ]
+    },
+    {
+      "ref": "@types/d3-time@3.0.4",
+      "dependsOn": []
+    },
+    {
+      "ref": "@types/d3-timer@3.0.2",
+      "dependsOn": []
+    },
+    {
+      "ref": "clsx@2.1.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "d3-array@3.2.4",
+      "dependsOn": [
+        "internmap@2.0.3"
+      ]
+    },
+    {
+      "ref": "d3-color@3.1.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "d3-ease@3.0.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "d3-format@3.1.2",
+      "dependsOn": []
+    },
+    {
+      "ref": "d3-interpolate@3.0.1",
+      "dependsOn": [
+        "d3-color@3.1.0"
+      ]
+    },
+    {
+      "ref": "d3-path@3.1.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "d3-scale@4.0.2",
+      "dependsOn": [
+        "d3-array@3.2.4",
+        "d3-format@3.1.2",
+        "d3-interpolate@3.0.1",
+        "d3-time@3.1.0",
+        "d3-time-format@4.1.0"
+      ]
+    },
+    {
+      "ref": "d3-shape@3.2.0",
+      "dependsOn": [
+        "d3-path@3.1.0"
+      ]
+    },
+    {
+      "ref": "d3-time@3.1.0",
+      "dependsOn": [
+        "d3-array@3.2.4"
+      ]
+    },
+    {
+      "ref": "d3-time-format@4.1.0",
+      "dependsOn": [
+        "d3-time@3.1.0"
+      ]
+    },
+    {
+      "ref": "d3-timer@3.0.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "date-fns@3.6.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "decimal.js-light@2.5.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "dom-helpers@5.2.1",
+      "dependsOn": [
+        "@babel/runtime@7.29.7"
+      ]
+    },
+    {
+      "ref": "eventemitter3@4.0.7",
+      "dependsOn": []
+    },
+    {
+      "ref": "fast-equals@5.4.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "internmap@2.0.3",
+      "dependsOn": []
+    },
+    {
+      "ref": "lodash@4.18.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "loose-envify@1.4.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "prop-types@15.8.1",
+      "dependsOn": [
+        "loose-envify@1.4.0",
+        "react-is@16.13.1"
+      ]
+    },
+    {
+      "ref": "react-is@16.13.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "react@18.3.1",
+      "dependsOn": [
+        "loose-envify@1.4.0"
+      ]
+    },
+    {
+      "ref": "react-dom@18.3.1",
+      "dependsOn": [
+        "react@18.3.1",
+        "loose-envify@1.4.0",
+        "scheduler@0.23.2"
+      ]
+    },
+    {
+      "ref": "react-is@18.3.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "react-router@6.30.4",
+      "dependsOn": [
+        "react@18.3.1",
+        "@remix-run/router@1.23.3"
+      ]
+    },
+    {
+      "ref": "react-router-dom@6.30.4",
+      "dependsOn": [
+        "react@18.3.1",
+        "react-dom@18.3.1",
+        "@remix-run/router@1.23.3",
+        "react-router@6.30.4"
+      ]
+    },
+    {
+      "ref": "react-smooth@4.0.4",
+      "dependsOn": [
+        "react@18.3.1",
+        "react-dom@18.3.1",
+        "fast-equals@5.4.0",
+        "prop-types@15.8.1",
+        "react-transition-group@4.4.5"
+      ]
+    },
+    {
+      "ref": "react-transition-group@4.4.5",
+      "dependsOn": [
+        "react@18.3.1",
+        "react-dom@18.3.1",
+        "@babel/runtime@7.29.7",
+        "dom-helpers@5.2.1",
+        "loose-envify@1.4.0",
+        "prop-types@15.8.1"
+      ]
+    },
+    {
+      "ref": "recharts@2.15.4",
+      "dependsOn": [
+        "react@18.3.1",
+        "react-dom@18.3.1",
+        "clsx@2.1.1",
+        "eventemitter3@4.0.7",
+        "lodash@4.18.1",
+        "react-is@18.3.1",
+        "react-smooth@4.0.4",
+        "recharts-scale@0.4.5",
+        "tiny-invariant@1.3.3",
+        "victory-vendor@36.9.2"
+      ]
+    },
+    {
+      "ref": "recharts-scale@0.4.5",
+      "dependsOn": [
+        "decimal.js-light@2.5.1"
+      ]
+    },
+    {
+      "ref": "scheduler@0.23.2",
+      "dependsOn": [
+        "loose-envify@1.4.0"
+      ]
+    },
+    {
+      "ref": "tiny-invariant@1.3.3",
+      "dependsOn": []
+    },
+    {
+      "ref": "victory-vendor@36.9.2",
+      "dependsOn": [
+        "@types/d3-array@3.2.2",
+        "@types/d3-ease@3.0.2",
+        "@types/d3-interpolate@3.0.4",
+        "@types/d3-scale@4.0.9",
+        "@types/d3-shape@3.1.8",
+        "@types/d3-time@3.0.4",
+        "@types/d3-timer@3.0.2",
+        "d3-array@3.2.4",
+        "d3-ease@3.0.1",
+        "d3-interpolate@3.0.1",
+        "d3-scale@4.0.2",
+        "d3-shape@3.2.0",
+        "d3-time@3.1.0",
+        "d3-timer@3.0.1"
+      ]
+    }
+  ]
+}

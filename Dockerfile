@@ -3,7 +3,15 @@ FROM node:20-alpine AS frontend-builder
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci
+
+# --ignore-scripts blocks pre/post-install hooks (the primary npm supply-chain
+# attack vector). None of our 14 direct dependencies require install scripts.
+RUN npm ci --ignore-scripts
+
+# Fail the build on high/critical CVEs in anything that ships to the browser.
+# Dev-only tooling (vite/esbuild) is excluded via --omit=dev: it never reaches
+# the runtime image, so it must not be able to block a production deploy.
+RUN npm audit --omit=dev --audit-level=high
 
 COPY . .
 RUN npm run build

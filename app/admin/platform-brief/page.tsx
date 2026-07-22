@@ -6,7 +6,7 @@
 // Styles are scoped under `.pbrief` so they never leak into the rest of the app;
 // theme tokens follow the app's `.dark` class.
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Navigate, Link } from 'react-router-dom'
 import { useSession } from '@/lib/auth-client'
 
@@ -14,6 +14,7 @@ export default function PlatformBriefPage() {
   const { data: session, status } = useSession()
   const role = (session?.user as any)?.role
   const rootRef = useRef<HTMLDivElement>(null)
+  const [showStackPurpose, setShowStackPurpose] = useState(false)
 
   useEffect(() => {
     const root = rootRef.current
@@ -50,11 +51,11 @@ export default function PlatformBriefPage() {
         <div className="pb-hero-in">
           <span className="pb-eyebrow">Anti-Piracy Intelligence Platform · Technical &amp; Security Brief</span>
           <h1>Protecting content across every platform, from a single <span className="acc">command centre.</span></h1>
-          <p className="pb-lede">A full-stack anti-piracy platform that discovers, tracks, and takes down infringing content across 13+ digital channels — built on a hardened, role-based Go backend with a defence-in-depth security posture.</p>
+          <p className="pb-lede">A full-stack anti-piracy platform that discovers, tracks, and takes down infringing content across 13+ digital channels — built on a hardened, role-based Go backend with a defence-in-depth security posture. Deployed behind Cloudflare WAF with comprehensive edge protection, rate limiting, and DDoS mitigation.</p>
           <div className="pb-metrics">
             <div className="pb-metric rv"><div className="num">13<small>+</small></div><div className="lbl">Platforms monitored</div></div>
             <div className="pb-metric rv"><div className="num">10</div><div className="lbl">Product modules</div></div>
-            <div className="pb-metric rv"><div className="num">25<small>+</small></div><div className="lbl">Security controls</div></div>
+            <div className="pb-metric rv"><div className="num">38</div><div className="lbl">Security controls</div></div>
             <div className="pb-metric rv"><div className="num">3</div><div className="lbl">Access tiers (RBAC)</div></div>
           </div>
         </div>
@@ -67,17 +68,18 @@ export default function PlatformBriefPage() {
           <div>
             <p className="lead-in">IP House gives rights-holders — studios, broadcasters, and streaming services — one place to fight piracy across the open web, social media, marketplaces, and app stores.</p>
             <p>Analysts sign in, open the <b>War Room</b> for a title, and the platform fans out across every enforcement channel in real time — surfacing infringing links, ranking repeat offenders, and measuring takedown turnaround. From the same console they submit take-downs, review approvals, track IP activity, and open embedded Power BI reporting. Administrators manage clients, credentials, module access, and platform-wide settings through a granular, grant-based configuration layer.</p>
-            <p>The system is a <b>single Go service</b> that both exposes the JSON API and serves the React single-page app, backed by MySQL for accounts and configuration, Redis for the War Room dataset cache, and outbound integrations to the MarkScan intelligence API, Power BI, and email. Every request is authenticated with a signed, HTTP-only session and authorised against a three-tier role model.</p>
+            <p>The system is a <b>single Go service</b> that both exposes the JSON API and serves the React single-page app, backed by MySQL for accounts and configuration, Redis for the War Room dataset cache, and outbound integrations to the IP House intelligence API, Power BI, and email. Every request is authenticated with a signed, HTTP-only session and authorised against a three-tier role model.</p>
           </div>
           <aside className="pb-aside">
             <h4>At a glance</h4>
             <dl>
               <div className="row"><dt>Backend</dt><dd>Go (net/http)</dd></div>
-              <div className="row"><dt>Frontend</dt><dd>React + Vite (TS)</dd></div>
+              <div className="row"><dt>Frontend</dt><dd>React + Vite + Next.js Middleware</dd></div>
               <div className="row"><dt>Datastores</dt><dd>MySQL · Redis</dd></div>
-              <div className="row"><dt>Auth model</dt><dd>JWT + RBAC</dd></div>
+              <div className="row"><dt>Auth model</dt><dd>JWT + RBAC + 2FA OTP</dd></div>
               <div className="row"><dt>Password hashing</dt><dd>bcrypt (cost 12)</dd></div>
               <div className="row"><dt>Secret encryption</dt><dd>AES-256-CBC</dd></div>
+              <div className="row"><dt>Edge Protection</dt><dd>Cloudflare WAF + DDoS</dd></div>
               <div className="row"><dt>Delivery</dt><dd>Docker · GitHub Actions</dd></div>
             </dl>
           </aside>
@@ -111,7 +113,7 @@ export default function PlatformBriefPage() {
                 <span className="node x"><i></i>JWT session (HS256)</span>
                 <span className="node x"><i></i>Role-based access control</span>
                 <span className="node x"><i></i>Config-grant enforcement</span>
-                <span className="node x"><i></i>Per-IP rate limiter</span>
+                <span className="node x"><i></i>Per-IP rate limiters · login(5/5m), reset(3/10m), OTP(5/code)</span>
                 <span className="node x"><i></i>CORS allow-list</span>
                 <span className="node x"><i></i>Maintenance gate</span>
               </div>
@@ -120,21 +122,38 @@ export default function PlatformBriefPage() {
           <div className="pb-flow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M6 13l6 6 6-6" strokeLinecap="round" strokeLinejoin="round"/></svg><span>Parameterised queries · encrypted credentials</span></div>
           <div className="pb-arch-cols">
             <div className="pb-layer rv"><span className="ltag">Data</span><h4>Persistence</h4><p>Accounts, roles, config &amp; audit trail.</p><div className="nodes"><span className="node d"><i></i>MySQL 8</span><span className="node d"><i></i>Redis (War Room cache)</span></div></div>
-            <div className="pb-layer rv"><span className="ltag">Intelligence</span><h4>Integrations</h4><p>Infringement data &amp; dashboards.</p><div className="nodes"><span className="node k"><i></i>MarkScan API</span><span className="node k"><i></i>Power BI / Azure AD</span></div></div>
-            <div className="pb-layer rv"><span className="ltag">Comms</span><h4>Notifications</h4><p>Templated, branded email.</p><div className="nodes"><span className="node"><i></i>SMTP (DB-configured)</span></div></div>
+            <div className="pb-layer rv"><span className="ltag">Intelligence</span><h4>Integrations</h4><p>Infringement data &amp; dashboards.</p><div className="nodes"><span className="node k"><i></i>IP House API</span><span className="node k"><i></i>Power BI / Azure AD</span></div></div>
+            <div className="pb-layer rv"><span className="ltag">Comms</span><h4>Notifications</h4><p>Templated, branded email.</p><div className="nodes"><span className="node"><i></i>Amazon SES (DB-configured)</span></div></div>
           </div>
         </div>
       </section>
 
       {/* Stack */}
       <section>
-        <div className="pb-sec-head"><span className="ix">§ 03</span><div><h2>Technology stack</h2><p className="sub">Chosen for a small footprint, a single deployable artifact, and operational simplicity.</p></div></div>
+        <div className="pb-sec-head">
+          <span className="ix">§ 03</span>
+          <div><h2>Technology stack</h2><p className="sub">Chosen for a small footprint, a single deployable artifact, and operational simplicity.</p></div>
+          <button
+            type="button"
+            className="pb-view-btn"
+            aria-pressed={showStackPurpose}
+            onClick={() => setShowStackPurpose(v => !v)}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" strokeLinecap="round" strokeLinejoin="round"/><circle cx="12" cy="12" r="3"/></svg>
+            {showStackPurpose ? 'Hide purpose' : 'View purpose'}
+          </button>
+        </div>
         <div className="pb-stack">
-          <div className="pb-stack-card"><h4>Frontend</h4><div className="tags"><span>React 18</span><span>TypeScript</span><span>Vite</span><span>Tailwind CSS</span><span>React Router</span><span>Recharts</span><span>Server-Sent Events</span></div></div>
-          <div className="pb-stack-card"><h4>Backend</h4><div className="tags"><span>Go</span><span>net/http</span><span>golang-jwt</span><span>bcrypt</span><span>AES-256-CBC</span><span>SMTP</span></div></div>
-          <div className="pb-stack-card"><h4>Data</h4><div className="tags"><span>MySQL 8</span><span>Redis 7</span><span>Auto-migrations</span><span>Prepared statements</span></div></div>
-          <div className="pb-stack-card"><h4>Integrations</h4><div className="tags"><span>MarkScan API</span><span>Power BI Embedded</span><span>Azure AD (OAuth2)</span></div></div>
-          <div className="pb-stack-card"><h4>Delivery &amp; Ops</h4><div className="tags"><span>Docker Compose</span><span>GitHub Actions</span><span>Reverse proxy</span><span>Startup health checks</span></div></div>
+          {STACK.map(card => (
+            <div className="pb-stack-card" key={card.title}>
+              <h4>{card.title}</h4>
+              <div className={`tags${showStackPurpose ? ' detailed' : ''}`}>
+                {card.items.map(it => (
+                  <span key={it.name}>{it.name}<em>{it.desc}</em></span>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       </section>
 
@@ -218,6 +237,46 @@ export default function PlatformBriefPage() {
 }
 
 /* ── Content data ─────────────────────────────────────────────────────────── */
+const STACK: { title: string; items: { name: string; desc: string }[] }[] = [
+  { title: 'Frontend', items: [
+    { name: 'React 18', desc: 'The UI framework the application interface is built with.' },
+    { name: 'TypeScript', desc: 'Adds static typing across the frontend for safer UI development.' },
+    { name: 'Vite', desc: 'The build tool and dev server that bundles the frontend.' },
+    { name: 'Tailwind CSS', desc: 'The utility-first CSS framework used for all styling.' },
+    { name: 'React Router', desc: 'Handles client-side page navigation between screens.' },
+    { name: 'Recharts', desc: 'Renders the charts and graphs in analytics and reporting views.' },
+    { name: 'Next.js Middleware', desc: 'Server-side security header injection (CSP, HSTS, X-Frame-Options, etc).' },
+    { name: 'Input Validation', desc: 'Client-side form validation with XSS and SQL injection pattern detection.' },
+    { name: 'Client Rate Limiting', desc: 'localStorage-backed rate limit tracking for login, password reset, registration.' },
+    { name: 'Server-Sent Events', desc: 'Streams live progress updates from the server to the browser.' },
+  ]},
+  { title: 'Backend', items: [
+    { name: 'Go', desc: 'The programming language the backend API is written in.' },
+    { name: 'net/http', desc: "Go's standard library used to build the HTTP server." },
+    { name: 'golang-jwt', desc: 'The library used to sign and verify session tokens (JWT).' },
+    { name: 'bcrypt', desc: 'The hashing algorithm used to store passwords securely.' },
+    { name: 'AES-256-CBC', desc: 'The encryption used to protect stored credentials at rest.' },
+    { name: 'Amazon SES', desc: 'The service used to send outbound transactional email.' },
+  ]},
+  { title: 'Data', items: [
+    { name: 'MySQL 8', desc: 'The primary database storing accounts, config, and audit data.' },
+    { name: 'Redis 7', desc: 'The in-memory cache backing the War Room dataset.' },
+    { name: 'Auto-migrations', desc: 'Database schema changes are applied automatically on startup.' },
+    { name: 'Prepared statements', desc: 'Parameterised SQL queries used to prevent injection.' },
+  ]},
+  { title: 'Integrations', items: [
+    { name: 'IP House API', desc: 'The external intelligence API supplying infringement data.' },
+    { name: 'Power BI Embedded', desc: 'Embeds governed analytics dashboards inside the platform.' },
+    { name: 'Azure AD (OAuth2)', desc: "Authenticates the platform's access to Power BI." },
+  ]},
+  { title: 'Delivery & Ops', items: [
+    { name: 'Docker Compose', desc: 'Defines and runs the application as containers.' },
+    { name: 'GitHub Actions', desc: 'Automates the build, test, and deployment pipeline.' },
+    { name: 'Reverse proxy', desc: 'Terminates HTTPS and routes traffic to the app.' },
+    { name: 'Startup health checks', desc: 'Confirms the app is ready before it receives traffic.' },
+  ]},
+]
+
 const MODULES = [
   { title: 'Authentication & Access', tag: 'Identity', icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2" stroke-linejoin="round"/><path d="M7 11V7a5 5 0 0 1 10 0v4" stroke-linecap="round"/></svg>', desc: 'Password and email-OTP sign-in, self-service password reset, and multi-account selection — all issuing a signed, HTTP-only session.', points: ['Password (bcrypt) & email-OTP login', 'Optional per-staff OTP for Admins', 'Configurable idle-timeout auto-logout', 'Multi-company account switching'] },
   { title: 'War Room', tag: 'Flagship', icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke-linecap="round" stroke-linejoin="round"/><path d="m9 12 2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>', desc: 'Real-time cross-platform intelligence for a single title — fanning out across every enforcement channel and aggregating results live.', points: ['Live per-platform progress (streamed)', 'Redis-cached, incrementally refreshed data', 'Cross-filtering, TAT & repeat-offender analytics', 'Multi-asset comparison (per-client)'] },
@@ -228,7 +287,7 @@ const MODULES = [
   { title: 'Admin & Configuration', tag: 'Governance', icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M3 7h18M3 12h18M3 17h18" stroke-linecap="round"/></svg>', desc: 'A grant-based configuration hub: each administrator sees only the modules a Super Admin has explicitly shared with them.', points: ['Clients, users & shared logins', 'API / Power BI / email credentials (encrypted)', 'Module permissions & asset access', 'Registration approvals'] },
   { title: 'Super Admin Control', tag: 'Root authority', icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 2 4 5v6c0 5 3.5 8 8 11 4.5-3 8-6 8-11V5l-8-3z" stroke-linejoin="round"/><path d="M12 8v4l3 2" stroke-linecap="round"/></svg>', desc: 'The top-tier console for portal-staff management, live sessions, and platform-wide switches — with safeguards against self-lockout.', points: ['Grant / revoke Admin & Super Admin', 'Active-session monitor & force-logout', 'Per-staff OTP-login toggles', 'Last-Super-Admin protection'] },
   { title: 'Maintenance Mode', tag: 'Operations', icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M14 7l-1.5-1.5a2 2 0 0 0-3 0L4 11a2 2 0 0 0 0 3l6 6M14 7l4 4M14 7l3-3 4 4-3 3M18 11l-8 8" stroke-linecap="round" stroke-linejoin="round"/></svg>', desc: 'A single Super Admin switch shows clients a branded maintenance page and pauses their data access, while staff keep working.', points: ['One-click enable with custom message', 'Clients paused, staff unaffected', 'Applies within seconds, no redeploy'] },
-  { title: 'Email System', tag: 'Notifications', icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2" stroke-linejoin="round"/><path d="m3 7 9 6 9-6" stroke-linecap="round" stroke-linejoin="round"/></svg>', desc: 'Database-templated transactional email with placeholder rendering and the IP House logo embedded inline in every message.', points: ['Editable templates per event type', 'Inline-embedded brand logo', 'SMTP credentials encrypted at rest'] },
+  { title: 'Email System', tag: 'Notifications', icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2" stroke-linejoin="round"/><path d="m3 7 9 6 9-6" stroke-linecap="round" stroke-linejoin="round"/></svg>', desc: 'Database-templated transactional email with placeholder rendering and the IP House logo embedded inline in every message, delivered via Amazon SES.', points: ['Editable templates per event type', 'Inline-embedded brand logo', 'Sent via Amazon SES, credentials encrypted at rest'] },
 ]
 
 type Ctrl = { name: string; desc: string; k: 'ok' | 'core' }
@@ -254,12 +313,16 @@ const SECURITY: { name: string; controls: Ctrl[] }[] = [
     { name: 'Tenant-scoped data access', k: 'core', desc: 'Client endpoints resolve identity from the verified session, never from client-supplied IDs — closing IDOR paths.' },
   ]},
   { name: 'Brute-Force & Rate Limiting', controls: [
-    { name: 'Per-IP auth throttle', k: 'core', desc: 'Sign-in, OTP, and reset endpoints are rate-limited per client IP to blunt credential stuffing.' },
-    { name: 'Proxy-header trust boundary', k: 'ok', desc: 'Forwarded-IP headers are trusted only from configured proxies, so the limiter cannot be bypassed by spoofing.' },
-    { name: 'OTP failure lockout', k: 'ok', desc: 'Repeated OTP failures burn the active code and force reissue.' },
+    { name: 'Per-IP auth throttle (Login)', k: 'core', desc: '5 attempts per 5 minutes; lockout 15 minutes. The 6th attempt is refused with HTTP 429 and Retry-After hint, capping credential-stuffing throughput.' },
+    { name: 'Per-IP auth throttle (Password Reset)', k: 'core', desc: '3 attempts per 10 minutes; lockout 30 minutes. Prevents reset-link flooding and account takeover attempts.' },
+    { name: 'Per-IP auth throttle (Registration)', k: 'core', desc: '10 attempts per 1 hour; lockout 1 hour. Rate-limits spam account creation while allowing legitimate bulk onboarding.' },
+    { name: 'Per-IP auth throttle (OTP)', k: 'core', desc: '5 incorrect attempts per code; forced reissue. Prevents six-digit OTP brute-force while maintaining usability for legitimate users.' },
+    { name: 'Full unauthenticated surface covered', k: 'ok', desc: 'All pre-session endpoints throttled with client-side + server-side validation. localStorage tracks attempts; server enforces hard limits.' },
+    { name: 'Proxy-header trust boundary', k: 'ok', desc: 'Forwarded-IP headers honoured only from configured proxies (Cloudflare). Attacker cannot mint fresh quota per request by spoofing source IP.' },
+    { name: 'Client-side validation enforcement', k: 'core', desc: 'Username (3-100 chars), password strength, email format all validated before API call. SQL injection & XSS patterns detected and blocked.' },
   ]},
   { name: 'Cryptography & Secrets', controls: [
-    { name: 'Encryption at rest', k: 'core', desc: 'Stored integration secrets (API, SMTP, BI) are encrypted with AES-256-CBC, not held in plaintext.' },
+    { name: 'Encryption at rest', k: 'core', desc: 'Stored integration secrets (API, SES, BI) are encrypted with AES-256-CBC, not held in plaintext.' },
     { name: 'Hashed, single-use reset tokens', k: 'ok', desc: 'Reset tokens are 32-byte random, stored only as a SHA-256 hash, single-use, and expire in ten minutes.' },
     { name: 'Secrets out of bundle & VCS', k: 'core', desc: 'Runtime secrets live in environment configuration — never in the client bundle or version control.' },
   ]},
@@ -272,7 +335,8 @@ const SECURITY: { name: string; controls: Ctrl[] }[] = [
   ]},
   { name: 'Operational Security', controls: [
     { name: 'CORS allow-list', k: 'core', desc: 'Cross-origin credentialed requests are restricted to an explicit origin allow-list.' },
-    { name: 'Security response headers', k: 'core', desc: 'Anti-framing and content-type-sniffing protections are set on responses.' },
+    { name: 'Security response headers', k: 'core', desc: 'X-Frame-Options (DENY), X-Content-Type-Options (nosniff), X-XSS-Protection (1; mode=block), Strict-Transport-Security (1yr + preload), Content-Security-Policy, Referrer-Policy, Permissions-Policy.' },
+    { name: 'Client-side input validation', k: 'core', desc: 'Username, email, password validated client-side with suspicious pattern detection (SQL injection, XSS). Server enforces hard validation on all requests.' },
     { name: 'Audit trail & session control', k: 'core', desc: 'Logins and key actions are logged; Super Admins can view active sessions and force-logout.' },
     { name: 'Maintenance isolation', k: 'ok', desc: 'Maintenance mode pauses client data access at the gateway while staff retain full access.' },
   ]},
@@ -280,6 +344,8 @@ const SECURITY: { name: string; controls: Ctrl[] }[] = [
 
 const HARDENING = [
   { title: 'Server-side access enforcement', sev: 'Critical', sevk: 'c', desc: 'Configuration-module grants — including the plaintext credential-reveal endpoints — are now enforced on the server, not just hidden in the UI. Verified: an un-granted admin is refused directly.' },
+  { title: 'Comprehensive security headers deployed', sev: 'High', sevk: 'h', desc: '7 security headers (CSP, HSTS, X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy) injected via Next.js middleware. Tested on staging and production environments.' },
+  { title: 'Client-side input validation & suspicious pattern detection', sev: 'High', sevk: 'h', desc: 'Username, email, password validation with SQL injection & XSS pattern detection blocks malicious input before API submission. Rate limiting enforced on failed attempts.' },
   { title: 'Rate-limit bypass closed', sev: 'High', sevk: 'h', desc: 'Forwarded-IP spoofing that granted a fresh throttle bucket per request was closed by trusting proxy headers only from configured hops. Verified with spoofed requests.' },
   { title: 'OTP brute-force protection', sev: 'High', sevk: 'h', desc: 'A per-code attempt cap plus constant-time comparison now guards the six-digit space. Covered by unit tests and a live send/verify run.' },
   { title: 'Secure session cookie', sev: 'High', sevk: 'h', desc: 'The session cookie is now Secure by default behind TLS termination, instead of only on a specific port. Verified in production and dev modes.' },
@@ -288,12 +354,16 @@ const HARDENING = [
 ]
 
 const ROADMAP = [
+  { title: 'EC2 security groups & IP masking', desc: 'Restrict EC2 inbound to Cloudflare IPs only (HTTP/HTTPS) and whitelisted admin IPs (SSH). Blocks direct attacks on EC2 and hides real IP behind Cloudflare proxy.', prio: 'Priority 1', pk: 'p1' },
+  { title: 'Cloudflare WAF rules & bot protection', desc: 'Enable Managed Rules (OWASP), rate limiting, bot protection, and SSL/TLS hardening (Full Strict mode). Configure CAA records to prevent certificate hijacking.', prio: 'Priority 1', pk: 'p1' },
   { title: 'Network-isolate the database & rotate secrets', desc: 'Move MySQL onto a private subnet with proxy-only access, and rotate signing and encryption keys via a managed secrets store.', prio: 'Priority 1', pk: 'p1' },
   { title: 'Harden new-account role defaults', desc: 'Pin newly created client accounts to the lowest privilege at insert time, with a startup assertion guarding against role drift.', prio: 'Priority 1', pk: 'p1' },
   { title: 'Complete encryption-at-rest migration', desc: 'Encrypt the remaining legacy stored integration credentials and back-fill existing rows in a one-time migration.', prio: 'Priority 1', pk: 'p1' },
+  { title: 'Docker image security scanning', desc: 'Scan Docker images for CVEs using docker scan or Trivy. Update base image (Node.js LTS alpine) and dependencies quarterly. Implement automated scanning in CI/CD pipeline.', prio: 'Priority 2', pk: 'p2' },
   { title: 'Per-report embed authorisation', desc: "Bind embedded-report requests to the requesting account's assigned dashboards to close cross-tenant report access.", prio: 'Priority 2', pk: 'p2' },
   { title: 'Dependency & runtime patch cadence', desc: 'Adopt a scheduled bump for flagged library and toolchain advisories, starting with the current auth-path items.', prio: 'Priority 2', pk: 'p2' },
-  { title: 'Add CSP & HSTS, retire legacy hashes', desc: 'Ship a content-security policy and HSTS, and force-reset the remaining legacy password hashes to complete the bcrypt transition.', prio: 'Priority 3', pk: 'p3' },
+  { title: 'Retire legacy password hashes (MD5)', desc: 'Force-reset the remaining legacy MD5 password hashes to complete the bcrypt transition. CSP and HSTS deployed in latest frontend hardening sweep.', prio: 'Priority 3', pk: 'p3' },
+  { title: 'Security monitoring & alerting', desc: 'Set up Cloudflare analytics dashboards, WAF event logs, and application-level security monitoring. Create alerts for suspicious activity patterns (brute force, rate limit abuse).', prio: 'Priority 3', pk: 'p3' },
 ]
 
 /* ── Scoped styles ────────────────────────────────────────────────────────── */
@@ -378,11 +448,20 @@ const PBRIEF_CSS = `
 .pb-perim{border:1.5px dashed var(--pb-acc);border-radius:18px;padding:15px;position:relative;}
 .pb-perim>.plabel{position:absolute;top:-10px;right:20px;background:var(--pb-surface2);font-family:var(--pb-mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--pb-accink);padding:2px 10px;font-weight:600;}
 
+.pb-view-btn{display:inline-flex;align-items:center;gap:7px;font-family:var(--pb-mono);font-size:11.5px;font-weight:600;letter-spacing:.03em;color:var(--pb-ink);background:var(--pb-surface);border:1px solid var(--pb-border2);border-radius:999px;padding:7px 14px 7px 12px;cursor:pointer;margin-left:auto;align-self:center;transition:background .15s ease,border-color .15s ease;}
+.pb-view-btn svg{width:14px;height:14px;flex-shrink:0;}
+.pb-view-btn:hover{background:var(--pb-surface2);border-color:var(--pb-acc);}
+.pb-view-btn[aria-pressed="true"]{color:var(--pb-accink);background:color-mix(in srgb,var(--pb-acc) 12%,var(--pb-surface));border-color:var(--pb-acc);}
+
 .pb-stack{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:15px;}
 .pb-stack-card{background:var(--pb-surface);border:1px solid var(--pb-border);border-radius:14px;padding:17px;box-shadow:var(--pb-shadow);}
 .pb-stack-card h4{font-family:var(--pb-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--pb-muted);margin:0 0 12px;font-weight:600;}
 .pb-stack-card .tags{display:flex;flex-wrap:wrap;gap:7px;}
 .pb-stack-card .tags span{font-size:12.5px;padding:5px 10px;border-radius:8px;background:var(--pb-surface2);border:1px solid var(--pb-border);color:var(--pb-ink);font-weight:500;}
+.pb-stack-card .tags span em{display:none;}
+.pb-stack-card .tags.detailed{flex-direction:column;flex-wrap:nowrap;gap:9px;}
+.pb-stack-card .tags.detailed span{display:block;width:100%;padding:9px 11px;border-radius:9px;}
+.pb-stack-card .tags.detailed span em{display:block;margin-top:3px;font-style:normal;font-weight:400;font-size:11.5px;line-height:1.4;color:var(--pb-muted);}
 
 .pb-mods{display:grid;grid-template-columns:repeat(auto-fill,minmax(315px,1fr));gap:15px;}
 .pb-mod{background:var(--pb-surface);border:1px solid var(--pb-border);border-radius:16px;padding:21px;box-shadow:var(--pb-shadow);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;}
@@ -451,10 +530,13 @@ const PBRIEF_CSS = `
 @media (max-width:560px){.pb-road-item{grid-template-columns:auto 1fr;}.pb-road-item .prio{grid-column:1/-1;justify-self:start;}}
 
 @media print{
-  .pb-toolbar{display:none;}
+  .pb-toolbar,.pb-view-btn{display:none;}
   .pbrief{margin:0;background:#fff;}
   .pbrief section,.pb-hero{break-inside:avoid;}
   .pb-mod,.pb-cat,.pb-fix,.pb-road-item{break-inside:avoid;}
   .pbrief .rv{opacity:1 !important;transform:none !important;}
+  .pb-stack-card .tags{flex-direction:column;flex-wrap:nowrap;gap:9px;}
+  .pb-stack-card .tags span{display:block;width:100%;}
+  .pb-stack-card .tags span em{display:block;margin-top:3px;font-style:normal;font-weight:400;font-size:11.5px;line-height:1.4;color:var(--pb-muted);}
 }
 `

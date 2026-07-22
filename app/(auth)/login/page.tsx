@@ -4,6 +4,8 @@ import { useState, useEffect, Suspense } from 'react'
 import { signIn, useSession } from '@/lib/auth-client'
 import { useRouter, useSearchParams } from '@/lib/router'
 import { Link } from 'react-router-dom'
+import { validateLoginForm, sanitizeInput, detectSuspiciousInput } from '@/lib/validation'
+import { recordAttempt, clearRateLimit } from '@/lib/rateLimit'
 
 function LoginForm() {
   const router  = useRouter()
@@ -16,6 +18,7 @@ function LoginForm() {
   const [error,      setError]      = useState('')
   const [loading,    setLoading]    = useState(false)
   const [idleBanner, setIdleBanner] = useState(false)
+  const [validationErrors, setValidationErrors] = useState<string[]>([])
 
   useEffect(() => {
     if (params.get('reason') === 'idle') setIdleBanner(true)
@@ -24,20 +27,49 @@ function LoginForm() {
   useEffect(() => {
     if (status === 'authenticated') {
       const role = (session?.user as any)?.role
+      clearRateLimit('login', username)
       router.replace(role === 1 || role === 2 ? '/admin/home' : '/dashboard')
     }
-  }, [status, session])
+  }, [status, session, username])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
+    setValidationErrors([])
     setLoading(true)
+
     try {
+      // Input validation
+      const validation = validateLoginForm(username, password)
+      if (!validation.valid) {
+        setValidationErrors(validation.errors)
+        setLoading(false)
+        return
+      }
+
+      // Rate limiting check
+      const rateLimitCheck = recordAttempt('login', username)
+      if (!rateLimitCheck.allowed) {
+        setError(rateLimitCheck.message)
+        setLoading(false)
+        return
+      }
+
+      // Sanitize inputs
+      const sanitizedUsername = sanitizeInput(username)
+
+      // Additional suspicious input detection
+      if (detectSuspiciousInput(username) || detectSuspiciousInput(password)) {
+        setError('Invalid input detected. Please try again.')
+        setLoading(false)
+        return
+      }
+
       const checkRes = await fetch('/api/auth/check-multiple-logins', {
         credentials: 'include',
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ username, password }),
+        body:    JSON.stringify({ username: sanitizedUsername, password }),
       })
       const checkData = await checkRes.json()
       if (!checkData.success) { setError(checkData.error || 'Invalid username or password'); return }
@@ -586,6 +618,14 @@ function LoginForm() {
               <div className="lp-idle">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                 Your session expired due to inactivity. Please sign in again.
+              </div>
+            )}
+            {validationErrors.length > 0 && (
+              <div className="lp-error">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {validationErrors.map((err, idx) => <span key={idx}>{err}</span>)}
+                </div>
               </div>
             )}
             {error && (
