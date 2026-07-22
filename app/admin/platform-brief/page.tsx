@@ -219,7 +219,15 @@ export default function PlatformBriefPage() {
             <div className="pb-road-item rv" key={r.title}>
               <span className="rix">{String(i + 1).padStart(2, '0')}</span>
               <div className="rbody"><h5>{r.title}</h5><p>{r.desc}</p></div>
-              <span className={`prio ${r.pk}`}>{r.prio}</span>
+              <div className="pb-road-actions">
+                {r.guide && (
+                  <a href={`/guides/${r.guide}`} target="_blank" rel="noopener noreferrer" className="pb-guide-btn" title="View implementation guide">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10z" strokeLinecap="round" strokeLinejoin="round"/><polyline points="14 2 14 10 22 10" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    View Guide
+                  </a>
+                )}
+                <span className={`prio ${r.pk}`}>{r.prio}</span>
+              </div>
             </div>
           ))}
         </div>
@@ -355,16 +363,18 @@ const HARDENING = [
   { title: 'No silent write failures', sev: 'High', sevk: 'h', desc: 'Database writes now surface real errors instead of reporting a false success — caught a live schema issue during the sweep.' },
 ]
 
-const ROADMAP = [
+type RoadmapItem = { title: string; desc: string; prio: string; pk: string; guide?: string }
+
+const ROADMAP: RoadmapItem[] = [
   { title: '✅ Harden new-account role defaults', desc: 'Enforced: New client accounts created with role=0 (lowest privilege). Startup assertion verifies no role drift. Security comment guards INSERT logic.', prio: 'COMPLETED', pk: 'done' },
   { title: '✅ Retire legacy password hashes (MD5)', desc: 'Implemented: IsLegacyHash detection, transparent bcrypt upgrade on login, md5HashWarning flag sent to client. Startup audit logs remaining MD5 hashes.', prio: 'COMPLETED', pk: 'done' },
   { title: '✅ Docker image security scanning', desc: 'Implemented: GitHub Actions daily scanning (Trivy), Dependabot base-image updates, local bash script, quarterly patch cadence. Automated CVE detection and SBOM generation.', prio: 'COMPLETED', pk: 'done' },
   { title: '✅ Per-report embed authorisation', desc: 'Implemented: EmbedToken now requires active assignment in user_dashboard_assignment table. Prevents cross-tenant report access. Migration 003 includes table, view, and audit trail.', prio: 'COMPLETED', pk: 'done' },
   { title: '✅ Dependency & runtime patch cadence', desc: 'Implemented: Dependabot automation (npm/Go/Docker weekly), GitHub Actions security scanning, comprehensive patch policy (CRITICAL same-day, HIGH 1 week, quarterly cycles).', prio: 'COMPLETED', pk: 'done' },
-  { title: 'EC2 security groups & IP masking', desc: 'Restrict EC2 inbound to Cloudflare IPs only (HTTP/HTTPS) and whitelisted admin IPs (SSH). Blocks direct attacks on EC2 and hides real IP behind Cloudflare proxy.', prio: 'Priority 1', pk: 'p1' },
-  { title: 'Cloudflare WAF rules & bot protection', desc: 'Enable Managed Rules (OWASP), rate limiting, bot protection, and SSL/TLS hardening (Full Strict mode). Configure CAA records to prevent certificate hijacking.', prio: 'Priority 1', pk: 'p1' },
-  { title: 'Network-isolate the database & rotate secrets', desc: 'Move MySQL onto a private subnet with proxy-only access, and rotate signing and encryption keys via a managed secrets store.', prio: 'Priority 1', pk: 'p1' },
-  { title: 'Complete encryption-at-rest migration', desc: 'Encrypt the remaining legacy stored integration credentials and back-fill existing rows in a one-time migration.', prio: 'Priority 1', pk: 'p1' },
+  { title: 'EC2 security groups & IP masking', desc: 'Restrict EC2 inbound to Cloudflare IPs only (HTTP/HTTPS) and whitelisted admin IPs (SSH). Blocks direct attacks on EC2 and hides real IP behind Cloudflare proxy.', prio: 'Priority 1', pk: 'p1', guide: 'EC2_SECURITY_GROUPS_IP_MASKING.md' },
+  { title: 'Cloudflare WAF rules & bot protection', desc: 'Enable Managed Rules (OWASP), rate limiting, bot protection, and SSL/TLS hardening (Full Strict mode). Configure CAA records to prevent certificate hijacking.', prio: 'Priority 1', pk: 'p1', guide: 'CLOUDFLARE_WAF_BOT_PROTECTION.md' },
+  { title: 'Network-isolate the database & rotate secrets', desc: 'Move MySQL onto a private subnet with proxy-only access, and rotate signing and encryption keys via a managed secrets store.', prio: 'Priority 1', pk: 'p1', guide: 'DATABASE_NETWORK_ISOLATION_SECRETS_ROTATION.md' },
+  { title: 'Complete encryption-at-rest migration', desc: 'Encrypt the remaining legacy stored integration credentials and back-fill existing rows in a one-time migration.', prio: 'Priority 1', pk: 'p1', guide: 'ENCRYPTION_AT_REST_MIGRATION.md' },
   { title: 'Security monitoring & alerting', desc: 'Set up Cloudflare analytics dashboards, WAF event logs, and application-level security monitoring. Create alerts for suspicious activity patterns (brute force, rate limit abuse).', prio: 'Priority 3', pk: 'p3' },
 ]
 
@@ -521,6 +531,12 @@ const PBRIEF_CSS = `
 .pb-road-item .prio.p1{color:var(--pb-crit);background:var(--pb-critbg);}
 .pb-road-item .prio.p2{color:var(--pb-warn);background:var(--pb-warnbg);}
 .pb-road-item .prio.p3{color:var(--pb-info);background:var(--pb-infobg);}
+.pb-road-item .prio.done{color:var(--pb-ok);background:var(--pb-okbg);}
+
+.pb-road-actions{display:flex;align-items:center;gap:10px;}
+.pb-guide-btn{display:inline-flex;align-items:center;gap:6px;font-family:var(--pb-mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;font-weight:700;color:var(--pb-info);text-decoration:none;padding:6px 12px;border:1px solid var(--pb-info);border-radius:6px;transition:all .2s ease;white-space:nowrap;}
+.pb-guide-btn:hover{background:var(--pb-infobg);color:var(--pb-info);}
+.pb-guide-btn svg{width:12px;height:12px;}
 
 .pb-foot{padding:32px 40px 44px;display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;}
 .pb-foot .status{display:inline-flex;align-items:center;gap:8px;font-family:var(--pb-mono);font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--pb-ok);font-weight:600;}
@@ -529,7 +545,7 @@ const PBRIEF_CSS = `
 .pb-foot .mono.right{text-align:right;margin-top:0;}
 
 @media (max-width:820px){.pb-summary,.pb-harden{grid-template-columns:1fr;}.pb-arch-cols{grid-template-columns:1fr;}.pb-metrics{grid-template-columns:repeat(2,1fr);}.pbrief section,.pb-hero-in,.pb-foot,.pb-toolbar{padding-left:22px;padding-right:22px;}}
-@media (max-width:560px){.pb-road-item{grid-template-columns:auto 1fr;}.pb-road-item .prio{grid-column:1/-1;justify-self:start;}}
+@media (max-width:560px){.pb-road-item{grid-template-columns:auto 1fr;}.pb-road-actions{grid-column:1/-1;justify-self:start;}}
 
 @media print{
   .pb-toolbar,.pb-view-btn{display:none;}
