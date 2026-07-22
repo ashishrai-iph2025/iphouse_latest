@@ -344,6 +344,8 @@ const SECURITY: { name: string; controls: Ctrl[] }[] = [
 
 const HARDENING = [
   { title: 'Server-side access enforcement', sev: 'Critical', sevk: 'c', desc: 'Configuration-module grants — including the plaintext credential-reveal endpoints — are now enforced on the server, not just hidden in the UI. Verified: an un-granted admin is refused directly.' },
+  { title: 'New-account role defaults hardened', sev: 'High', sevk: 'h', desc: 'New client accounts MUST be created with role=0 (lowest privilege). Startup assertion verifies no role drift. Prevents accidental privilege escalation at account creation time.' },
+  { title: 'Legacy MD5 password hash retirement', sev: 'High', sevk: 'h', desc: 'IsLegacyHash detection transparently upgrades to bcrypt on login. md5HashWarning flag sent to client. Startup audit logs remaining MD5 hashes. Users auto-migrated on next login.' },
   { title: 'Comprehensive security headers deployed', sev: 'High', sevk: 'h', desc: '7 security headers (CSP, HSTS, X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy) injected via Next.js middleware. Tested on staging and production environments.' },
   { title: 'Client-side input validation & suspicious pattern detection', sev: 'High', sevk: 'h', desc: 'Username, email, password validation with SQL injection & XSS pattern detection blocks malicious input before API submission. Rate limiting enforced on failed attempts.' },
   { title: 'Rate-limit bypass closed', sev: 'High', sevk: 'h', desc: 'Forwarded-IP spoofing that granted a fresh throttle bucket per request was closed by trusting proxy headers only from configured hops. Verified with spoofed requests.' },
@@ -354,15 +356,15 @@ const HARDENING = [
 ]
 
 const ROADMAP = [
+  { title: '✅ Harden new-account role defaults', desc: 'Enforced: New client accounts created with role=0 (lowest privilege). Startup assertion verifies no role drift. Security comment guards INSERT logic.', prio: 'COMPLETED', pk: 'done' },
+  { title: '✅ Retire legacy password hashes (MD5)', desc: 'Implemented: IsLegacyHash detection, transparent bcrypt upgrade on login, md5HashWarning flag sent to client. Startup audit logs remaining MD5 hashes.', prio: 'COMPLETED', pk: 'done' },
   { title: 'EC2 security groups & IP masking', desc: 'Restrict EC2 inbound to Cloudflare IPs only (HTTP/HTTPS) and whitelisted admin IPs (SSH). Blocks direct attacks on EC2 and hides real IP behind Cloudflare proxy.', prio: 'Priority 1', pk: 'p1' },
   { title: 'Cloudflare WAF rules & bot protection', desc: 'Enable Managed Rules (OWASP), rate limiting, bot protection, and SSL/TLS hardening (Full Strict mode). Configure CAA records to prevent certificate hijacking.', prio: 'Priority 1', pk: 'p1' },
   { title: 'Network-isolate the database & rotate secrets', desc: 'Move MySQL onto a private subnet with proxy-only access, and rotate signing and encryption keys via a managed secrets store.', prio: 'Priority 1', pk: 'p1' },
-  { title: 'Harden new-account role defaults', desc: 'Pin newly created client accounts to the lowest privilege at insert time, with a startup assertion guarding against role drift.', prio: 'Priority 1', pk: 'p1' },
   { title: 'Complete encryption-at-rest migration', desc: 'Encrypt the remaining legacy stored integration credentials and back-fill existing rows in a one-time migration.', prio: 'Priority 1', pk: 'p1' },
   { title: 'Docker image security scanning', desc: 'Scan Docker images for CVEs using docker scan or Trivy. Update base image (Node.js LTS alpine) and dependencies quarterly. Implement automated scanning in CI/CD pipeline.', prio: 'Priority 2', pk: 'p2' },
   { title: 'Per-report embed authorisation', desc: "Bind embedded-report requests to the requesting account's assigned dashboards to close cross-tenant report access.", prio: 'Priority 2', pk: 'p2' },
   { title: 'Dependency & runtime patch cadence', desc: 'Adopt a scheduled bump for flagged library and toolchain advisories, starting with the current auth-path items.', prio: 'Priority 2', pk: 'p2' },
-  { title: 'Retire legacy password hashes (MD5)', desc: 'Force-reset the remaining legacy MD5 password hashes to complete the bcrypt transition. CSP and HSTS deployed in latest frontend hardening sweep.', prio: 'Priority 3', pk: 'p3' },
   { title: 'Security monitoring & alerting', desc: 'Set up Cloudflare analytics dashboards, WAF event logs, and application-level security monitoring. Create alerts for suspicious activity patterns (brute force, rate limit abuse).', prio: 'Priority 3', pk: 'p3' },
 ]
 

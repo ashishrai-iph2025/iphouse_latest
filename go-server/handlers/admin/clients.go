@@ -90,6 +90,10 @@ func clientsCreate(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "Hash error"); return
 	}
 
+	// SECURITY: New client accounts MUST be created with role=0 (lowest privilege).
+	// This enforcement prevents accidental privilege escalation. role=0 is the only
+	// valid default for new client accounts; admin roles (1, 2) must be assigned
+	// explicitly by Super Admins through separate grant flows.
 	lid, _, err := db.Exec(
 		"INSERT INTO dcp_user (name, email, role, deleted, api_user_name, api_password, IsSecure, updated_at) VALUES (?, ?, 0, 0, ?, ?, 0, UTC_TIMESTAMP())",
 		body.Name, body.Email, body.APIUserName, body.APIPassword,

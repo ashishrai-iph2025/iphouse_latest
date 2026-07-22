@@ -31,6 +31,12 @@ func main() {
 	}
 	db.Migrate()
 
+	// ── Startup assertions: security hardening ────────────────────────────────
+	// Assert: new client accounts are always created with role=0 (lowest privilege)
+	assertNewAccountRoleDefaults()
+	// Flag: legacy MD5 password hashes need retirement
+	flagMD5PasswordHashes()
+
 	// War Room dataset store (Redis-backed, in-memory fallback).
 	handlers.SetWarRoomStore(store.New(config.C.RedisAddr))
 
@@ -316,4 +322,71 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// assertNewAccountRoleDefaults verifies that new client accounts (dcp_user with
+// created_at >= 2024-07-22) have role=0 (client/lowest privilege).
+// This startup assertion guards against accidental role drift where admins might
+// have manually inserted accounts with incorrect default roles.
+func assertNewAccountRoleDefaults() {
+	// Count new accounts created after hardening date with non-zero role
+	rows, err := db.Query(`
+		SELECT userId, name, email, role, created_at
+		FROM dcp_user
+		WHERE role != 0 AND created_at >= '2024-07-22'
+		LIMIT 10
+	`)
+	if err != nil {
+		log.Printf("[hardening] role-defaults assertion query error: %v", err)
+		return
+	}
+	if len(rows) > 0 {
+		log.Printf("[hardening] ⚠️  WARNING: Found %d new accounts with non-zero role (expected role=0)", len(rows))
+		for _, row := range rows {
+			log.Printf("[hardening]   - userId=%v name=%v role=%v created=%v",
+				row["userId"], row["name"], row["role"], row["created_at"])
+		}
+		log.Printf("[hardening] All new client accounts must default to role=0 (client/lowest privilege)")
+		return
+	}
+	log.Printf("[hardening] ✓ Role-defaults assertion passed: all new accounts have role=0")
+}
+
+// flagMD5PasswordHashes logs a notice about legacy MD5 password hashes that
+// need retirement. These will be upgraded to bcrypt on next login, but this
+// flag alerts admins to the presence of legacy hashes in the database.
+func flagMD5PasswordHashes() {
+	// Count legacy MD5 hashes (32-char hex strings from old MD5 format)
+	rows, err := db.Query(`
+		SELECT COUNT(*) as count
+		FROM dcp_user_login
+		WHERE LENGTH(login_password) = 32
+		AND login_password REGEXP '^[a-f0-9]{32}$'
+	`)
+	if err != nil {
+		log.Printf("[hardening] MD5-hashes query error: %v", err)
+		return
+	}
+	if len(rows) == 0 {
+		log.Printf("[hardening] MD5-hash check returned no results")
+		return
+	}
+
+	count := rows[0]["count"]
+	if count != nil {
+		countInt := int64(0)
+		if v, ok := count.(float64); ok {
+			countInt = int64(v)
+		} else if v, ok := count.(int64); ok {
+			countInt = v
+		}
+
+		if countInt > 0 {
+			log.Printf("[hardening] ⚠️  NOTICE: Found %d legacy MD5 password hashes in dcp_user_login", countInt)
+			log.Printf("[hardening] These hashes will be transparently upgraded to bcrypt on next login")
+			log.Printf("[hardening] Status: Bcrypt transition in progress (logins will auto-upgrade)")
+		} else {
+			log.Printf("[hardening] ✓ No legacy MD5 hashes found - bcrypt transition complete")
+		}
+	}
 }

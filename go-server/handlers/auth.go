@@ -217,6 +217,7 @@ func CheckMultipleLogins(w http.ResponseWriter, r *http.Request) {
 		}
 		upgradeLegacyHash(body.Password, hash, "UPDATE dcp_super_admin SET password_hash = ? WHERE id = ?", intFromAny(sa["id"]))
 		claims := claimsForSuperAdminRow(sa)
+		isLegacyHash := ipauth.IsLegacyHash(hash)
 		OK(w, map[string]any{
 			"success": true, "userId": claims.UserID,
 			"email": sa["email"], "login_type": 2, "role": *claims.Role,
@@ -225,6 +226,7 @@ func CheckMultipleLogins(w http.ResponseWriter, r *http.Request) {
 			// password only when a Super Admin enabled OTP for THIS row (same
 			// flow/template as clients).
 			"otpRequired": staffOTPEnabledForRow(sa), "staff": true,
+			"md5HashWarning": isLegacyHash, // Flag: this is a legacy MD5 hash that's being upgraded to bcrypt
 		}); return
 	}
 
@@ -260,10 +262,14 @@ func CheckMultipleLogins(w http.ResponseWriter, r *http.Request) {
 		INNER JOIN dcp_user u ON u.userId = l.userId
 		WHERE l.login_username = ? AND l.is_active = 1 AND u.deleted = 0`, body.Username)
 
+	// Flag if this is a legacy MD5 hash being upgraded on login
+	isLegacyHash := ipauth.IsLegacyHash(hash)
+
 	resp := map[string]any{
 		"success": true, "userId": intFromAny(row["userId"]),
 		"email": body.Username, "login_type": intFromAny(row["login_type"]),
 		"role": row["role"], "multipleLogins": len(multiRows) > 1, "rows": multiRows,
+		"md5HashWarning": isLegacyHash, // Flag: this is a legacy MD5 hash that's being upgraded to bcrypt
 	}
 
 	// When multiple accounts exist, issue a short-lived temp token so
