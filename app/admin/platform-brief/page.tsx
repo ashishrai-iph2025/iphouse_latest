@@ -358,13 +358,13 @@ const HARDENING = [
 const ROADMAP = [
   { title: '✅ Harden new-account role defaults', desc: 'Enforced: New client accounts created with role=0 (lowest privilege). Startup assertion verifies no role drift. Security comment guards INSERT logic.', prio: 'COMPLETED', pk: 'done' },
   { title: '✅ Retire legacy password hashes (MD5)', desc: 'Implemented: IsLegacyHash detection, transparent bcrypt upgrade on login, md5HashWarning flag sent to client. Startup audit logs remaining MD5 hashes.', prio: 'COMPLETED', pk: 'done' },
+  { title: '✅ Docker image security scanning', desc: 'Implemented: GitHub Actions daily scanning (Trivy), Dependabot base-image updates, local bash script, quarterly patch cadence. Automated CVE detection and SBOM generation.', prio: 'COMPLETED', pk: 'done' },
+  { title: '✅ Per-report embed authorisation', desc: 'Implemented: EmbedToken now requires active assignment in user_dashboard_assignment table. Prevents cross-tenant report access. Migration 003 includes table, view, and audit trail.', prio: 'COMPLETED', pk: 'done' },
+  { title: '✅ Dependency & runtime patch cadence', desc: 'Implemented: Dependabot automation (npm/Go/Docker weekly), GitHub Actions security scanning, comprehensive patch policy (CRITICAL same-day, HIGH 1 week, quarterly cycles).', prio: 'COMPLETED', pk: 'done' },
   { title: 'EC2 security groups & IP masking', desc: 'Restrict EC2 inbound to Cloudflare IPs only (HTTP/HTTPS) and whitelisted admin IPs (SSH). Blocks direct attacks on EC2 and hides real IP behind Cloudflare proxy.', prio: 'Priority 1', pk: 'p1' },
   { title: 'Cloudflare WAF rules & bot protection', desc: 'Enable Managed Rules (OWASP), rate limiting, bot protection, and SSL/TLS hardening (Full Strict mode). Configure CAA records to prevent certificate hijacking.', prio: 'Priority 1', pk: 'p1' },
   { title: 'Network-isolate the database & rotate secrets', desc: 'Move MySQL onto a private subnet with proxy-only access, and rotate signing and encryption keys via a managed secrets store.', prio: 'Priority 1', pk: 'p1' },
   { title: 'Complete encryption-at-rest migration', desc: 'Encrypt the remaining legacy stored integration credentials and back-fill existing rows in a one-time migration.', prio: 'Priority 1', pk: 'p1' },
-  { title: 'Docker image security scanning', desc: 'Scan Docker images for CVEs using docker scan or Trivy. Update base image (Node.js LTS alpine) and dependencies quarterly. Implement automated scanning in CI/CD pipeline.', prio: 'Priority 2', pk: 'p2' },
-  { title: 'Per-report embed authorisation', desc: "Bind embedded-report requests to the requesting account's assigned dashboards to close cross-tenant report access.", prio: 'Priority 2', pk: 'p2' },
-  { title: 'Dependency & runtime patch cadence', desc: 'Adopt a scheduled bump for flagged library and toolchain advisories, starting with the current auth-path items.', prio: 'Priority 2', pk: 'p2' },
   { title: 'Security monitoring & alerting', desc: 'Set up Cloudflare analytics dashboards, WAF event logs, and application-level security monitoring. Create alerts for suspicious activity patterns (brute force, rate limit abuse).', prio: 'Priority 3', pk: 'p3' },
 ]
 

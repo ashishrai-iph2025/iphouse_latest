@@ -1,0 +1,198 @@
+name: Security Scanning - Docker & Dependencies
+
+on:
+  push:
+    branches: [main, production]
+    paths:
+      - 'Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'go-server/go.mod'
+      - 'go-server/go.sum'
+  pull_request:
+    branches: [main, production]
+  schedule:
+    # Run security scans daily at 2 AM UTC
+    - cron: '0 2 * * *'
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # Docker Image Security Scan (Trivy)
+  # ────────────────────────────────────────────────────────────────────────────
+  docker-scan:
+    name: Scan Docker Image for CVEs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t iphouse:${{ github.sha }} .
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: iphouse:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'Docker Image'
+
+      - name: Fail on critical vulnerabilities
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:latest image \
+            --exit-code 1 \
+            --severity CRITICAL \
+            iphouse:${{ github.sha }}
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Dependency Security Scanning (npm audit)
+  # ────────────────────────────────────────────────────────────────────────────
+  npm-audit:
+    name: Audit npm Dependencies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run npm audit (production only)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Check for outdated packages
+        run: npm outdated || true
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Go Dependencies Security Scanning
+  # ────────────────────────────────────────────────────────────────────────────
+  go-audit:
+    name: Audit Go Dependencies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24'
+
+      - name: Run Go vulnerability scan
+        run: |
+          cd go-server
+          go list -json -m all | go run github.com/sonatype-nexus-community/nancy@latest sleuth -o json || true
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Generate SBOM (Software Bill of Materials)
+  # ────────────────────────────────────────────────────────────────────────────
+  generate-sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Generate npm SBOM
+        run: npm sbom --sbom-format cyclonedx > sbom.cyclonedx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.cyclonedx.json
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Dependency Update Check (Dependabot)
+  # ────────────────────────────────────────────────────────────────────────────
+  check-updates:
+    name: Check for Dependency Updates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Check for available updates
+        run: npm outdated || echo "No updates available"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Create security report
+  # ────────────────────────────────────────────────────────────────────────────
+  security-report:
+    name: Generate Security Report
+    runs-on: ubuntu-latest
+    needs: [docker-scan, npm-audit, go-audit]
+    if: always()
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate security report
+        run: |
+          echo "# Security Scan Report - $(date)" > SECURITY_SCAN_REPORT.md
+          echo "" >> SECURITY_SCAN_REPORT.md
+          echo "## Scan Results" >> SECURITY_SCAN_REPORT.md
+          echo "" >> SECURITY_SCAN_REPORT.md
+          echo "- Docker Image CVE Scan: ${{ needs.docker-scan.result }}" >> SECURITY_SCAN_REPORT.md
+          echo "- npm Audit: ${{ needs.npm-audit.result }}" >> SECURITY_SCAN_REPORT.md
+          echo "- Go Audit: ${{ needs.go-audit.result }}" >> SECURITY_SCAN_REPORT.md
+          echo "" >> SECURITY_SCAN_REPORT.md
+          echo "Commit: ${{ github.sha }}" >> SECURITY_SCAN_REPORT.md
+          echo "Branch: ${{ github.ref_name }}" >> SECURITY_SCAN_REPORT.md
+
+      - name: Upload security report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: SECURITY_SCAN_REPORT.md

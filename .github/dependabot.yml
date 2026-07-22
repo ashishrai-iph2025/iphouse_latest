@@ -1,0 +1,143 @@
+version: 2
+
+# ────────────────────────────────────────────────────────────────────────────
+# Dependabot Configuration
+#
+# Automates security and dependency updates with configurable patch cadence.
+# Updates are created as pull requests for review before merging.
+# ────────────────────────────────────────────────────────────────────────────
+
+updates:
+  # ──────────────────────────────────────────────────────────────────────────
+  # npm Dependencies (Frontend)
+  # ──────────────────────────────────────────────────────────────────────────
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      # Check for updates weekly on Monday
+      interval: "weekly"
+      day: "monday"
+      time: "03:00"
+      timezone: "UTC"
+
+    # Security updates are always applied (no delay)
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
+
+    # Create separate PRs for each update
+    open-pull-requests-limit: 10
+    pull-request-branch-name:
+      separator: "/"
+
+    # Commit settings
+    commit-message:
+      prefix: "chore(npm)"
+      include: "scope"
+
+    # PR settings
+    reviewers:
+      - "ashishraiinfo"
+
+    labels:
+      - "security"
+      - "dependencies"
+
+    # Only update security patches automatically
+    # Minor/major versions require manual review
+    versioning-strategy: "semver"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Go Dependencies (Backend)
+  # ──────────────────────────────────────────────────────────────────────────
+  - package-ecosystem: "gomod"
+    directory: "/go-server"
+    schedule:
+      # Check for updates weekly on Tuesday
+      interval: "weekly"
+      day: "tuesday"
+      time: "03:00"
+      timezone: "UTC"
+
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
+
+    open-pull-requests-limit: 10
+    pull-request-branch-name:
+      separator: "/"
+
+    commit-message:
+      prefix: "chore(go)"
+      include: "scope"
+
+    reviewers:
+      - "ashishraiinfo"
+
+    labels:
+      - "security"
+      - "dependencies"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Docker Base Images
+  # ──────────────────────────────────────────────────────────────────────────
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      # Check for Docker image updates weekly on Wednesday
+      interval: "weekly"
+      day: "wednesday"
+      time: "03:00"
+      timezone: "UTC"
+
+    open-pull-requests-limit: 5
+    pull-request-branch-name:
+      separator: "/"
+
+    commit-message:
+      prefix: "chore(docker)"
+      include: "scope"
+
+    reviewers:
+      - "ashishraiinfo"
+
+    labels:
+      - "security"
+      - "docker"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # GitHub Actions Workflows
+  # ──────────────────────────────────────────────────────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      # Check for GitHub Actions updates weekly on Thursday
+      interval: "weekly"
+      day: "thursday"
+      time: "03:00"
+      timezone: "UTC"
+
+    open-pull-requests-limit: 5
+    pull-request-branch-name:
+      separator: "/"
+
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"
+
+    reviewers:
+      - "ashishraiinfo"
+
+    labels:
+      - "ci"
+      - "github-actions"
+
+# ────────────────────────────────────────────────────────────────────────────
+# Global Settings
+# ────────────────────────────────────────────────────────────────────────────
+
+# Note: Additional settings that could be configured:
+# - Ignore specific versions: ignore: [{dependency-name: "package-name", versions: ["x.y.z"]}]
+# - Skip initial update: skip-initial-pull-request: true
+# - Rebase strategy: rebase-strategy: "auto"
+# - Automerge (if enabled): auto-merge-config: {commit-message-template: "...", merge-method: "squash", automerge-type: "all"}

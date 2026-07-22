@@ -442,6 +442,31 @@ func EmbedToken(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 400, "Missing reportId"); return
 	}
 
+	// ─────────────────────────────────────────────────────────────────────────
+	// SECURITY: Per-report embed authorisation
+	// Verify the requesting user/login has explicit access to this specific
+	// report before issuing an embed token. This prevents cross-tenant report
+	// access (user from client A requesting report from client B).
+	// ─────────────────────────────────────────────────────────────────────────
+	hasAccess, err := db.QueryOne(`
+		SELECT 1
+		FROM user_dashboard_assignment uda
+		WHERE uda.login_id = ?
+		AND uda.report_id = ?
+		AND uda.is_active = 1
+		LIMIT 1
+	`, claims.LoginID, reportID)
+
+	if err != nil {
+		Fail(w, 500, "Authorization check failed"); return
+	}
+	if hasAccess == nil {
+		// No explicit assignment found. Log the violation and deny.
+		log.Printf("[security] UNAUTHORIZED embed token request: loginId=%d userId=%d attempted reportId=%s (no assignment)",
+			claims.LoginID, claims.UserID, reportID)
+		Fail(w, 403, "You do not have access to this report"); return
+	}
+
 	row, err := db.QueryOne("SELECT client_id, client_secret, tenant_id, workspace_id FROM master_powerbi_credentials WHERE is_active = 1 ORDER BY id DESC LIMIT 1")
 	if err != nil || row == nil {
 		Fail(w, 500, "No Power BI API credentials found in database"); return
