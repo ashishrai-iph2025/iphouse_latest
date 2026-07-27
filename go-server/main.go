@@ -64,7 +64,8 @@ func main() {
 	mux.Handle("POST /api/auth/reset-password", rl(handlers.ResetPassword))
 	mux.Handle("POST /api/auth/verify-reset-otp", rl(handlers.VerifyResetOTP))
 	mux.Handle("POST /api/auth/register", rl(handlers.Register))
-	mux.HandleFunc("GET /api/test-db", handlers.TestDB)
+	// REMOVED: /api/test-db endpoint (information disclosure risk).
+	// Use authenticated /api/keepalive for liveness probes instead.
 	mux.HandleFunc("GET /api/maintenance", handlers.MaintenanceStatus)
 
 	// ── Protected: requires JWT ───────────────────────────────────────────────
@@ -104,6 +105,8 @@ func main() {
 	mux.Handle("GET /api/ip-tracking/client-details", auth(handlers.IPTrackingClientDetails))
 	mux.Handle("POST /api/master-data", auth(handlers.MasterData))
 	mux.Handle("GET /api/master-data", auth(handlers.MasterData))
+	mux.Handle("POST /api/data-sharing/upload", auth(handlers.DataSharingUpload))
+	mux.Handle("GET /api/data-sharing/history", auth(handlers.DataSharingHistory))
 
 	// ── Admin routes: requires JWT + role >= 1 ────────────────────────────────
 	adminAuth := func(h http.HandlerFunc) http.Handler {
@@ -142,6 +145,12 @@ func main() {
 	mux.Handle("POST /api/admin/module-permissions", cfg("module-permissions", admin.ModulePermissions))
 	mux.Handle("PUT /api/admin/module-permissions", cfg("module-permissions", admin.ModulePermissions))
 	mux.Handle("DELETE /api/admin/module-permissions", cfg("module-permissions", admin.ModulePermissions))
+	mux.Handle("POST /api/admin/module-permissions/reorder", cfg("module-permissions", admin.ModulePermissionsReorder))
+	mux.Handle("GET /api/admin/nav-dropdown", cfg("module-permissions", admin.NavDropdown))
+	mux.Handle("POST /api/admin/nav-dropdown", cfg("module-permissions", admin.NavDropdown))
+	mux.Handle("PUT /api/admin/nav-dropdown", cfg("module-permissions", admin.NavDropdown))
+	mux.Handle("DELETE /api/admin/nav-dropdown", cfg("module-permissions", admin.NavDropdown))
+	mux.Handle("POST /api/admin/nav-dropdown/reorder", cfg("module-permissions", admin.NavDropdownReorder))
 	mux.Handle("GET /api/admin/user-module-permissions", cfg("module-permissions", admin.UserModulePermissions))
 	mux.Handle("POST /api/admin/user-module-permissions", cfg("module-permissions", admin.UserModulePermissions))
 
@@ -258,6 +267,8 @@ func main() {
 	mux.Handle("GET /api/admin/aws-credentials", saAuth(admin.AWSCredentials))
 	mux.Handle("POST /api/admin/aws-credentials", saAuth(admin.AWSCredentials))
 	mux.Handle("GET /api/admin/aws-credentials/reveal", saAuth(admin.AWSCredentialsReveal))
+	mux.Handle("GET /api/admin/data-sharing-config", saAuth(admin.DataSharingConfig))
+	mux.Handle("POST /api/admin/data-sharing-config", saAuth(admin.DataSharingConfig))
 	mux.Handle("GET /api/admin/super-admin/user-permissions", saAuth(admin.SuperAdminUserPermissions))
 
 	// ── Serve Vite static build (SPA fallback) ───────────────────────────────

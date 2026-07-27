@@ -11,6 +11,7 @@ interface ModuleRow {
   ModuleName: string
   pageName: string
   status: number
+  nav_order: number
   created: string
   updated: string
 }
@@ -34,6 +35,14 @@ export default function ModulePermissionsClient({ initialModules }: { initialMod
   const [editForm, setEditForm] = useState({ moduleName: '', pageName: '' })
 
   const [confirm, setConfirm] = useState<{ row: ModuleRow; action: 'delete' | 'restore' } | null>(null)
+
+  // Dropdown sub-item manager
+  interface DropItem { id: number; label: string; href: string; sort_order: number }
+  const [dropRow, setDropRow] = useState<ModuleRow | null>(null)
+  const [dropItems, setDropItems] = useState<DropItem[]>([])
+  const [dropRoutes, setDropRoutes] = useState<{ label: string; href: string }[]>([])
+  const [dropForm, setDropForm] = useState<{ id: number | null; label: string; href: string }>({ id: null, label: '', href: '' })
+  const [dropBusy, setDropBusy] = useState(false)
 
   function showToast(msg: string, type: 'success' | 'error' = 'success') {
     setToast({ msg, type })
@@ -125,6 +134,86 @@ export default function ModulePermissionsClient({ initialModules }: { initialMod
     setBusy(false)
   }
 
+  // Active modules in current nav order (the API returns rows ordered by nav_order).
+  const activeOrder = modules.filter(m => m.status === 0).map(m => m.Id)
+
+  // Move an active module up (-1) or down (+1) in the client-nav order. Sends the
+  // full reordered id list; the server assigns sequential nav_order values.
+  async function move(row: ModuleRow, dir: -1 | 1) {
+    const active = modules.filter(m => m.status === 0)
+    const idx = active.findIndex(m => m.Id === row.Id)
+    const target = idx + dir
+    if (idx < 0 || target < 0 || target >= active.length) return
+    const reordered = [...active]
+    ;[reordered[idx], reordered[target]] = [reordered[target], reordered[idx]]
+    setBusy(true)
+    const res = await fetch('/api/admin/module-permissions/reorder', {
+      credentials: 'include',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderedIds: reordered.map(m => m.Id) }),
+    })
+    const data = await res.json()
+    if (data.success) { showToast('Navigation order updated'); await reload(showDeleted) }
+    else { showToast(data.error || 'Failed to reorder', 'error') }
+    setBusy(false)
+  }
+
+  // ── Dropdown sub-item manager ────────────────────────────────────────────
+  async function openDropdown(row: ModuleRow) {
+    setDropRow(row)
+    setDropForm({ id: null, label: '', href: '' })
+    setDropItems([])
+    await loadDropdown(row.pageName)
+  }
+  async function loadDropdown(parentPageName: string) {
+    const res = await fetch(`/api/admin/nav-dropdown?parentPageName=${encodeURIComponent(parentPageName)}`, { credentials: 'include' })
+    const data = await res.json()
+    if (data.success) { setDropItems(data.items || []); setDropRoutes(data.routes || []) }
+  }
+  async function saveDropItem(e: React.FormEvent) {
+    e.preventDefault()
+    if (!dropRow) return
+    if (!dropForm.label.trim() || !dropForm.href) { showToast('Label and link are required', 'error'); return }
+    setDropBusy(true)
+    const isEdit = dropForm.id != null
+    const res = await fetch('/api/admin/nav-dropdown', {
+      credentials: 'include',
+      method: isEdit ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(isEdit
+        ? { id: dropForm.id, label: dropForm.label.trim(), href: dropForm.href }
+        : { parentPageName: dropRow.pageName, label: dropForm.label.trim(), href: dropForm.href }),
+    })
+    const data = await res.json()
+    if (data.success) { showToast(isEdit ? 'Item updated' : 'Item added'); setDropForm({ id: null, label: '', href: '' }); await loadDropdown(dropRow.pageName) }
+    else showToast(data.error || 'Failed to save item', 'error')
+    setDropBusy(false)
+  }
+  async function deleteDropItem(id: number) {
+    if (!dropRow) return
+    const res = await fetch('/api/admin/nav-dropdown', {
+      credentials: 'include', method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }),
+    })
+    const data = await res.json()
+    if (data.success) { showToast('Item removed'); await loadDropdown(dropRow.pageName) }
+    else showToast(data.error || 'Failed to remove', 'error')
+  }
+  async function moveDropItem(id: number, dir: -1 | 1) {
+    const idx = dropItems.findIndex(i => i.id === id)
+    const target = idx + dir
+    if (idx < 0 || target < 0 || target >= dropItems.length) return
+    const reordered = [...dropItems]
+    ;[reordered[idx], reordered[target]] = [reordered[target], reordered[idx]]
+    setDropItems(reordered)
+    await fetch('/api/admin/nav-dropdown/reorder', {
+      credentials: 'include', method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderedIds: reordered.map(i => i.id) }),
+    })
+    if (dropRow) loadDropdown(dropRow.pageName)
+  }
+
   return (
     <div className="p-6 fade-in">
       {/* Toast */}
@@ -184,9 +273,28 @@ export default function ModulePermissionsClient({ initialModules }: { initialMod
                     <div className="flex items-center gap-1.5">
                       {m.status === 0 ? (
                         <>
+                          {(() => {
+                            const ai = activeOrder.indexOf(m.Id)
+                            return (
+                              <div className="flex items-center mr-1">
+                                <button onClick={() => move(m, -1)} disabled={busy || ai <= 0} title="Move up"
+                                  className="w-7 h-7 flex items-center justify-center rounded-lg border border-gray-300 text-gray-500 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed">
+                                  <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7"/></svg>
+                                </button>
+                                <button onClick={() => move(m, 1)} disabled={busy || ai < 0 || ai >= activeOrder.length - 1} title="Move down"
+                                  className="w-7 h-7 flex items-center justify-center rounded-lg border border-gray-300 text-gray-500 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed -ml-px">
+                                  <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                                </button>
+                              </div>
+                            )
+                          })()}
                           <button onClick={() => { setEditRow(m); setEditForm({ moduleName: m.ModuleName, pageName: m.pageName || '' }) }}
                             className="text-xs px-2.5 py-1.5 rounded-lg font-medium border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors">
                             Edit
+                          </button>
+                          <button onClick={() => openDropdown(m)}
+                            className="text-xs px-2.5 py-1.5 rounded-lg font-medium border border-gray-300 text-[#14254A] hover:bg-gray-50 transition-colors">
+                            Dropdown
                           </button>
                           <button onClick={() => setConfirm({ row: m, action: 'delete' })}
                             className="text-xs px-2.5 py-1.5 rounded-lg font-medium border border-gray-300 text-red-600 hover:bg-red-50 transition-colors">
@@ -310,6 +418,81 @@ export default function ModulePermissionsClient({ initialModules }: { initialMod
                   {busy ? '…' : confirm.action === 'delete' ? 'Delete' : 'Restore'}
                 </button>
               </div>
+            </div>
+          </div>
+        </AdminModal>
+      )}
+
+      {/* Dropdown sub-item manager */}
+      {dropRow && (
+        <AdminModal onClose={() => setDropRow(null)}>
+          <div className="admin-modal-panel bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 text-white" style={{ background: '#14254A' }}>
+              <div>
+                <h3 className="font-bold text-sm">Dropdown Items — {dropRow.ModuleName}</h3>
+                <p className="text-[11px] text-white/60">Sub-links shown under this module in the client nav.</p>
+              </div>
+              <button onClick={() => setDropRow(null)} className="text-white/70 hover:text-white text-xl leading-none">×</button>
+            </div>
+
+            <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+              {/* Existing items */}
+              {dropItems.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-3">No dropdown items yet. Add one below.</p>
+              ) : (
+                <div className="space-y-2">
+                  {dropItems.map((it, idx) => (
+                    <div key={it.id} className="flex items-center gap-2 rounded-xl border border-gray-200 px-3 py-2">
+                      <div className="flex flex-col">
+                        <button onClick={() => moveDropItem(it.id, -1)} disabled={idx === 0} title="Move up"
+                          className="text-gray-400 hover:text-gray-700 disabled:opacity-30 leading-none">▲</button>
+                        <button onClick={() => moveDropItem(it.id, 1)} disabled={idx === dropItems.length - 1} title="Move down"
+                          className="text-gray-400 hover:text-gray-700 disabled:opacity-30 leading-none">▼</button>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold text-gray-800 truncate">{it.label}</div>
+                        <div className="text-[11px] text-gray-400 font-mono truncate">{it.href}</div>
+                      </div>
+                      <button onClick={() => setDropForm({ id: it.id, label: it.label, href: it.href })}
+                        className="text-xs px-2.5 py-1.5 rounded-lg font-medium border border-gray-300 text-gray-600 hover:bg-gray-50">Edit</button>
+                      <button onClick={() => deleteDropItem(it.id)}
+                        className="text-xs px-2.5 py-1.5 rounded-lg font-medium border border-gray-300 text-red-600 hover:bg-red-50">Delete</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add / edit form */}
+              <form onSubmit={saveDropItem} className="rounded-xl bg-gray-50 border border-gray-100 p-4 space-y-3">
+                <div className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">
+                  {dropForm.id != null ? 'Edit item' : 'Add item'}
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">Label <span className="text-red-500">*</span></label>
+                  <input value={dropForm.label} onChange={e => setDropForm(f => ({ ...f, label: e.target.value }))}
+                    maxLength={255} placeholder="e.g. Infringement Search"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14254A]/20" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">Links to <span className="text-red-500">*</span></label>
+                  <select value={dropForm.href} onChange={e => setDropForm(f => ({ ...f, href: e.target.value }))}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#14254A]/20">
+                    <option value="">— Select a page —</option>
+                    {dropRoutes.map(r => <option key={r.href} value={r.href}>{r.label} ({r.href})</option>)}
+                  </select>
+                  <p className="text-[11px] text-gray-400 mt-1">Only existing pages can be linked.</p>
+                </div>
+                <div className="flex justify-end gap-2">
+                  {dropForm.id != null && (
+                    <button type="button" onClick={() => setDropForm({ id: null, label: '', href: '' })}
+                      className="px-4 py-2 rounded-lg border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50">Cancel Edit</button>
+                  )}
+                  <button type="submit" disabled={dropBusy}
+                    className="px-5 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#14254A' }}>
+                    {dropBusy ? '…' : dropForm.id != null ? 'Update Item' : 'Add Item'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         </AdminModal>

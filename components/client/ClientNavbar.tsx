@@ -6,7 +6,7 @@ import { usePathname } from '@/lib/router'
 import { useSession, signOut } from '@/lib/auth-client'
 import { useTheme } from '@/lib/ThemeContext'
 import { useCustomizer, NAVBAR_HEX } from '@/lib/ThemeCustomizerContext'
-import { NAV_ITEMS, isNavItemActive, isSidebarLayout, type NavItem, type NavDropdownItem } from '@/lib/navItems'
+import { NAV_ITEMS, isNavItemActive, isSidebarLayout, isApiIndependentItem, isItemAllowed, navLabel, navOrderOf, dropdownFor, type NavItem, type NavDropdownItem } from '@/lib/navItems'
 import { useModuleAccess } from '@/lib/moduleAccess'
 
 function isActive(item: NavItem, pathname: string): boolean {
@@ -29,7 +29,7 @@ export default function ClientNavbar() {
 
   // Nav permissions + account count — shared, sessionStorage-cached (see
   // lib/moduleAccess) so a refresh paints the granted nav on the first frame.
-  const { allowedModuleNames, accountCount, apiAccess: liveApiAccess } = useModuleAccess()
+  const { allowedModules, accountCount, apiAccess: liveApiAccess } = useModuleAccess()
 
   const { theme, toggle } = useTheme()
   const { navbarStyle, navLayout, sidebarSize } = useCustomizer()
@@ -56,27 +56,33 @@ export default function ClientNavbar() {
   // claim (frozen at select-login) is only the fallback.
   const hasRealApiToken = liveApiAccess ?? !!(user?.apiAccess)
 
-  function moduleAllowed(names: string[]): boolean {
-    // Fail closed while permissions are unknown (first-ever load, no cache):
-    // briefly showing only Dashboard and then expanding beats flashing
-    // modules the user was never granted.
-    if (allowedModuleNames === null) return false
-    return names.some(n => allowedModuleNames.includes(n))
-  }
-
   // Dashboard is always visible regardless of token or module permissions.
-  // All other items require a valid API token + module permission.
+  // API-independent modules (e.g. Data Sharing) need only the grant. All other
+  // items require a valid API token + module permission. Matching is by the
+  // stable pageName (see isItemAllowed), so renaming a module never hides it.
   function isNavAllowed(item: NavItem): boolean {
     if (item.href === '/dashboard') return true
-    if (!hasRealApiToken) return false
-    return moduleAllowed(item.moduleNames)
+    if (!hasRealApiToken && !isApiIndependentItem(item)) return false
+    return isItemAllowed(item, allowedModules)
   }
 
   // Filter dropdown sub-items to only those the user has access to
   function allowedDropdownItems(item: NavItem): NavDropdownItem[] {
     if (!item.dropdown) return []
-    return item.dropdown.filter(sub => moduleAllowed(sub.moduleNames))
+    return item.dropdown.filter(sub => isItemAllowed(sub, allowedModules))
   }
+
+  // Resolve each top-level item's display label from the live module name
+  // (keyed by pageName), so renaming a module in /admin/modules relabels the
+  // nav. Dropdown children keep their own page-level labels. Ordered by the
+  // module's nav_order (set on /admin/modules); stable sort keeps code order
+  // for the default (all-zero) case.
+  const navItems = NAV_ITEMS
+    .map(it => {
+      const dd = dropdownFor(it, allowedModules)
+      return { ...it, label: navLabel(it, allowedModules), dropdown: dd.length ? dd : undefined }
+    })
+    .sort((a, b) => navOrderOf(a, allowedModules) - navOrderOf(b, allowedModules))
 
   useEffect(() => {
     fetch('/api/notifications', { credentials: 'include' })
@@ -217,7 +223,7 @@ export default function ClientNavbar() {
         <div className={!navBg ? 'bg-white dark:bg-[#14254A]' : ''}>
         <div className="w-full px-6">
           <nav className="flex items-center gap-0" ref={dropdownRef}>
-            {NAV_ITEMS.filter(isNavAllowed).map(item => {
+            {navItems.filter(isNavAllowed).map(item => {
               const active = isActive(item, pathname)
               const iconCls = active ? (navIsColored ? 'text-white' : 'text-[#FC934C]') : (navIsColored ? 'text-white/60' : 'text-gray-400')
 
@@ -287,7 +293,7 @@ export default function ClientNavbar() {
       {/* Mobile menu */}
       {mobileOpen && (
         <div className="md:hidden border-t border-gray-100 dark:border-white/10 bg-white dark:bg-[#14254A] px-4 py-3 space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto">
-          {NAV_ITEMS.filter(isNavAllowed).map(item => {
+          {navItems.filter(isNavAllowed).map(item => {
             const active = isActive(item, pathname)
             if (item.dropdown) {
               const subItems = allowedDropdownItems(item)

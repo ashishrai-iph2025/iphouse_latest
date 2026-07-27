@@ -56,6 +56,7 @@ export default function DashboardClient({ userName, modules }: Props) {
   const [sidebarOpen,  setSidebarOpen]  = useState(true)
   const [hoverMenu,    setHoverMenu]    = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  const autoLoadedRef = useRef(false)
 
   // Load PowerBI client script once
   useEffect(() => {
@@ -113,12 +114,22 @@ export default function DashboardClient({ userName, modules }: Props) {
     }
   }
 
-  // Auto-load first active module once PowerBI is ready
+  // Auto-load the first module once BOTH the PowerBI script is ready AND the
+  // modules have arrived (they are fetched asynchronously, so at the moment the
+  // script loads the list is usually still empty). Guarded by autoLoadedRef so
+  // it runs exactly once and never overrides a manual tab selection afterwards.
   useEffect(() => {
-    if (!pbiReady) return
+    if (autoLoadedRef.current) return
+    if (!pbiReady || modules.length === 0) return
+    // Prefer the first visible sidebar item (active + has a report); fall back
+    // to the first module that has any report link.
     const first = modules.find(m => m.active === 1 && m.link?.trim())
-    if (first) embedReport(first)
-  }, [pbiReady]) // eslint-disable-line react-hooks/exhaustive-deps
+      ?? modules.find(m => m.link?.trim())
+    if (first) {
+      autoLoadedRef.current = true
+      embedReport(first)
+    }
+  }, [pbiReady, modules]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const today = new Date().toLocaleDateString('en-GB', {
     weekday: 'long', day: 'numeric', month: 'short', year: 'numeric',

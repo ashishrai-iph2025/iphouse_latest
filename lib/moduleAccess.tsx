@@ -12,8 +12,13 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { useSession } from '@/lib/auth-client'
+import type { AllowedModule } from '@/lib/navItems'
 
 interface ModuleAccess {
+  // Full granted module list (name + stable pageName) — the nav joins on
+  // pageName and displays the live moduleName. null = not known yet.
+  allowedModules: AllowedModule[] | null
+  // Derived list of just the names — kept for name-based checks (e.g. war-room).
   allowedModuleNames: string[] | null
   accountCount: number
   // Live Markscan token availability from /api/user/nav. null = not known yet;
@@ -23,7 +28,7 @@ interface ModuleAccess {
   apiAccess: boolean | null
 }
 
-const Ctx = createContext<ModuleAccess>({ allowedModuleNames: null, accountCount: 1, apiAccess: null })
+const Ctx = createContext<ModuleAccess>({ allowedModules: null, allowedModuleNames: null, accountCount: 1, apiAccess: null })
 
 const CACHE_PREFIX = 'nav-modules:'
 const cacheKey = (loginId: number) => `${CACHE_PREFIX}${loginId}`
@@ -42,7 +47,7 @@ export function ModuleAccessProvider({ children }: { children: ReactNode }) {
   const { data: session } = useSession()
   const loginId = session?.user?.loginId
 
-  const [state, setState] = useState<ModuleAccess>({ allowedModuleNames: null, accountCount: 1, apiAccess: null })
+  const [state, setState] = useState<ModuleAccess>({ allowedModules: null, allowedModuleNames: null, accountCount: 1, apiAccess: null })
 
   useEffect(() => {
     if (loginId === undefined) return
@@ -54,9 +59,10 @@ export function ModuleAccessProvider({ children }: { children: ReactNode }) {
       const raw = sessionStorage.getItem(cacheKey(loginId))
       if (raw) {
         const cached = JSON.parse(raw)
-        if (Array.isArray(cached?.allowedModuleNames)) {
+        if (Array.isArray(cached?.allowedModules)) {
           setState({
-            allowedModuleNames: cached.allowedModuleNames,
+            allowedModules: cached.allowedModules,
+            allowedModuleNames: cached.allowedModules.map((m: AllowedModule) => m.moduleName),
             accountCount: Number(cached.accountCount) || 1,
             apiAccess: typeof cached.apiAccess === 'boolean' ? cached.apiAccess : null,
           })
@@ -69,8 +75,13 @@ export function ModuleAccessProvider({ children }: { children: ReactNode }) {
       .then(r => r.json())
       .then(d => {
         if (!d?.success) return
+        const allowedModules: AllowedModule[] = (d.allowedModules ?? []).map(
+          (m: { moduleName: string; pageName: string; navOrder?: number; dropdown?: { label: string; href: string }[] }) =>
+            ({ moduleName: m.moduleName, pageName: m.pageName, navOrder: m.navOrder ?? 0, dropdown: m.dropdown ?? [] })
+        )
         const next: ModuleAccess = {
-          allowedModuleNames: (d.allowedModules ?? []).map((m: { moduleName: string }) => m.moduleName),
+          allowedModules,
+          allowedModuleNames: allowedModules.map(m => m.moduleName),
           accountCount: d.accountCount ?? 1,
           apiAccess: typeof d.apiAccess === 'boolean' ? d.apiAccess : null,
         }

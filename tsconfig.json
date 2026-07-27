@@ -20,7 +20,7 @@
       "@/*": ["./*"]
     }
   },
-  "include": ["src", "app", "components", "lib"],
+  "include": ["src", "components", "lib"],
   "exclude": [
     "lib/auth.ts",
     "lib/db.ts",
@@ -32,12 +32,6 @@
     "lib/apiTokenCache.ts",
     "lib/masterDataCache.ts",
     "lib/fetchWithoutSSL.ts",
-    "app/layout.tsx",
-    "app/error.tsx",
-    "app/page.tsx",
-    "app/providers.tsx",
-    "app/admin/layout.tsx",
-    "app/admin/error.tsx",
     "instrumentation.ts",
     "node_modules",
     "dist",

@@ -19,10 +19,12 @@ export function middleware(request: NextRequest) {
     'max-age=31536000; includeSubDomains; preload'
   )
 
-  // Content Security Policy - restrict resource loading
+  // Content Security Policy - restrict resource loading (no unsafe-inline)
+  // NOTE: If you need inline styles, use CSS-in-JS or extract to <style> tags with nonce.
+  //       If you need inline scripts, extract to separate <script> tags or use nonce.
   response.headers.set(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' https://fonts.gstatic.com; connect-src 'self'; frame-ancestors 'none';"
+    "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' https://fonts.gstatic.com; connect-src 'self'; frame-ancestors 'none';"
   )
 
   // Referrer Policy - limit referrer information

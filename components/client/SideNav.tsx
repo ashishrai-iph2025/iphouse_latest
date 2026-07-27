@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom'
 import { usePathname } from '@/lib/router'
 import { useSession } from '@/lib/auth-client'
 import { useCustomizer, SIDEBAR_HEX } from '@/lib/ThemeCustomizerContext'
-import { NAV_ITEMS, isNavItemActive, type NavItem, type NavDropdownItem } from '@/lib/navItems'
+import { NAV_ITEMS, isNavItemActive, isApiIndependentItem, isItemAllowed, navLabel, navOrderOf, dropdownFor, type NavItem, type NavDropdownItem } from '@/lib/navItems'
 import { useModuleAccess } from '@/lib/moduleAccess'
 
 // Sidebar bg now driven by CSS variable --sidebar-bg (set by ThemeCustomizerContext)
@@ -23,7 +23,7 @@ export default function SideNav() {
 
   // Shared, sessionStorage-cached nav permissions (see lib/moduleAccess) — a
   // refresh paints the granted nav on the first frame instead of flashing all.
-  const { allowedModuleNames, apiAccess: liveApiAccess } = useModuleAccess()
+  const { allowedModules, apiAccess: liveApiAccess } = useModuleAccess()
 
   // close dropdown on route change
   useEffect(() => { setOpenDropdown(null); setOverlayOpen(false) }, [pathname])
@@ -33,20 +33,25 @@ export default function SideNav() {
   // apiAccess claim is frozen at login, so it's only the fallback.
   const hasRealApiToken = liveApiAccess ?? !!(user?.apiAccess)
 
-  function moduleAllowed(names: string[]): boolean {
-    // Fail closed while permissions are unknown — never flash ungranted modules.
-    if (allowedModuleNames === null) return false
-    return names.some(n => allowedModuleNames.includes(n))
-  }
   function isNavAllowed(item: NavItem): boolean {
     if (item.href === '/dashboard') return true
-    if (!hasRealApiToken) return false
-    return moduleAllowed(item.moduleNames)
+    if (!hasRealApiToken && !isApiIndependentItem(item)) return false
+    return isItemAllowed(item, allowedModules)
   }
   function allowedDropdownItems(item: NavItem): NavDropdownItem[] {
     if (!item.dropdown) return []
-    return item.dropdown.filter(sub => moduleAllowed(sub.moduleNames))
+    return item.dropdown.filter(sub => isItemAllowed(sub, allowedModules))
   }
+
+  // Resolve top-level labels from the live module names (keyed by pageName).
+  // Dropdown children keep their own page-level labels. Ordered by the module's
+  // nav_order (set on /admin/modules); stable sort keeps code order by default.
+  const navItems = NAV_ITEMS
+    .map(it => {
+      const dd = dropdownFor(it, allowedModules)
+      return { ...it, label: navLabel(it, allowedModules), dropdown: dd.length ? dd : undefined }
+    })
+    .sort((a, b) => navOrderOf(a, allowedModules) - navOrderOf(b, allowedModules))
 
   const bg = SIDEBAR_HEX[sidebarColor] ?? '#14254A'
   const isOverlay = navLayout === 'overlay'
@@ -88,7 +93,7 @@ export default function SideNav() {
           <SideNavInner bg={bg} showLabels pathname={pathname} navLayout={navLayout}
             isModern={false} isDetach={false} isTwoCol={false}
             openDropdown={openDropdown} setOpenDropdown={setOpenDropdown}
-            items={NAV_ITEMS.filter(isNavAllowed)}
+            items={navItems.filter(isNavAllowed)}
             allowedDropdownItems={allowedDropdownItems} />
         </aside>
       </>
@@ -111,7 +116,7 @@ export default function SideNav() {
       <SideNavInner bg={bg} showLabels={showLabels} pathname={pathname} navLayout={navLayout}
         isModern={isModern} isDetach={isDetach} isTwoCol={isTwoCol}
         openDropdown={openDropdown} setOpenDropdown={setOpenDropdown}
-        items={NAV_ITEMS.filter(isNavAllowed)}
+        items={navItems.filter(isNavAllowed)}
         allowedDropdownItems={allowedDropdownItems} />
     </aside>
   )

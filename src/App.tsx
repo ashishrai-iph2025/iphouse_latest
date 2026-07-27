@@ -4,7 +4,7 @@ import { lazy, Suspense, ReactNode, Component, ErrorInfo, useEffect, useState } 
 import { Routes, Route, Navigate, Outlet, useParams } from 'react-router-dom'
 import { useSession } from '@/lib/auth-client'
 import { usePathname } from '@/lib/router'
-import { NAV_ITEMS, isNavItemActive } from '@/lib/navItems'
+import { NAV_ITEMS, isNavItemActive, isApiIndependentItem } from '@/lib/navItems'
 import { CONFIG_MODULES } from '@/lib/configModules'
 import PageLoader from '@/components/ui/PageLoader'
 import ClientShell from '@/components/client/ClientShell'
@@ -32,6 +32,7 @@ const ProfilePage          = lazy(() => import('@/app/(client)/profile/page'))
 const SwitchAccountPage    = lazy(() => import('@/app/(client)/switch-account/page'))
 const IpTrackingPage       = lazy(() => import('@/app/(client)/ip-tracking/page'))
 const WarRoomPage          = lazy(() => import('@/app/(client)/war-room/page'))
+const DataSharingPage      = lazy(() => import('@/app/(client)/data-sharing/page'))
 
 // ── Admin pages ───────────────────────────────────────────────────────────────
 const AdminHomePage        = lazy(() => import('@/app/admin/home/page'))
@@ -192,13 +193,17 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
           return
         }
         const liveApiAccess = typeof d.apiAccess === 'boolean' ? d.apiAccess : !!user?.apiAccess
-        if (!liveApiAccess) {
-          // No API token → every non-dashboard route is restricted
+        if (!liveApiAccess && !isApiIndependentItem(item)) {
+          // No API token → API-dependent non-dashboard routes are restricted.
+          // API-independent modules (e.g. Data Sharing) fall through to the
+          // grant check below so they work without API credentials.
           setState({ checked: true, allowed: false, label: item.label })
           return
         }
-        const allowedNames = (d.allowedModules as { moduleName: string }[]).map(m => m.moduleName)
-        const allowed = item.moduleNames.some(n => allowedNames.includes(n))
+        // Match on the stable pageName (not the module name), so renaming a
+        // module in /admin/modules never revokes access.
+        const allowedPages = (d.allowedModules as { pageName: string }[]).map(m => m.pageName)
+        const allowed = allowedPages.includes(item.pageName)
         setState({ checked: true, allowed, label: item.label })
       })
       .catch(() => {
@@ -476,6 +481,7 @@ export default function App() {
           <Route path="/profile"                  element={<ProfilePage />} />
           <Route path="/switch-account"           element={<SwitchAccountPage />} />
           <Route path="/ip-tracking"              element={<IpTrackingPage />} />
+          <Route path="/data-sharing"             element={<DataSharingPage />} />
         </Route>
 
         {/* Admin pages */}

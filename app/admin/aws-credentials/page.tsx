@@ -6,6 +6,7 @@
 // returned to the browser except through the on-demand reveal.
 
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Navigate, Link } from 'react-router-dom'
 import { useSession } from '@/lib/auth-client'
 
@@ -34,6 +35,13 @@ export default function AwsCredentialsPage() {
   const [revealed,        setRevealed]        = useState<{ accessKeyId: string; secretAccessKey: string } | null>(null)
   const [showSecret,      setShowSecret]      = useState(false)
 
+  // File Sharing (Data Sharing module) S3 target — reuses the AWS keys above.
+  const [fsInfo,   setFsInfo]   = useState<{ configured: boolean; s3Uri?: string; region?: string; updatedAt?: string } | null>(null)
+  const [fsModal,  setFsModal]  = useState(false)
+  const [fsS3Uri,  setFsS3Uri]  = useState('')
+  const [fsRegion, setFsRegion] = useState('')
+  const [fsSaving, setFsSaving] = useState(false)
+
   function showToast(msg: string, type: 'success' | 'error' = 'success') {
     setToast({ msg, type })
     setTimeout(() => setToast(null), 4000)
@@ -52,7 +60,43 @@ export default function AwsCredentialsPage() {
     } catch { /* ignore */ }
     setLoading(false)
   }
-  useEffect(() => { if (role === 2) load() }, [role])
+  useEffect(() => { if (role === 2) { load(); loadFs() } }, [role])
+
+  async function loadFs() {
+    try {
+      const res = await fetch('/api/admin/data-sharing-config', { credentials: 'include' })
+      const data = await res.json()
+      if (data.success) {
+        setFsInfo(data)
+        setFsS3Uri(data.s3Uri || '')
+        setFsRegion(data.region || '')
+      }
+    } catch { /* ignore */ }
+  }
+
+  async function saveFs(e: React.FormEvent) {
+    e.preventDefault()
+    setFsSaving(true)
+    try {
+      const res = await fetch('/api/admin/data-sharing-config', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ s3Uri: fsS3Uri.trim(), region: fsRegion.trim() }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        showToast('File sharing settings saved')
+        setFsModal(false)
+        await loadFs()
+      } else {
+        showToast(data.error || 'Failed to save', 'error')
+      }
+    } catch {
+      showToast('Network error', 'error')
+    }
+    setFsSaving(false)
+  }
 
   async function save(e: React.FormEvent) {
     e.preventDefault()
@@ -192,10 +236,73 @@ export default function AwsCredentialsPage() {
         </div>
       </form>
 
+      {/* File Sharing (S3) — Data Sharing module target */}
+      <div className="mt-5 bg-white rounded-2xl shadow-card border border-gray-100 p-6">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold text-[#14254A]">File Sharing (S3)</h2>
+            <p className="text-xs text-brand-muted mt-1">
+              Bucket &amp; region used by the <b>Data Sharing</b> module for uploaded files. Reuses the AWS key &amp; secret above.
+            </p>
+          </div>
+          <button
+            onClick={() => { setFsS3Uri(fsInfo?.s3Uri || ''); setFsRegion(fsInfo?.region || ''); setFsModal(true) }}
+            className="px-4 py-2 rounded-xl text-sm font-semibold text-white flex-shrink-0 transition-all hover:opacity-90"
+            style={{ background: 'linear-gradient(135deg,#14254A,#1e3a6e)' }}>
+            Configure
+          </button>
+        </div>
+        <div className="mt-3 flex items-center gap-2 flex-wrap text-xs">
+          <code className="bg-gray-50 border border-gray-200 px-2 py-1 rounded font-mono text-gray-700">
+            {fsInfo?.s3Uri || 's3://mediascan-filestore/file_sharing'}
+          </code>
+          <span className="text-gray-500">Region <b className="text-gray-700">{fsInfo?.region || 'auto-detect'}</b></span>
+        </div>
+      </div>
+
       <div className="mt-4 flex items-center gap-2 text-xs text-gray-400">
         <span>Ready to back up?</span>
         <Link to="/admin/database-backup" className="font-semibold text-[#FC934C] hover:underline">Go to Database Backup →</Link>
       </div>
+
+      {/* File Sharing settings modal — portaled to <body> so it covers the full
+          viewport (an ancestor transform would otherwise clip position:fixed). */}
+      {fsModal && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4" onClick={() => setFsModal(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="font-bold text-[#14254A]">File Sharing Settings</h3>
+              <button onClick={() => setFsModal(false)} className="text-gray-400 hover:text-gray-600 text-lg leading-none">✕</button>
+            </div>
+            <form onSubmit={saveFs} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">S3 Destination URI <span className="text-red-500">*</span></label>
+                <input type="text" value={fsS3Uri} onChange={e => setFsS3Uri(e.target.value)} autoComplete="off"
+                  placeholder="s3://mediascan-filestore/file_sharing" required
+                  className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#14254A]/20" />
+                <p className="text-[11px] text-gray-400 mt-1">Where uploaded .xlsx files are stored for the Data Sharing module.</p>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">Region</label>
+                <input type="text" value={fsRegion} onChange={e => setFsRegion(e.target.value)} autoComplete="off"
+                  placeholder="e.g. ap-south-1 (leave blank to auto-detect)"
+                  className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#14254A]/20" />
+                <p className="text-[11px] text-gray-400 mt-1">The bucket&apos;s region. Leave blank to auto-detect it on each upload.</p>
+              </div>
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button type="button" onClick={() => setFsModal(false)}
+                  className="px-4 py-2 rounded-xl text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>
+                <button type="submit" disabled={fsSaving}
+                  className="px-5 py-2 rounded-xl text-sm font-semibold text-white disabled:opacity-60 transition-all hover:opacity-90"
+                  style={{ background: 'linear-gradient(135deg,#14254A,#1e3a6e)' }}>
+                  {fsSaving ? 'Saving…' : 'Save Settings'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   )
 }

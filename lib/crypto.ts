@@ -1,11 +1,22 @@
 import crypto from 'crypto'
 
-const KEY = process.env.ENCRYPTION_KEY ?? ''
+// Require encryption keys to be explicitly configured — no defaults
+if (!process.env.ENCRYPTION_KEY) {
+  throw new Error('ENCRYPTION_KEY environment variable is required and not set')
+}
+if (!process.env.API_CRED_KEY) {
+  throw new Error('API_CRED_KEY environment variable is required and not set')
+}
+if (!process.env.API_CRED_IV) {
+  throw new Error('API_CRED_IV environment variable is required and not set')
+}
+
+const KEY = process.env.ENCRYPTION_KEY
 
 // ── API Credentials: fixed key+IV (matches PHP ManageApiCredentials.php) ──────
 // openssl_encrypt($value, 'AES-256-CBC', key, 0, iv) → base64 (no IV prepended)
-const API_KEY = Buffer.from(process.env.API_CRED_KEY ?? '12345678901234567890123456789012')
-const API_IV  = Buffer.from(process.env.API_CRED_IV  ?? '1234567890123456')
+const API_KEY = Buffer.from(process.env.API_CRED_KEY)
+const API_IV  = Buffer.from(process.env.API_CRED_IV)
 
 export function encryptApiPassword(plain: string): string {
   if (!plain) return ''

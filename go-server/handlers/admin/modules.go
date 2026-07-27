@@ -126,9 +126,9 @@ func ModulePermissions(w http.ResponseWriter, r *http.Request) {
 		showDeleted := r.URL.Query().Get("showDeleted") == "1"
 		var rows []map[string]any
 		if showDeleted {
-			rows, _ = db.Query("SELECT Id, ModuleName, pageName, status, created, updated FROM module_permission ORDER BY Id ASC")
+			rows, _ = db.Query("SELECT Id, ModuleName, pageName, status, nav_order, created, updated FROM module_permission ORDER BY nav_order ASC, Id ASC")
 		} else {
-			rows, _ = db.Query("SELECT Id, ModuleName, pageName, status, created, updated FROM module_permission WHERE status = 0 ORDER BY Id ASC")
+			rows, _ = db.Query("SELECT Id, ModuleName, pageName, status, nav_order, created, updated FROM module_permission WHERE status = 0 ORDER BY nav_order ASC, Id ASC")
 		}
 		if rows == nil { rows = []map[string]any{} }
 		ok(w, map[string]any{"success": true, "modules": rows})
@@ -168,6 +168,23 @@ func ModulePermissions(w http.ResponseWriter, r *http.Request) {
 	default:
 		fail(w, 405, "Method not allowed")
 	}
+}
+
+// POST /api/admin/module-permissions/reorder — set the client-nav order.
+// Body: { orderedIds: [int] } in the desired top-to-bottom sequence. Every
+// listed row gets a sequential nav_order (1..N) so ordering is fully defined.
+func ModulePermissionsReorder(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		OrderedIds []int64 `json:"orderedIds"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if len(body.OrderedIds) == 0 {
+		fail(w, 422, "orderedIds required"); return
+	}
+	for i, id := range body.OrderedIds {
+		db.Exec("UPDATE module_permission SET nav_order = ?, updated = UTC_TIMESTAMP() WHERE Id = ?", i+1, id)
+	}
+	ok(w, map[string]any{"success": true})
 }
 
 // GET/POST /api/admin/user-module-permissions

@@ -235,6 +235,55 @@ func Migrate() {
 		log.Printf("[db] migrate: dcp_admin_config_access userId→loginId renamed")
 	}
 
+	// Data Sharing: upload history for xlsx files pushed to S3. Each row records
+	// who uploaded, when, the S3 object key, and the 7-day presigned URL issued
+	// at upload time (which expires with url_expires_at).
+	_, _, err = Exec(`CREATE TABLE IF NOT EXISTS data_sharing_history (
+		id             INT AUTO_INCREMENT PRIMARY KEY,
+		login_id       INT           NOT NULL,
+		user_id        INT           NOT NULL,
+		uploaded_by    VARCHAR(255)  NOT NULL,
+		client_name    VARCHAR(255)  NULL,
+		file_name      VARCHAR(512)  NOT NULL,
+		s3_key         VARCHAR(1024) NOT NULL,
+		file_size      BIGINT        NOT NULL DEFAULT 0,
+		presigned_url  TEXT          NOT NULL,
+		url_expires_at DATETIME      NOT NULL,
+		created_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		INDEX idx_login (login_id),
+		INDEX idx_created (created_at)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+	if err != nil {
+		log.Printf("[db] migrate data_sharing_history: %v", err)
+	} else {
+		log.Printf("[db] migrate: data_sharing_history OK")
+	}
+
+	// Seed the "Data Sharing" client module so it is grantable on
+	// /admin/module-permissions. Inserted once; ignored if it already exists.
+	if _, _, serr := Exec(`INSERT INTO module_permission (ModuleName, pageName, status, created, updated)
+		SELECT 'Data Sharing', 'data-sharing', 0, UTC_TIMESTAMP(), UTC_TIMESTAMP()
+		WHERE NOT EXISTS (SELECT 1 FROM module_permission WHERE ModuleName = 'Data Sharing')`); serr != nil {
+		log.Printf("[db] seed Data Sharing module: %v", serr)
+	} else {
+		log.Printf("[db] seed: Data Sharing module ensured")
+	}
+
+	// Data Sharing target: the S3 URI and region for uploaded files. Single row
+	// (id=1). The AWS key/secret are reused from aws_credentials; only the bucket
+	// and region differ (the file-sharing bucket may be in another region).
+	_, _, err = Exec(`CREATE TABLE IF NOT EXISTS data_sharing_config (
+		id         INT NOT NULL PRIMARY KEY,
+		s3_uri     VARCHAR(255) NOT NULL DEFAULT '',
+		region     VARCHAR(64)  NOT NULL DEFAULT '',
+		updated_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+	if err != nil {
+		log.Printf("[db] migrate data_sharing_config: %v", err)
+	} else {
+		log.Printf("[db] migrate: data_sharing_config OK")
+	}
+
 	// dcp_user_login had no timestamp columns at all in production — logins
 	// could be created or edited with no record of when. Both are stamped
 	// explicitly by the application (UTC_TIMESTAMP()) on every insert/update
@@ -275,6 +324,43 @@ func Migrate() {
 	addColumnIfMissing("dcp_super_admin", "otp_login_enabled", "TINYINT(1) NOT NULL DEFAULT 0")
 	addIndexIfMissing("dcp_super_admin", "idx_super_admin_userId", "INDEX idx_super_admin_userId (userId)")
 	addIndexIfMissing("dcp_super_admin", "uniq_super_admin_email", "UNIQUE KEY uniq_super_admin_email (email)")
+
+	// Client nav ordering: the sequence a module appears in the client top nav,
+	// controlled from /admin/modules. Default 0 → code order is preserved until
+	// an admin reorders (reorder writes sequential values to every active row).
+	addColumnIfMissing("module_permission", "nav_order", "INT NOT NULL DEFAULT 0")
+
+	// Admin-configurable dropdown sub-items for a nav module. Each row is a child
+	// link under a parent module (keyed by the parent's pageName). The href must
+	// be an existing client route — validated server-side on write.
+	if _, _, err = Exec(`CREATE TABLE IF NOT EXISTS nav_dropdown_items (
+		id               INT AUTO_INCREMENT PRIMARY KEY,
+		parent_page_name VARCHAR(255) NOT NULL,
+		label            VARCHAR(255) NOT NULL,
+		href             VARCHAR(255) NOT NULL,
+		sort_order       INT NOT NULL DEFAULT 0,
+		created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		INDEX idx_parent (parent_page_name)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`); err != nil {
+		log.Printf("[db] migrate nav_dropdown_items: %v", err)
+	} else {
+		log.Printf("[db] migrate: nav_dropdown_items OK")
+	}
+
+	// Seed the code-defined dropdown children into the DB on first run, so they
+	// appear (and are editable) in the /admin/modules dropdown manager instead of
+	// living invisibly in code. Only seeds when the table is empty — never fights
+	// an admin's later edits. Currently only "Search Case List" has children.
+	if cnt, _ := QueryOne("SELECT COUNT(*) AS c FROM nav_dropdown_items"); cnt == nil || countVal(cnt["c"]) == 0 {
+		if _, _, serr := Exec(`INSERT INTO nav_dropdown_items (parent_page_name, label, href, sort_order) VALUES
+			('SearchCaseList', 'Infringement Search', '/infringement', 1),
+			('SearchCaseList', 'Search by URL', '/search', 2)`); serr != nil {
+			log.Printf("[db] seed nav_dropdown_items: %v", serr)
+		} else {
+			log.Printf("[db] seed: nav_dropdown_items defaults inserted")
+		}
+	}
 }
 
 // addColumnIfMissing runs an ALTER TABLE ADD COLUMN only when the column does

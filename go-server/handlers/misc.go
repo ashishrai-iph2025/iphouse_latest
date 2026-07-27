@@ -99,10 +99,11 @@ func UserNav(w http.ResponseWriter, r *http.Request) {
 	}
 
 	allowed, _ := db.Query(`
-		SELECT m.Id AS moduleId, m.ModuleName, m.pageName
+		SELECT m.Id AS moduleId, m.ModuleName, m.pageName, m.nav_order AS navOrder
 		FROM user_module_permission_test u
 		JOIN module_permission m ON m.Id = u.moduleId
-		WHERE u.loginId = ? AND u.allowed = 1 AND m.status = 0`, claims.LoginID)
+		WHERE u.loginId = ? AND u.allowed = 1 AND m.status = 0
+		ORDER BY m.nav_order ASC, m.Id ASC`, claims.LoginID)
 
 	// Diagnostic: how many module grants exist for this login (vs total rows).
 	allRows, _ := db.Query(`SELECT moduleId, allowed FROM user_module_permission_test WHERE loginId = ?`, claims.LoginID)
@@ -120,19 +121,33 @@ func UserNav(w http.ResponseWriter, r *http.Request) {
 		accountCount = intFromAny(row["cnt"])
 	}
 
-	// Dashboard is always granted regardless of permission table entries
+	// Admin-configured dropdown children per parent module (keyed by pageName).
+	dropByParent := map[string][]map[string]any{}
+	dropRows, _ := db.Query("SELECT parent_page_name, label, href FROM nav_dropdown_items ORDER BY sort_order ASC, id ASC")
+	for _, dr := range dropRows {
+		p := strFromAny(dr["parent_page_name"])
+		dropByParent[p] = append(dropByParent[p], map[string]any{
+			"label": strFromAny(dr["label"]), "href": strFromAny(dr["href"]),
+		})
+	}
+
+	// Dashboard is always granted regardless of permission table entries.
+	// navOrder 0 keeps it first unless explicitly reordered.
 	modules := []map[string]any{
-		{"moduleId": 0, "moduleName": "Dashboard", "pageName": "dashboard"},
+		{"moduleId": 0, "moduleName": "Dashboard", "pageName": "dashboard", "navOrder": 0, "dropdown": dropByParent["dashboard"]},
 	}
 	for _, row := range allowed {
 		name := strFromAny(row["ModuleName"])
 		if name == "Dashboard" {
 			continue // already added above
 		}
+		pageName := strFromAny(row["pageName"])
 		modules = append(modules, map[string]any{
 			"moduleId":   intFromAny(row["moduleId"]),
 			"moduleName": name,
-			"pageName":   strFromAny(row["pageName"]),
+			"pageName":   pageName,
+			"navOrder":   intFromAny(row["navOrder"]),
+			"dropdown":   dropByParent[pageName],
 		})
 	}
 	// Live API-token availability. The session's apiAccess claim is frozen at
