@@ -53,13 +53,13 @@ func BackupSchedule(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s := loadSchedule()
 		resp := map[string]any{
-			"success":   true,
-			"enabled":   s.enabled,
-			"cronExpr":  s.cronExpr,
-			"lastRunAt": s.lastRunAt,
+			"success":    true,
+			"enabled":    s.enabled,
+			"cronExpr":   s.cronExpr,
+			"lastRunAt":  s.lastRunAt,
 			"lastStatus": s.lastStat,
-			"lastFile":  s.lastFile,
-			"lastError": s.lastErr,
+			"lastFile":   s.lastFile,
+			"lastError":  s.lastErr,
 		}
 		if sched, err := cronParser.Parse(s.cronExpr); err == nil {
 			resp["nextRun"] = sched.Next(time.Now()).UTC().Format(time.RFC3339)
@@ -77,7 +77,8 @@ func BackupSchedule(w http.ResponseWriter, r *http.Request) {
 			body.CronExpr = "0 2 * * *"
 		}
 		if _, err := cronParser.Parse(body.CronExpr); err != nil {
-			Fail(w, 422, "Invalid schedule expression. Use a 5-field cron, e.g. \"0 2 * * *\" for daily at 02:00."); return
+			Fail(w, 422, "Invalid schedule expression. Use a 5-field cron, e.g. \"0 2 * * *\" for daily at 02:00.")
+			return
 		}
 		v := 0
 		if body.Enabled {
@@ -85,7 +86,8 @@ func BackupSchedule(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := db.MustExec(`INSERT INTO backup_schedule (id, enabled, cron_expr) VALUES (1, ?, ?)
 			ON DUPLICATE KEY UPDATE enabled=?, cron_expr=?`, v, body.CronExpr, v, body.CronExpr); err != nil {
-			Fail(w, 500, "Could not save the schedule"); return
+			Fail(w, 500, "Could not save the schedule")
+			return
 		}
 		OK(w, map[string]any{"success": true})
 

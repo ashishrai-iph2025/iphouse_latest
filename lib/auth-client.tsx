@@ -29,6 +29,10 @@ export interface AppUser {
   email:          string
   apiToken?:      string
   apiAccess?:     boolean
+  // Client Admin: this login administers the users of its OWN client
+  // company (view + activate/deactivate). Independent of `role`, which
+  // stays 0 for these users.
+  clientAdmin?:   boolean
   // Set when an Admin/Super Admin is viewing the portal AS this client.
   impersonating?:    boolean
   impersonatorName?: string
@@ -81,6 +85,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               email: u.loginUsername ?? '',
               apiToken: u.apiToken,
               apiAccess: u.apiAccess ?? false,
+              clientAdmin: u.clientAdmin ?? false,
               impersonating:    u.impersonating ?? false,
               impersonatorName: u.impersonatorName ?? '',
             },

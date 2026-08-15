@@ -1,11 +1,15 @@
 'use client'
 
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from '@/lib/router'
+import { useSearchParams, useRouter } from '@/lib/router'
 import { createPortal } from 'react-dom'
 import type { InfringementItem } from '@/lib/types'
 import Breadcrumb from '@/components/ui/Breadcrumb'
 import PageLoader from '@/components/ui/PageLoader'
+import { useTimeZone } from '@/lib/timezone'
+import {
+  matchesUrlType, platformLabel, isOpenWebPlatform, OPEN_WEB_URL_TYPES, type OpenWebUrlType,
+} from '@/lib/platformCategories'
 
 const PAGE_SIZES = [10, 25, 50, 100, 1000]
 
@@ -20,17 +24,16 @@ function get(row: InfringementItem, ...keys: string[]): string {
   return '—'
 }
 
-function fmtDate(v: string) {
-  if (v === '—') return '—'
-  const d = new Date(v)
-  if (isNaN(d.getTime())) return v
-  return d.toLocaleString('en-GB', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+/**
+ * Timestamps upstream are UTC, and this used to hand them to `new Date(v)` —
+ * which reads a stamp with no zone on it as LOCAL time, so a discovery logged
+ * at 09:00 UTC showed as 09:00 wherever you happened to be. It now goes through
+ * the portal's time-zone preference (lib/timezone.tsx), which parses the value
+ * as UTC and renders it in the country the header is set to.
+ */
+function useFmtDate() {
+  const { formatUtc } = useTimeZone()
+  return (v: string) => (v === '—' ? '—' : formatUtc(v, { fallback: v }))
 }
 
 // Listing-style platforms (Meta Ads, Marketplace) carry commerce fields
@@ -99,6 +102,49 @@ function resolveFields(row: InfringementItem, platform = '') {
   }
 }
 
+/**
+ * Screenshot thumbnail.
+ *
+ * Three states, because "no image" and "image that won't load" used to look the
+ * same — a bare <img> whose src 404s, expires, or is plain http on an https page
+ * renders as an empty box with no hint why. `no image` shows +, a failed load
+ * shows a struck-through image mark with the URL on hover, and a good one shows
+ * the picture.
+ */
+function Thumb({ src, size, linked = false }: { src: string; size: number; linked?: boolean }) {
+  const [failed, setFailed] = useState(false)
+  const box = 'rounded-xl object-cover flex-shrink-0 border border-gray-200 dark:border-white/10'
+  const placeholder = `${box} bg-gray-100 dark:bg-white/10 flex items-center justify-center text-gray-400 font-light`
+  const missing = src === '—' || !src
+
+  if (missing || failed) {
+    return (
+      <div className={placeholder} style={{ width: size, height: size, fontSize: size / 2.6 }}
+        title={failed ? `Screenshot could not be loaded: ${src}` : 'No screenshot for this record'}>
+        {failed ? (
+          <svg width={size / 2.4} height={size / 2.4} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="2" /><path d="m3 20 6-7 4 4 3-3 5 5M4 4l16 16" />
+          </svg>
+        ) : '+'}
+      </div>
+    )
+  }
+
+  const img = (
+    <img src={src} alt="screenshot" loading="lazy" referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+      className={`${box} ${linked ? 'hover:opacity-80 transition-opacity cursor-pointer' : ''}`}
+      style={{ width: size, height: size }} />
+  )
+  if (!linked) return img
+  return (
+    <a href={src} target="_blank" rel="noopener noreferrer" className="flex-shrink-0" title="Open image in new tab">
+      {img}
+    </a>
+  )
+}
+
 function MRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="bg-gray-50 dark:bg-white/5 rounded-lg px-3 py-2 border border-gray-100 dark:border-white/10">
@@ -143,6 +189,18 @@ function PgBtn({
   )
 }
 
+/**
+ * Record details drawer — a half-screen canvas that slides in from the right edge
+ * rather than a centred dialog. A record carries long URLs and a dozen fields,
+ * which a box in the middle of the screen has to either clip or scroll; a
+ * full-height panel gives them the room and keeps the result list visible
+ * alongside.
+ *
+ * Portalled to <body>: the page wrapper's `.fade-in` leaves a permanent
+ * `transform` behind (fill-mode: both in app/globals.css), and a transformed
+ * ancestor would pin `position: fixed` to the content box instead of the
+ * viewport.
+ */
 function ModalPortal({
   open,
   onClose,
@@ -153,30 +211,43 @@ function ModalPortal({
   children: React.ReactNode
 }) {
   const [mounted, setMounted] = useState(false)
+  // Drives the enter transition: the panel mounts off-screen, then slides in on
+  // the next frame. Without the two-step it would simply appear in place.
+  const [shown, setShown] = useState(false)
 
   useEffect(() => {
     setMounted(true)
   }, [])
 
   useEffect(() => {
-    if (!open) return
+    if (!open) { setShown(false); return }
+    const raf = requestAnimationFrame(() => setShown(true))
     const prev = document.body.style.overflow
     document.body.style.overflow = 'hidden'
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
     return () => {
+      cancelAnimationFrame(raf)
       document.body.style.overflow = prev
+      window.removeEventListener('keydown', onKey)
     }
-  }, [open])
+  }, [open, onClose])
 
   if (!mounted || !open) return null
 
   return createPortal(
-    <div
-      className="fixed inset-0 z-[99999] bg-black/30 backdrop-blur-[2px] flex items-start justify-center p-4 sm:p-6"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-[99999]" role="dialog" aria-modal="true" aria-label="Record details">
+      {/* Scrim over the half of the screen still showing the list */}
       <div
-        className="w-full max-w-[calc(100vw-2rem)] sm:max-w-[560px] bg-white dark:bg-[#1a2d55] rounded-2xl shadow-2xl border border-gray-100 dark:border-white/10 overflow-hidden"
-        style={{ maxHeight: 'calc(100vh - 3rem)' }}
+        className={`absolute inset-0 backdrop-blur-[2px] transition-opacity duration-300 ${
+          shown ? 'opacity-100' : 'opacity-0'}`}
+        style={{ background: 'rgba(20,37,74,0.45)' }}
+        onClick={onClose}
+      />
+      <div
+        className={`absolute inset-y-0 right-0 w-full sm:w-1/2 max-w-[860px] flex flex-col
+          bg-white dark:bg-[#1a2d55] shadow-2xl border-l border-gray-200 dark:border-white/10
+          transition-transform duration-300 ease-out ${shown ? 'translate-x-0' : 'translate-x-full'}`}
         onClick={e => e.stopPropagation()}
       >
         {children}
@@ -194,10 +265,18 @@ function isUGCPlatform(p: string) {
 
 function PlatformDetail({ platform: slug }: { platform: string }) {
   const searchParams = useSearchParams()
+  const router = useRouter()
+  const fmtDate = useFmtDate()
   const platformParam = searchParams.get('platform') || slug
   const startDate = searchParams.get('startDate') || ''
   const endDate = searchParams.get('endDate') || ''
   const assetName = searchParams.get('assetName') || ''
+  // Open Web only. /Internet/Paged returns host and linking rows together and
+  // takes no source flag, so the choice made on the search page is applied here,
+  // over the rows themselves.
+  const urlTypeParam = searchParams.get('urlType')
+  const urlType: OpenWebUrlType =
+    urlTypeParam === 'linking' || urlTypeParam === 'source' ? urlTypeParam : 'all'
 
   const [items, setItems] = useState<InfringementItem[]>([])
   const [total, setTotal] = useState(0)
@@ -254,9 +333,16 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [platformParam, startDate, endDate, assetName])
 
-  const totalPages = Math.max(1, Math.ceil(items.length / pageSize))
+  // Everything below counts and pages over the CHOSEN url type, so the row
+  // count on screen matches what is listed. `items` stays the raw fetch buffer
+  // that "load more" appends to.
+  const visible = useMemo(
+    () => (urlType === 'all' ? items : items.filter(r => matchesUrlType(r as any, urlType))),
+    [items, urlType])
+
+  const totalPages = Math.max(1, Math.ceil(visible.length / pageSize))
   const pageStart = (page - 1) * pageSize
-  const pageRows = items.slice(pageStart, pageStart + pageSize)
+  const pageRows = visible.slice(pageStart, pageStart + pageSize)
 
   function pgRange(cur: number, tot: number): (number | '…')[] {
     if (tot <= 9) return Array.from({ length: tot }, (_, i) => i + 1)
@@ -276,7 +362,7 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
         <Breadcrumb
           items={[
             { label: 'Find Infringements', href: '/infringement' },
-            { label: platformParam },
+            { label: platformLabel(platformParam) },
           ]}
         />
         {hasMore && (
@@ -298,8 +384,19 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
       </div>
 
       <div className="flex items-center justify-between mb-5">
-        <div>
-          <h1 className="text-xl font-bold text-[#14254A] dark:text-white">Search Results — {platformParam}</h1>
+        <div className="flex items-start gap-3 min-w-0">
+          {/* Back to the platform picker — this page is always arrived at from
+              there, and browser-back was the only way out. */}
+          <button
+            onClick={() => router.push('/infringement')}
+            className="flex items-center gap-1.5 mt-1 text-sm font-semibold px-3 py-1.5 rounded-xl border border-gray-200 dark:border-white/15 text-gray-500 dark:text-white/60 hover:border-[#14254A] hover:text-[#14254A] dark:hover:text-white dark:hover:border-white/40 transition-all flex-shrink-0"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}
+              strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5m0 0 6-6m-6 6 6 6" /></svg>
+            <span className="hidden sm:inline">Back</span>
+          </button>
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold text-[#14254A] dark:text-white">Search Results — {platformLabel(platformParam)}</h1>
           <p className="text-brand-muted text-xs mt-1">
             {assetName && (
               <span className="mr-3">
@@ -312,17 +409,25 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
               </span>
             )}
             {endDate && (
-              <span>
+              <span className="mr-3">
                 To: <strong>{endDate}</strong>
+              </span>
+            )}
+            {urlType !== 'all' && (
+              <span>
+                URL type: <strong>{OPEN_WEB_URL_TYPES.find(t => t.key === urlType)?.label}</strong>
               </span>
             )}
           </p>
         </div>
+        </div>
 
-        {!loading && items.length > 0 && (
+        {!loading && visible.length > 0 && (
           <div className="flex items-center gap-2 flex-shrink-0">
             <span className="text-xs text-brand-muted">
-              {items.length.toLocaleString()} loaded{total > items.length ? ` of ${total.toLocaleString()}` : ''}
+              {visible.length.toLocaleString()} loaded
+              {urlType !== 'all' && items.length !== visible.length ? ` of ${items.length.toLocaleString()} fetched` : ''}
+              {urlType === 'all' && total > items.length ? ` of ${total.toLocaleString()}` : ''}
             </span>
             <span className="badge badge-info">{total.toLocaleString()} total</span>
           </div>
@@ -339,11 +444,19 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
             Retry
           </button>
         </div>
-      ) : items.length === 0 ? (
+      ) : visible.length === 0 ? (
         <div className="text-center py-24 text-brand-muted">
           <p className="text-4xl mb-4">📭</p>
-          <p className="font-medium">No infringement data found</p>
-          <p className="text-sm">Try adjusting your filters</p>
+          <p className="font-medium">
+            {items.length > 0
+              ? `No ${OPEN_WEB_URL_TYPES.find(t => t.key === urlType)?.label.toLowerCase()} results`
+              : 'No infringement data found'}
+          </p>
+          <p className="text-sm">
+            {items.length > 0
+              ? `${items.length.toLocaleString()} record${items.length === 1 ? '' : 's'} were fetched, but none are of this URL type.`
+              : 'Try adjusting your filters'}
+          </p>
         </div>
       ) : (
         <>
@@ -351,8 +464,8 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
             <div className="flex items-center gap-3">
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 Showing <strong className="text-[#14254A] dark:text-white">{pageStart + 1}</strong>–
-                <strong className="text-[#14254A] dark:text-white">{Math.min(pageStart + pageSize, items.length)}</strong> of{' '}
-                <strong className="text-[#14254A] dark:text-white">{items.length.toLocaleString()}</strong> cases — Page{' '}
+                <strong className="text-[#14254A] dark:text-white">{Math.min(pageStart + pageSize, visible.length)}</strong> of{' '}
+                <strong className="text-[#14254A] dark:text-white">{visible.length.toLocaleString()}</strong> cases — Page{' '}
                 <strong className="text-[#14254A] dark:text-white">{page}</strong> of{' '}
                 <strong className="text-[#14254A] dark:text-white">{totalPages}</strong>
               </p>
@@ -400,30 +513,27 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
               const isActive = f.status === '—' || f.status.toLowerCase().includes('active') || f.status.toLowerCase() === 'live'
 
               return (
-                <div key={pageStart + i} className="flex items-start gap-4 px-5 py-4 hover:bg-orange-50/40 dark:hover:bg-white/5 transition-colors">
-                  {f.screenshot !== '—' ? (
-                    <img
-                      src={f.screenshot}
-                      alt="screenshot"
-                      className="w-12 h-12 rounded-lg object-cover flex-shrink-0 border border-gray-200 dark:border-white/10"
-                    />
-                  ) : (
-                    <div className="w-12 h-12 rounded-lg bg-gray-100 dark:bg-white/10 flex items-center justify-center flex-shrink-0 text-gray-400 text-xl font-light border border-gray-200 dark:border-white/10">
-                      +
-                    </div>
-                  )}
+                /* The whole row opens the record — the link-styled "View Details"
+                   was the only way in and read as body text. Links inside stop
+                   propagation so they still open their own target. */
+                <div key={pageStart + i}
+                  onClick={() => setModal(item)}
+                  role="button" tabIndex={0}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setModal(item) } }}
+                  className="group flex items-start gap-4 px-5 py-4 cursor-pointer hover:bg-orange-50/40 dark:hover:bg-white/5 transition-colors focus:outline-none focus-visible:bg-orange-50/60 dark:focus-visible:bg-white/10">
+                  <Thumb src={f.screenshot} size={48} />
 
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-[#14254A] dark:text-white truncate">
-                      {f.asset !== '—' ? f.asset : platformParam}
+                      {f.asset !== '—' ? f.asset : platformLabel(platformParam)}
                       {f.type !== '—' && <span className="text-gray-400 font-normal"> — {f.type}</span>}
                     </p>
 
                     <div className="mt-1 space-y-0.5">
                       {f.videoUrl !== '—' && (
                         <p className="text-xs truncate">
-                          <span className="text-gray-400">Video URL: </span>
-                          <a href={f.videoUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline" title={f.videoUrl}>
+                          <span className="text-gray-400">Media File: </span>
+                          <a href={f.videoUrl} target="_blank" onClick={e => e.stopPropagation()} rel="noopener noreferrer" className="text-blue-600 hover:underline" title={f.videoUrl}>
                             {f.videoUrl.length > 80 ? f.videoUrl.slice(0, 80) + '…' : f.videoUrl}
                           </a>
                         </p>
@@ -432,7 +542,7 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
                       {f.hostUrl !== '—' && (
                         <p className="text-xs truncate">
                           <span className="text-gray-400">Host URL: </span>
-                          <a href={f.hostUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline" title={f.hostUrl}>
+                          <a href={f.hostUrl} target="_blank" onClick={e => e.stopPropagation()} rel="noopener noreferrer" className="text-blue-600 hover:underline" title={f.hostUrl}>
                             {f.hostUrl.length > 80 ? f.hostUrl.slice(0, 80) + '…' : f.hostUrl}
                           </a>
                         </p>
@@ -441,7 +551,7 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
                       {f.linkUrl !== '—' && (
                         <p className="text-xs truncate">
                           <span className="text-gray-400">Link URL: </span>
-                          <a href={f.linkUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline" title={f.linkUrl}>
+                          <a href={f.linkUrl} target="_blank" onClick={e => e.stopPropagation()} rel="noopener noreferrer" className="text-blue-600 hover:underline" title={f.linkUrl}>
                             {f.linkUrl.length > 80 ? f.linkUrl.slice(0, 80) + '…' : f.linkUrl}
                           </a>
                         </p>
@@ -451,7 +561,7 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
                         f.linkUrl !== '—' && (
                           <p className="text-xs truncate">
                             <span className="text-gray-400">Post URL: </span>
-                            <a href={f.linkUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline" title={f.linkUrl}>
+                            <a href={f.linkUrl} target="_blank" onClick={e => e.stopPropagation()} rel="noopener noreferrer" className="text-blue-600 hover:underline" title={f.linkUrl}>
                               {f.linkUrl.length > 80 ? f.linkUrl.slice(0, 80) + '…' : f.linkUrl}
                             </a>
                           </p>
@@ -460,7 +570,7 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
                         f.profileUrl !== '—' && (
                           <p className="text-xs truncate">
                             <span className="text-gray-400">{isListingPlatform(platformParam) ? 'Seller: ' : 'Channel: '}</span>
-                            <a href={f.profileUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                            <a href={f.profileUrl} target="_blank" onClick={e => e.stopPropagation()} rel="noopener noreferrer" className="text-blue-600 hover:underline">
                               {f.channelName !== '—' ? f.channelName : f.profileUrl.slice(0, 60)}
                             </a>
                           </p>
@@ -487,10 +597,12 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
                     </span>
 
                     <button
-                      onClick={e => {
-                        setModal(item)
-                      }}
-                      className="text-xs text-gray-500 dark:text-gray-400 hover:text-[#FC934C] dark:hover:text-[#FC934C] font-medium transition-colors whitespace-nowrap"
+                      type="button"
+                      onClick={e => { e.stopPropagation(); setModal(item) }}
+                      className="inline-flex items-center gap-1.5 text-xs font-bold whitespace-nowrap px-3 py-1.5 rounded-lg border transition-all
+                        border-[#14254A]/15 text-[#14254A] bg-white hover:bg-[#14254A] hover:border-[#14254A] hover:text-white
+                        group-hover:border-[#14254A]/40
+                        dark:bg-white/5 dark:border-white/15 dark:text-white/80 dark:hover:bg-white/15 dark:hover:text-white"
                     >
                       View Details
                     </button>
@@ -526,31 +638,25 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
 
       <ModalPortal open={!!modal} onClose={() => setModal(null)}>
         {modal && modalFields && (
-          <div className="flex flex-col max-h-[calc(100vh-3rem)]">
-            <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-100 dark:border-white/10">
-              <h2 className="font-bold text-[#14254A] dark:text-white text-base">Record details</h2>
-              <button onClick={() => setModal(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">
+          /* Fills the drawer: fixed header, scrolling body, pinned footer. */
+          <div className="flex flex-col h-full min-h-0">
+            <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-100 dark:border-white/10 flex-shrink-0"
+              style={{ background: 'linear-gradient(135deg,#14254A,#1E3766)' }}>
+              <div className="min-w-0">
+                <h2 className="font-bold text-white text-base leading-tight">Record details</h2>
+                <p className="text-[11px] text-white/60 truncate">{platformLabel(platformParam)}</p>
+              </div>
+              <button onClick={() => setModal(null)} aria-label="Close"
+                className="text-white/60 hover:text-white text-xl leading-none flex-shrink-0">
                 ×
               </button>
             </div>
 
-            <div className="p-4 sm:p-5 space-y-4 overflow-y-auto">
+            <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1 min-h-0">
               <div className="flex items-start gap-3">
-                {modalFields.screenshot !== '—' ? (
-                  <a href={modalFields.screenshot} target="_blank" rel="noopener noreferrer" className="flex-shrink-0" title="Open image in new tab">
-                    <img
-                      src={modalFields.screenshot}
-                      alt="screenshot"
-                      className="w-16 h-16 rounded-xl object-cover border border-gray-200 dark:border-white/10 hover:opacity-80 transition-opacity cursor-pointer"
-                    />
-                  </a>
-                ) : (
-                  <div className="w-16 h-16 rounded-xl bg-gray-100 dark:bg-white/10 flex items-center justify-center text-gray-400 text-2xl border border-gray-200 dark:border-white/10 flex-shrink-0">
-                    +
-                  </div>
-                )}
+                <Thumb src={modalFields.screenshot} size={64} linked />
                 <div className="flex-1 min-w-0">
-                  <p className="font-bold text-[#14254A] dark:text-white text-sm">{modalFields.asset !== '—' ? modalFields.asset : platformParam}</p>
+                  <p className="font-bold text-[#14254A] dark:text-white text-sm">{modalFields.asset !== '—' ? modalFields.asset : platformLabel(platformParam)}</p>
                   {modalFields.videoTitle !== '—' && <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{modalFields.videoTitle}</p>}
                   {modalFields.domain !== '—' && <p className="text-xs text-gray-400 mt-0.5">{modalFields.domain}</p>}
                 </div>
@@ -572,21 +678,21 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
 
               <div className="grid grid-cols-1 gap-2">
                 {modalFields.videoUrl !== '—' && (
-                  <MRow label="Video URL">
+                  <MRow label="Media File">
                     <a href={modalFields.videoUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline break-all text-xs">
                       {modalFields.videoUrl}
                     </a>
                   </MRow>
                 )}
                 {modalFields.hostUrl !== '—' && (
-                  <MRow label="Source URL">
+                  <MRow label="Host URL">
                     <a href={modalFields.hostUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline break-all text-xs">
                       {modalFields.hostUrl}
                     </a>
                   </MRow>
                 )}
                 {modalFields.linkUrl !== '—' && (
-                  <MRow label="Infringing URL">
+                  <MRow label="Linking URL">
                     <a href={modalFields.linkUrl} target="_blank" rel="noopener noreferrer" className="text-red-500 hover:underline break-all text-xs">
                       {modalFields.linkUrl}
                     </a>
@@ -629,7 +735,8 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
                     { label: 'Delisting', status: modalFields.delistStatus, time: modalFields.delistTime, internetOnly: true },
                     { label: 'DMCA', status: modalFields.dmcaStatus, time: modalFields.dmcaTime, internetOnly: true },
                   ]
-                    .filter(({ internetOnly }) => !internetOnly || platformParam.toLowerCase() === 'internet')
+                    /* Wire value, not the label — the URL param stays "Internet". */
+                    .filter(({ internetOnly }) => !internetOnly || isOpenWebPlatform(platformParam))
                     .map(({ label, status, time }) => (
                     <div key={label} className="bg-gray-50 dark:bg-white/5 rounded-xl p-2.5 border border-gray-100 dark:border-white/10">
                       <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">{label}</p>
@@ -645,7 +752,7 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
               </div>
             </div>
 
-            <div className="flex justify-end gap-3 px-4 sm:px-6 py-4 border-t border-gray-100 dark:border-white/10">
+            <div className="flex justify-end gap-3 px-4 sm:px-6 py-4 border-t border-gray-100 dark:border-white/10 flex-shrink-0 bg-gray-50/70 dark:bg-white/[0.03]">
               {(modalFields.linkUrl !== '—' || modalFields.hostUrl !== '—') && (
                 <a
                   href={modalFields.linkUrl !== '—' ? modalFields.linkUrl : modalFields.hostUrl}

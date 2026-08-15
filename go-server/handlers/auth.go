@@ -10,12 +10,13 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
-	ipauth "github.com/ip-house/iphouse-api/auth"
 	"github.com/ip-house/iphouse-api/activity"
+	ipauth "github.com/ip-house/iphouse-api/auth"
 	"github.com/ip-house/iphouse-api/config"
 	"github.com/ip-house/iphouse-api/db"
 	"github.com/ip-house/iphouse-api/email"
@@ -206,14 +207,16 @@ func CheckMultipleLogins(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.Username == "" || body.Password == "" {
-		Fail(w, 400, "Missing credentials"); return
+		Fail(w, 400, "Missing credentials")
+		return
 	}
 
 	// Portal-staff check (Admin or Super Admin — unified in dcp_super_admin)
 	if sa := superAdminByEmail(body.Username); sa != nil {
 		hash, _ := sa["password_hash"].(string)
 		if !ipauth.VerifyPassword(body.Password, hash) {
-			OK(w, map[string]any{"success": false, "error": "Invalid username or password"}); return
+			OK(w, map[string]any{"success": false, "error": "Invalid username or password"})
+			return
 		}
 		upgradeLegacyHash(body.Password, hash, "UPDATE dcp_super_admin SET password_hash = ? WHERE id = ?", intFromAny(sa["id"]))
 		claims := claimsForSuperAdminRow(sa)
@@ -227,7 +230,8 @@ func CheckMultipleLogins(w http.ResponseWriter, r *http.Request) {
 			// flow/template as clients).
 			"otpRequired": staffOTPEnabledForRow(sa), "staff": true,
 			"md5HashWarning": isLegacyHash, // Flag: this is a legacy MD5 hash that's being upgraded to bcrypt
-		}); return
+		})
+		return
 	}
 
 	// Regular login
@@ -243,14 +247,17 @@ func CheckMultipleLogins(w http.ResponseWriter, r *http.Request) {
 		pending, _ := db.QueryOne("SELECT login_password FROM dcp_user_login WHERE login_username = ? AND is_active = 1 AND userId IS NULL LIMIT 1", body.Username)
 		if pending != nil {
 			if hash, _ := pending["login_password"].(string); ipauth.VerifyPassword(body.Password, hash) {
-				OK(w, map[string]any{"success": false, "error": "Your account is approved but not yet assigned to a client account. Please contact your administrator."}); return
+				OK(w, map[string]any{"success": false, "error": "Your account is approved but not yet assigned to a client account. Please contact your administrator."})
+				return
 			}
 		}
-		OK(w, map[string]any{"success": false, "error": "Invalid username or password"}); return
+		OK(w, map[string]any{"success": false, "error": "Invalid username or password"})
+		return
 	}
 	hash, _ := row["login_password"].(string)
 	if !ipauth.VerifyPassword(body.Password, hash) {
-		OK(w, map[string]any{"success": false, "error": "Invalid username or password"}); return
+		OK(w, map[string]any{"success": false, "error": "Invalid username or password"})
+		return
 	}
 	upgradeLegacyHash(body.Password, hash, "UPDATE dcp_user_login SET login_password = ? WHERE loginId = ?", intFromAny(row["loginId"]))
 
@@ -322,12 +329,14 @@ func SendOTP(w http.ResponseWriter, r *http.Request) {
 	// Email-based resolution always wins so send/verify target the same row.
 	body.UserID = otpUserID(body.Email, body.UserID)
 	if body.UserID == 0 {
-		Fail(w, 400, "userId or email required"); return
+		Fail(w, 400, "userId or email required")
+		return
 	}
 
 	user, err := db.QueryOne("SELECT userId, name FROM dcp_user WHERE userId = ? LIMIT 1", body.UserID)
 	if err != nil || user == nil {
-		Fail(w, 404, "User not found"); return
+		Fail(w, 404, "User not found")
+		return
 	}
 
 	// The recipient must be the exact login the user entered — a single client
@@ -347,7 +356,8 @@ func SendOTP(w http.ResponseWriter, r *http.Request) {
 	if recipient == "" {
 		loginRow, _ := db.QueryOne("SELECT login_username, first_name, last_name FROM dcp_user_login WHERE userId = ? AND is_active = 1 LIMIT 1", body.UserID)
 		if loginRow == nil {
-			Fail(w, 404, "Login not found"); return
+			Fail(w, 404, "Login not found")
+			return
 		}
 		recipient = strFromAny(loginRow["login_username"])
 		loginName = strings.TrimSpace(strFromAny(loginRow["first_name"]) + " " + strFromAny(loginRow["last_name"]))
@@ -403,7 +413,8 @@ func sendStaffOTP(w http.ResponseWriter, sa map[string]any) {
 	if err := db.MustExec(
 		"UPDATE dcp_super_admin SET twofa_code = ?, twofa_code_expires = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE) WHERE id = ?",
 		digits, id); err != nil {
-		Fail(w, 500, "Could not start verification. Please try again."); return
+		Fail(w, 500, "Could not start verification. Please try again.")
+		return
 	}
 
 	if err := email.SendOTP(recipient, digits, name); err != nil {
@@ -440,18 +451,21 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	// Resolve the same canonical userId the OTP was stored against.
 	body.UserID = otpUserID(body.Email, body.UserID)
 	if body.UserID == 0 || body.Code == "" {
-		Fail(w, 400, "Missing parameters"); return
+		Fail(w, 400, "Missing parameters")
+		return
 	}
 
 	// Compute the expiry check in SQL using MySQL's own UTC_TIMESTAMP() — avoids
 	// any Go/driver timezone dependency entirely.
 	user, _ := db.QueryOne("SELECT userId, twofa_code, (twofa_code_expires IS NOT NULL AND twofa_code_expires > UTC_TIMESTAMP()) AS not_expired FROM dcp_user WHERE userId = ? LIMIT 1", body.UserID)
 	if user == nil {
-		OK(w, map[string]any{"success": false, "error": "User not found"}); return
+		OK(w, map[string]any{"success": false, "error": "User not found"})
+		return
 	}
 	storedCode := strFromAny(user["twofa_code"])
 	if storedCode == "" {
-		OK(w, map[string]any{"success": false, "error": "No active code"}); return
+		OK(w, map[string]any{"success": false, "error": "No active code"})
+		return
 	}
 	// A 6-digit code is only 1e6 wide: without a per-code attempt cap it can be
 	// brute-forced (per-IP rate limiting alone is not enough — an attacker with
@@ -460,7 +474,8 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	if otpAttemptsExceeded(body.UserID) {
 		db.Exec("UPDATE dcp_user SET twofa_code = NULL, twofa_code_expires = NULL WHERE userId = ? LIMIT 1", body.UserID)
 		clearOTPAttempts(body.UserID)
-		OK(w, map[string]any{"success": false, "error": "Too many incorrect attempts. Please request a new code."}); return
+		OK(w, map[string]any{"success": false, "error": "Too many incorrect attempts. Please request a new code."})
+		return
 	}
 	// Constant-time compare so the response time can't leak the code prefix.
 	if subtle.ConstantTimeCompare([]byte(storedCode), []byte(body.Code)) != 1 {
@@ -468,12 +483,15 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		if left <= 0 {
 			db.Exec("UPDATE dcp_user SET twofa_code = NULL, twofa_code_expires = NULL WHERE userId = ? LIMIT 1", body.UserID)
 			clearOTPAttempts(body.UserID)
-			OK(w, map[string]any{"success": false, "error": "Too many incorrect attempts. Please request a new code."}); return
+			OK(w, map[string]any{"success": false, "error": "Too many incorrect attempts. Please request a new code."})
+			return
 		}
-		OK(w, map[string]any{"success": false, "error": "Incorrect code"}); return
+		OK(w, map[string]any{"success": false, "error": "Incorrect code"})
+		return
 	}
 	if intFromAny(user["not_expired"]) == 0 {
-		OK(w, map[string]any{"success": false, "error": "Code has expired"}); return
+		OK(w, map[string]any{"success": false, "error": "Code has expired"})
+		return
 	}
 
 	clearOTPAttempts(body.UserID)
@@ -489,7 +507,8 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		INNER JOIN dcp_user u ON u.userId = l.userId
 		WHERE l.login_username = ? AND l.is_active = 1 AND u.deleted = 0 LIMIT 1`, username)
 	if username == "" || loginRow == nil {
-		Fail(w, 404, "Login record not found"); return
+		Fail(w, 404, "Login record not found")
+		return
 	}
 	loginID := intFromAny(loginRow["loginId"])
 
@@ -513,27 +532,33 @@ func verifyStaffOTP(w http.ResponseWriter, r *http.Request, sa map[string]any, c
 
 	row, _ := db.QueryOne("SELECT twofa_code, (twofa_code_expires IS NOT NULL AND twofa_code_expires > UTC_TIMESTAMP()) AS not_expired FROM dcp_super_admin WHERE id = ? LIMIT 1", id)
 	if row == nil {
-		OK(w, map[string]any{"success": false, "error": "Account not found"}); return
+		OK(w, map[string]any{"success": false, "error": "Account not found"})
+		return
 	}
 	storedCode := strFromAny(row["twofa_code"])
 	if storedCode == "" {
-		OK(w, map[string]any{"success": false, "error": "No active code"}); return
+		OK(w, map[string]any{"success": false, "error": "No active code"})
+		return
 	}
 	if otpAttemptsExceeded(key) {
 		db.Exec("UPDATE dcp_super_admin SET twofa_code = NULL, twofa_code_expires = NULL WHERE id = ?", id)
 		clearOTPAttempts(key)
-		OK(w, map[string]any{"success": false, "error": "Too many incorrect attempts. Please request a new code."}); return
+		OK(w, map[string]any{"success": false, "error": "Too many incorrect attempts. Please request a new code."})
+		return
 	}
 	if subtle.ConstantTimeCompare([]byte(storedCode), []byte(code)) != 1 {
 		if registerOTPFailure(key) <= 0 {
 			db.Exec("UPDATE dcp_super_admin SET twofa_code = NULL, twofa_code_expires = NULL WHERE id = ?", id)
 			clearOTPAttempts(key)
-			OK(w, map[string]any{"success": false, "error": "Too many incorrect attempts. Please request a new code."}); return
+			OK(w, map[string]any{"success": false, "error": "Too many incorrect attempts. Please request a new code."})
+			return
 		}
-		OK(w, map[string]any{"success": false, "error": "Incorrect code"}); return
+		OK(w, map[string]any{"success": false, "error": "Incorrect code"})
+		return
 	}
 	if intFromAny(row["not_expired"]) == 0 {
-		OK(w, map[string]any{"success": false, "error": "Code has expired"}); return
+		OK(w, map[string]any{"success": false, "error": "Code has expired"})
+		return
 	}
 
 	// Success: burn the code and mint the staff session (same claims as the
@@ -544,7 +569,8 @@ func verifyStaffOTP(w http.ResponseWriter, r *http.Request, sa map[string]any, c
 	claims := claimsForSuperAdminRow(sa)
 	tok, err := ipauth.SignToken(claims)
 	if err != nil {
-		Fail(w, 500, "Token error"); return
+		Fail(w, 500, "Token error")
+		return
 	}
 	go db.Exec("UPDATE dcp_super_admin SET last_login = UTC_TIMESTAMP() WHERE id = ?", id)
 	go db.Exec("INSERT INTO dcp_login (userId, loginId, loginTime) VALUES (?, ?, UTC_TIMESTAMP())", claims.UserID, claims.LoginID)
@@ -567,32 +593,38 @@ func SelectLogin(w http.ResponseWriter, r *http.Request) {
 	entry, ok := getTempToken(body.Password)
 	if !ok {
 		log.Printf("[select-login] token signature invalid/malformed (len=%d) for user=%q loginId=%d", len(body.Password), body.Username, body.LoginID)
-		Fail(w, 401, "Invalid or expired token"); return
+		Fail(w, 401, "Invalid or expired token")
+		return
 	}
 	if time.Now().After(entry.Exp) {
 		log.Printf("[select-login] token expired (exp=%s now=%s) user=%q", entry.Exp.Format(time.RFC3339), time.Now().Format(time.RFC3339), body.Username)
-		Fail(w, 401, "Invalid or expired token"); return
+		Fail(w, 401, "Invalid or expired token")
+		return
 	}
 	if entry.Username != body.Username {
 		log.Printf("[select-login] username mismatch: token=%q request=%q", entry.Username, body.Username)
-		Fail(w, 401, "Invalid or expired token"); return
+		Fail(w, 401, "Invalid or expired token")
+		return
 	}
 	// If loginID is set on the token (OTP flow), it must match the request.
 	if entry.LoginID != 0 && entry.LoginID != body.LoginID {
 		log.Printf("[select-login] loginID mismatch: token=%d request=%d", entry.LoginID, body.LoginID)
-		Fail(w, 401, "Invalid or expired token"); return
+		Fail(w, 401, "Invalid or expired token")
+		return
 	}
 	deleteTempToken(body.Password)
 
 	row, _ := db.QueryOne(`
 		SELECT l.loginId, l.userId, l.first_name, l.last_name, l.login_username, l.login_type,
+		       l.is_client_admin,
 		       u.name, u.email, u.role, u.IsSecure, u.api_user_name, u.api_password
 		FROM dcp_user_login l
 		INNER JOIN dcp_user u ON u.userId = l.userId
 		WHERE l.loginId = ? AND l.login_username = ? AND l.is_active = 1 AND u.deleted = 0`,
 		body.LoginID, body.Username)
 	if row == nil {
-		Fail(w, 401, "User not found"); return
+		Fail(w, 401, "User not found")
+		return
 	}
 
 	// Fetch fresh Markscan API token for the selected account
@@ -629,7 +661,8 @@ func SelectLogin(w http.ResponseWriter, r *http.Request) {
 	claims := buildClaims(row, apiTok)
 	tok, err := ipauth.SignToken(claims)
 	if err != nil {
-		Fail(w, 500, "Token error"); return
+		Fail(w, 500, "Token error")
+		return
 	}
 	SetTokenCookie(w, tok)
 	OK(w, map[string]any{"success": true, "token": tok, "user": sanitizeClaims(claims)})
@@ -657,18 +690,21 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		if !ok || time.Now().After(entry.Exp) ||
 			(entry.LoginID != 0 && entry.LoginID != body.LoginID) ||
 			(entry.Username != "" && entry.Username != body.Username) {
-			Fail(w, 401, "Invalid or expired token"); return
+			Fail(w, 401, "Invalid or expired token")
+			return
 		}
 		deleteTempToken(body.TempTok)
 
 		row, _ := db.QueryOne(`
 			SELECT l.loginId, l.userId, l.first_name, l.last_name, l.login_username, l.login_type,
+			       l.is_client_admin,
 			       u.name, u.email, u.role, u.IsSecure, u.api_user_name, u.api_password
 			FROM dcp_user_login l
 			INNER JOIN dcp_user u ON u.userId = l.userId
 			WHERE l.loginId = ? AND l.is_active = 1 AND u.deleted = 0`, body.LoginID)
 		if row == nil {
-			Fail(w, 401, "User not found"); return
+			Fail(w, 401, "User not found")
+			return
 		}
 		loginID := intFromAny(row["loginId"])
 		userID := intFromAny(row["userId"])
@@ -698,14 +734,16 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if body.Username == "" || body.Password == "" {
-		Fail(w, 400, "Missing credentials"); return
+		Fail(w, 400, "Missing credentials")
+		return
 	}
 
 	// Portal-staff login (Admin or Super Admin — unified in dcp_super_admin)
 	if sa := superAdminByEmail(body.Username); sa != nil {
 		hash, _ := sa["password_hash"].(string)
 		if !ipauth.VerifyPassword(body.Password, hash) {
-			Fail(w, 401, "Invalid credentials"); return
+			Fail(w, 401, "Invalid credentials")
+			return
 		}
 		id := intFromAny(sa["id"])
 		upgradeLegacyHash(body.Password, hash, "UPDATE dcp_super_admin SET password_hash = ? WHERE id = ?", id)
@@ -722,16 +760,19 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	// Regular user
 	row, _ := db.QueryOne(`
 		SELECT l.loginId, l.userId, l.first_name, l.last_name, l.login_username, l.login_type,
-		       l.login_password, u.name, u.email, u.role, u.IsSecure, u.api_user_name, u.api_password
+		       l.login_password, l.is_client_admin,
+		       u.name, u.email, u.role, u.IsSecure, u.api_user_name, u.api_password
 		FROM dcp_user_login l
 		INNER JOIN dcp_user u ON u.userId = l.userId
 		WHERE l.login_username = ? AND l.is_active = 1 AND u.deleted = 0 LIMIT 1`, body.Username)
 	if row == nil {
-		Fail(w, 401, "Invalid credentials"); return
+		Fail(w, 401, "Invalid credentials")
+		return
 	}
 	hash, _ := row["login_password"].(string)
 	if !ipauth.VerifyPassword(body.Password, hash) {
-		Fail(w, 401, "Invalid credentials"); return
+		Fail(w, 401, "Invalid credentials")
+		return
 	}
 	upgradeLegacyHash(body.Password, hash, "UPDATE dcp_user_login SET login_password = ? WHERE loginId = ?", intFromAny(row["loginId"]))
 
@@ -771,9 +812,138 @@ func Logout(w http.ResponseWriter, r *http.Request) {
 func Session(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
-		Fail(w, 401, "Not authenticated"); return
+		Fail(w, 401, "Not authenticated")
+		return
 	}
 	OK(w, map[string]any{"success": true, "user": sanitizeClaims(*claims)})
+}
+
+// ── Account lookup by email ──────────────────────────────────────────────────
+
+// resolvedAccount is which account owns an email address.
+type resolvedAccount struct {
+	Type string // "super_admin" | "login"
+	ID   int64  // dcp_super_admin.id or dcp_user_login.loginId
+	Name string
+}
+
+/*
+accountForEmail resolves an email to the account that owns it.
+
+One function, used by BOTH the inline check the page makes while someone is
+typing and the reset itself — because two lookups that can disagree is a form
+that says "no such account" under a field the reset then happily sends a token
+to, or the reverse. Staff (dcp_super_admin) are checked FIRST and always win
+over a matching client login, mirroring Login and ChangePassword: the reset must
+write to the same table the login flow reads.
+
+Only ACTIVE client logins count. A deactivated account cannot sign in, so
+offering to reset its password is offering a door that does not open.
+*/
+func accountForEmail(email string) (resolvedAccount, bool) {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return resolvedAccount{}, false
+	}
+	if sa := superAdminByEmail(email); sa != nil {
+		return resolvedAccount{
+			Type: "super_admin",
+			ID:   intFromAny(sa["id"]),
+			Name: strFromAny(sa["name"]),
+		}, true
+	}
+	user, _ := db.QueryOne(
+		"SELECT loginId, login_username, first_name, last_name FROM dcp_user_login WHERE login_username = ? AND is_active = 1 LIMIT 1",
+		email)
+	if user == nil {
+		return resolvedAccount{}, false
+	}
+	name := strings.TrimSpace(strFromAny(user["first_name"]) + " " + strFromAny(user["last_name"]))
+	if name == "" {
+		name = strFromAny(user["login_username"])
+	}
+	return resolvedAccount{Type: "login", ID: intFromAny(user["loginId"]), Name: name}, true
+}
+
+// hideUnknownEmail restores the old behaviour — a generic reply whether or not
+// the address exists — without a code change. Off by default: this portal
+// deliberately tells a client that they typed the wrong address. See the note
+// in ForgotPassword for what that costs.
+func hideUnknownEmail() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("AUTH_HIDE_UNKNOWN_EMAIL")))
+	return v == "1" || v == "true" || v == "on" || v == "yes"
+}
+
+/*
+── POST /api/auth/check-email ───────────────────────────────────────────────
+
+	Does an account exist for this address? Answered on its own so the forgot-
+	password form can say so while someone is still in the field, rather than
+	after they have submitted and gone to look in an inbox that will stay empty.
+
+	It returns NOTHING but the boolean — no name, no account type, no id. The
+	existence of an account is already disclosed by the reset endpoint under the
+	current setting; anything more would be new disclosure to an anonymous
+	caller.
+
+	Behind the same 10/min/IP limiter as the rest of the auth routes, and it
+	honours AUTH_HIDE_UNKNOWN_EMAIL: with the generic reply turned back on this
+	endpoint stops answering too, or it would be the enumeration hole the
+	setting exists to close.
+*/
+func CheckEmail(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email string `json:"email"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+
+	email := strings.TrimSpace(body.Email)
+	if email == "" {
+		Fail(w, 400, "Email is required")
+		return
+	}
+	if hideUnknownEmail() {
+		// Not 404: the route existing but declining to distinguish is the
+		// honest answer, and a client that treats "unknown" as "carry on" then
+		// behaves correctly under either setting.
+		OK(w, map[string]any{"success": true, "checked": false})
+		return
+	}
+
+	_, found := accountForEmail(email)
+
+	/* THREE states, not two. Sign-up and password-reset ask the same question
+	   of the same address and need different answers from it:
+
+	     account    already signed up — reset the password, do not register
+	     pending    registered already and waiting on an admin — do neither
+	     available  neither — registering is the thing to do
+
+	   A pending request is invisible to accountForEmail because approval is
+	   what creates the login. Without it /register tells someone the address is
+	   free, they submit again, and the duplicate is only noticed by whoever
+	   reviews the queue. */
+	pending := false
+	if !found {
+		row, _ := db.QueryOne(
+			"SELECT id FROM user_registration_requests WHERE email = ? AND status = 'pending' LIMIT 1", email)
+		pending = row != nil
+	}
+
+	status := "available"
+	switch {
+	case found:
+		status = "account"
+	case pending:
+		status = "pending"
+	}
+
+	OK(w, map[string]any{
+		"success": true, "checked": true,
+		// `exists` is unchanged and still means "has a login" — the
+		// forgot-password page reads it and must keep working.
+		"exists": found, "pending": pending, "status": status,
+	})
 }
 
 // ── POST /api/auth/forgot-password ───────────────────────────────────────────
@@ -784,48 +954,48 @@ func ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.Email == "" {
-		Fail(w, 400, "Email is required"); return
+		Fail(w, 400, "Email is required")
+		return
 	}
 
-	// Always answer the same way, whether or not the address exists. Returning
-	// "No active account found with this email" let anyone enumerate which
-	// emails hold accounts on the platform — useful for targeting phishing and
-	// credential-stuffing. Failures are logged server-side instead.
 	const genericReply = "If an account exists for that email address, a password reset link has been sent."
 
-	// Resolve which table owns this email so the reset writes to the SAME place
-	// the login flow reads. Portal staff (Admin/Super Admin) authenticate
-	// against dcp_super_admin, so their email is checked there FIRST and always
-	// wins over a matching client login (mirrors Login/ChangePassword).
-	var (
-		accountType string // "super_admin" | "login"
-		targetID    int64  // dcp_super_admin.id or dcp_user_login.loginId
-		name        string
-	)
-	if sa := superAdminByEmail(body.Email); sa != nil {
-		accountType = "super_admin"
-		targetID = intFromAny(sa["id"])
-		name = strFromAny(sa["name"])
-	} else if user, _ := db.QueryOne("SELECT loginId, login_username, first_name, last_name FROM dcp_user_login WHERE login_username = ? AND is_active = 1 LIMIT 1", body.Email); user != nil {
-		accountType = "login"
-		targetID = intFromAny(user["loginId"])
-		name = strings.TrimSpace(strFromAny(user["first_name"]) + " " + strFromAny(user["last_name"]))
-		if name == "" {
-			name = strFromAny(user["login_username"])
-		}
-	} else {
-		log.Printf("[forgot-password] no active account for %q — returning generic reply", body.Email)
-		OK(w, map[string]any{"success": true, "message": genericReply}); return
-	}
+	acct, found := accountForEmail(body.Email)
+	if !found {
+		/* An unknown address is told so, rather than being answered with the
+		   generic reply.
 
-	resetToken := randHex(32)        // raw token — emailed to the user only
+		   This is a DELIBERATE trade and the reason the generic reply existed:
+		   an endpoint that distinguishes "no such account" from "sent" lets
+		   anyone confirm which addresses hold accounts here, which is how
+		   phishing and credential-stuffing target lists get built. It is
+		   accepted here because this is a closed client portal where telling
+		   someone they typed the wrong address is worth more than the
+		   enumeration it costs — the rate limiter on this route (10/min/IP) is
+		   what keeps the cost of harvesting non-trivial.
+
+		   Set AUTH_HIDE_UNKNOWN_EMAIL=1 to go back to the generic reply without
+		   a code change. */
+		if hideUnknownEmail() {
+			log.Printf("[forgot-password] no active account for %q — returning generic reply", body.Email)
+			OK(w, map[string]any{"success": true, "message": genericReply})
+			return
+		}
+		log.Printf("[forgot-password] no active account for %q — telling the caller", body.Email)
+		Fail(w, 404, "No account is registered with that email address.")
+		return
+	}
+	accountType, targetID, name := acct.Type, acct.ID, acct.Name
+
+	resetToken := randHex(32)                 // raw token — emailed to the user only
 	storedToken := hashResetToken(resetToken) // SHA-256 hash — all that touches the DB
 	// Scope the cleanup to the same account (type + id) so a client and a staff
 	// account whose ids happen to collide don't clobber each other's tokens.
 	db.Exec("DELETE FROM dcp_password_resets WHERE userId = ? AND account_type = ?", targetID, accountType)
 	if _, _, err := db.Exec("INSERT INTO dcp_password_resets (userId, account_type, token, expires_at, used) VALUES (?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE), 0)", targetID, accountType, storedToken); err != nil {
 		log.Printf("[forgot-password] insert token failed for %s id=%d: %v", accountType, targetID, err)
-		Fail(w, 500, "Could not create reset token. Please try again."); return
+		Fail(w, 500, "Could not create reset token. Please try again.")
+		return
 	}
 
 	go email.SendPasswordReset(body.Email, resetToken, name)
@@ -849,31 +1019,38 @@ func ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.ResetToken == "" {
-		Fail(w, 400, "Reset token required"); return
+		Fail(w, 400, "Reset token required")
+		return
 	}
 
 	row, err := db.QueryOne("SELECT id, userId AS targetId, COALESCE(account_type, 'login') AS account_type, used, (expires_at > UTC_TIMESTAMP()) AS not_expired FROM dcp_password_resets WHERE token = ? LIMIT 1", hashResetToken(body.ResetToken))
 	if err != nil {
 		log.Printf("[reset-password] DB error looking up token: %v", err)
-		Fail(w, 500, "Database error. Please try again."); return
+		Fail(w, 500, "Database error. Please try again.")
+		return
 	}
 	if row == nil {
 		log.Printf("[reset-password] token not found (len=%d)", len(body.ResetToken))
-		Fail(w, 400, "Invalid or already-used reset token"); return
+		Fail(w, 400, "Invalid or already-used reset token")
+		return
 	}
 	if intFromAny(row["used"]) != 0 {
-		Fail(w, 400, "Token already used"); return
+		Fail(w, 400, "Token already used")
+		return
 	}
 	if intFromAny(row["not_expired"]) == 0 {
-		Fail(w, 400, "Reset token has expired"); return
+		Fail(w, 400, "Reset token has expired")
+		return
 	}
 	if len(body.Password) < 8 {
-		Fail(w, 422, "Password must be at least 8 characters"); return
+		Fail(w, 422, "Password must be at least 8 characters")
+		return
 	}
 
 	hashed, err := ipauth.HashPassword(body.Password)
 	if err != nil {
-		Fail(w, 500, "Hash error"); return
+		Fail(w, 500, "Hash error")
+		return
 	}
 
 	targetID := intFromAny(row["targetId"])
@@ -899,7 +1076,8 @@ func ResetPassword(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if uerr != nil {
-		Fail(w, 500, "Could not update your password. Please try again."); return
+		Fail(w, 500, "Could not update your password. Please try again.")
+		return
 	}
 
 	db.Exec("UPDATE dcp_password_resets SET used = 1 WHERE id = ?", intFromAny(row["id"]))
@@ -923,12 +1101,35 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	ln := trimStr(body.LastName)
 	mail := trimStr(body.Email)
 	if fn == "" || ln == "" || mail == "" {
-		Fail(w, 400, "Please fill all required fields"); return
+		Fail(w, 400, "Please fill all required fields")
+		return
+	}
+
+	/* An address that already HOLDS a login cannot register again, and this is
+	   checked here as well as in the browser — a form check is a convenience,
+	   not a control, and this endpoint is public.
+
+	   It was missing entirely: a registration for an existing login was
+	   accepted, queued, and only failed at the far end when an admin approved
+	   it and the insert hit the unique username. The person waited days to be
+	   told something knowable at submission. */
+	if _, found := accountForEmail(mail); found {
+		OK(w, map[string]any{
+			"success": false,
+			"error":   "An account already exists for this email. Sign in instead, or use Forgot password if you cannot get in.",
+			"reason":  "account",
+		})
+		return
 	}
 
 	existing, _ := db.QueryOne("SELECT id FROM user_registration_requests WHERE email = ? AND status = 'pending' LIMIT 1", mail)
 	if existing != nil {
-		OK(w, map[string]any{"success": false, "error": "A pending request with this email already exists"}); return
+		OK(w, map[string]any{
+			"success": false,
+			"error":   "A request for this email is already awaiting review. You will be emailed once it is approved.",
+			"reason":  "pending",
+		})
+		return
 	}
 
 	_, _, err := db.Exec(`
@@ -936,7 +1137,8 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		VALUES (?, ?, ?, ?, ?, 'pending', UTC_TIMESTAMP())`,
 		fn, ln, mail, trimStr(body.Designation), trimStr(body.Remarks))
 	if err != nil {
-		Fail(w, 500, "Registration failed"); return
+		Fail(w, 500, "Registration failed")
+		return
 	}
 	go email.SendRegistrationReceivedApplicant(fn, ln, mail, trimStr(body.Designation))
 	go email.SendRegistrationReceivedAdmin(fn, ln, mail, trimStr(body.Designation), trimStr(body.Remarks))
@@ -948,7 +1150,8 @@ func Register(w http.ResponseWriter, r *http.Request) {
 func SwitchAccount(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
-		Fail(w, 401, "Not authenticated"); return
+		Fail(w, 401, "Not authenticated")
+		return
 	}
 
 	if r.Method == http.MethodGet {
@@ -973,13 +1176,15 @@ func SwitchAccount(w http.ResponseWriter, r *http.Request) {
 
 	row, _ := db.QueryOne(`
 		SELECT l.loginId, l.userId, l.first_name, l.last_name, l.login_username, l.login_type,
+		       l.is_client_admin,
 		       u.name, u.email, u.role, u.IsSecure, u.api_user_name, u.api_password
 		FROM dcp_user_login l
 		INNER JOIN dcp_user u ON u.userId = l.userId
 		WHERE l.loginId = ? AND l.login_username = ? AND l.is_active = 1 AND u.deleted = 0`,
 		body.LoginID, claims.LoginUsername)
 	if row == nil {
-		Fail(w, 404, "Account not found or access denied"); return
+		Fail(w, 404, "Account not found or access denied")
+		return
 	}
 
 	// Fetch fresh Markscan API token for the target account
@@ -1020,7 +1225,24 @@ func buildClaims(row map[string]any, apiToken string) ipauth.Claims {
 		LoginLastName:  strFromAny(row["last_name"]),
 		ClientName:     strFromAny(row["name"]),
 		APIAccess:      apiToken != "",
+		ClientAdmin:    isClientAdminRow(row, loginID),
 	}
+}
+
+// isClientAdminRow reads the Client Admin grant for the login being signed in.
+// Every login query feeding buildClaims selects l.is_client_admin, but the
+// column is re-read by loginId when a caller's row doesn't carry it — a login
+// path that forgets the column must not silently mint a session with the grant
+// resolved to false (or, worse, be assumed true).
+func isClientAdminRow(row map[string]any, loginID int64) bool {
+	if v, ok := row["is_client_admin"]; ok && v != nil {
+		return flagOn(v)
+	}
+	if loginID == 0 {
+		return false
+	}
+	r, _ := db.QueryOne("SELECT is_client_admin FROM dcp_user_login WHERE loginId = ? LIMIT 1", loginID)
+	return r != nil && flagOn(r["is_client_admin"])
 }
 
 func sanitizeClaims(c ipauth.Claims) map[string]any {
@@ -1033,6 +1255,7 @@ func sanitizeClaims(c ipauth.Claims) map[string]any {
 		"loginLastName":  c.LoginLastName,
 		"clientName":     c.ClientName,
 		"apiAccess":      c.APIAccess,
+		"clientAdmin":    c.ClientAdmin,
 	}
 	if c.Role != nil {
 		m["role"] = *c.Role

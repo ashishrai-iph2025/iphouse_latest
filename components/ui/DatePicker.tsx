@@ -32,6 +32,11 @@ function parseYMD(s: string): Date | null {
 const THIS_YEAR = new Date().getFullYear()
 const YEARS = Array.from({ length: 16 }, (_, i) => THIS_YEAR - 10 + i)
 
+// Panel footprint, used to keep the popup inside the viewport. CAL_W must match
+// the `w-72` on the portal container.
+const CAL_W = 288
+const CAL_H = 340
+
 export default function DatePicker({
   value,
   onChange,
@@ -69,14 +74,37 @@ export default function DatePicker({
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
+  /**
+   * Place the calendar next to the trigger, kept inside the viewport.
+   *
+   * The panel is a fixed-width 288px card and was previously pinned to the
+   * trigger's left edge with no horizontal bound — so an input near the right of
+   * the window (a filter rail, a right-hand form column) pushed half the
+   * calendar off-screen where it could not be reached. It now right-aligns to
+   * the trigger when left-aligning would overflow, and is clamped to the
+   * viewport either way. Same idea vertically: flip above the trigger when there
+   * is no room below, then clamp so the header never lands off the top.
+   */
+  function computePos() {
+    if (!ref.current) return null
+    const r = ref.current.getBoundingClientRect()
+    const margin = 8
+
+    let left = r.left
+    if (left + CAL_W + margin > window.innerWidth) left = r.right - CAL_W // right-align to the trigger
+    left = Math.max(margin, Math.min(left, window.innerWidth - CAL_W - margin))
+
+    const below = r.bottom + 6
+    let top = below
+    if (below + CAL_H > window.innerHeight && r.top - CAL_H - 6 > 0) top = r.top - CAL_H - 6
+    top = Math.max(margin, Math.min(top, Math.max(margin, window.innerHeight - CAL_H - margin)))
+
+    return { top, left, width: r.width }
+  }
+
   useEffect(() => {
     if (!open) return
-    function reposition() {
-      if (!ref.current) return
-      const r    = ref.current.getBoundingClientRect()
-      const top  = r.bottom + 6
-      setDropPos({ top: top + 340 > window.innerHeight ? r.top - 340 - 6 : top, left: r.left, width: r.width })
-    }
+    const reposition = () => { const p = computePos(); if (p) setDropPos(p) }
     window.addEventListener('scroll', reposition, true)
     window.addEventListener('resize', reposition)
     return () => { window.removeEventListener('scroll', reposition, true); window.removeEventListener('resize', reposition) }
@@ -84,9 +112,8 @@ export default function DatePicker({
 
   function openCalendar() {
     if (disabled || !ref.current) return
-    const r   = ref.current.getBoundingClientRect()
-    const top = r.bottom + 6
-    setDropPos({ top: top + 340 > window.innerHeight ? r.top - 340 - 6 : top, left: r.left, width: r.width })
+    const p = computePos()
+    if (p) setDropPos(p)
     setOpen(o => !o)
   }
 
@@ -123,7 +150,9 @@ export default function DatePicker({
         className={`
           w-full flex items-center gap-2 border rounded-xl px-3 py-2.5 text-sm bg-white dark:bg-white/5 text-left
           focus:outline-none focus:ring-2 focus:border-transparent transition-colors
-          ${disabled ? 'opacity-50 cursor-not-allowed border-gray-200' : 'border-gray-200 hover:border-gray-300 cursor-pointer'}
+          ${disabled
+            ? 'opacity-50 cursor-not-allowed border-gray-200 dark:border-white/10'
+            : 'border-gray-200 hover:border-gray-300 dark:border-white/15 dark:hover:border-white/25 cursor-pointer'}
           ${open ? 'ring-2 border-transparent' : ''}
         `}
         style={open ? { '--tw-ring-color': accentColor } as React.CSSProperties : {}}
@@ -134,7 +163,7 @@ export default function DatePicker({
           <line x1="8" y1="2" x2="8" y2="6" />
           <line x1="3" y1="10" x2="21" y2="10" />
         </svg>
-        <span className={`flex-1 ${displayValue ? 'text-gray-800' : 'text-gray-400'}`}>
+        <span className={`flex-1 ${displayValue ? 'text-gray-800 dark:text-white' : 'text-gray-400 dark:text-white/40'}`}>
           {displayValue || placeholder}
         </span>
         {displayValue && !disabled && (
@@ -146,7 +175,8 @@ export default function DatePicker({
       {open && mounted && dropPos && createPortal(
         <div
           ref={calendarRef}
-          className="fixed z-[9999] w-72 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden"
+          className="fixed z-[9999] w-72 rounded-2xl shadow-2xl overflow-hidden
+            bg-white border border-gray-100 dark:bg-[#1a2d55] dark:border-white/10"
           style={{ top: dropPos.top, left: dropPos.left }}
         >
           {/* Header */}
@@ -170,7 +200,8 @@ export default function DatePicker({
                   </svg>
                 </button>
                 {monthOpen && (
-                  <div className="absolute top-full left-0 mt-1 bg-white rounded-xl shadow-xl border border-gray-100 z-10 overflow-hidden"
+                  <div className="absolute top-full left-0 mt-1 rounded-xl shadow-xl z-10 overflow-hidden
+                    bg-white border border-gray-100 dark:bg-[#14254A] dark:border-white/15"
                     style={{ minWidth: 110 }}>
                     <ul className="py-1 max-h-48 overflow-y-auto">
                       {MONTHS.map((m, i) => (
@@ -178,7 +209,7 @@ export default function DatePicker({
                           <button type="button"
                             onClick={() => { setView(d => setMonth(d, i)); setMonthOpen(false) }}
                             className={`w-full text-left px-3 py-1.5 text-sm transition-colors
-                              ${i === currentMonth ? 'font-bold text-white' : 'text-gray-700 hover:bg-gray-50'}`}
+                              ${i === currentMonth ? 'font-bold text-white' : 'text-gray-700 hover:bg-gray-50 dark:text-white/80 dark:hover:bg-white/10'}`}
                             style={i === currentMonth ? { background: accentColor } : {}}>
                             {m}
                           </button>
@@ -200,7 +231,8 @@ export default function DatePicker({
                   </svg>
                 </button>
                 {yearOpen && (
-                  <div className="absolute top-full left-0 mt-1 bg-white rounded-xl shadow-xl border border-gray-100 z-10 overflow-hidden"
+                  <div className="absolute top-full left-0 mt-1 rounded-xl shadow-xl z-10 overflow-hidden
+                    bg-white border border-gray-100 dark:bg-[#14254A] dark:border-white/15"
                     style={{ minWidth: 90 }}>
                     <ul className="py-1 max-h-48 overflow-y-auto">
                       {YEARS.map(y => (
@@ -208,7 +240,7 @@ export default function DatePicker({
                           <button type="button"
                             onClick={() => { setView(d => setYear(d, y)); setYearOpen(false) }}
                             className={`w-full text-left px-3 py-1.5 text-sm transition-colors
-                              ${y === currentYear ? 'font-bold text-white' : 'text-gray-700 hover:bg-gray-50'}`}
+                              ${y === currentYear ? 'font-bold text-white' : 'text-gray-700 hover:bg-gray-50 dark:text-white/80 dark:hover:bg-white/10'}`}
                             style={y === currentYear ? { background: accentColor } : {}}>
                             {y}
                           </button>
@@ -230,7 +262,7 @@ export default function DatePicker({
           {/* Day labels */}
           <div className="grid grid-cols-7 px-3 pt-3 pb-1">
             {DAYS.map(d => (
-              <div key={d} className="text-center text-[10px] font-bold text-gray-400 uppercase tracking-wide">{d}</div>
+              <div key={d} className="text-center text-[10px] font-bold text-gray-400 dark:text-white/40 uppercase tracking-wide">{d}</div>
             ))}
           </div>
 
@@ -244,8 +276,8 @@ export default function DatePicker({
               return (
                 <button key={day.toISOString()} type="button" disabled={dis} onClick={() => selectDay(day)}
                   className={`h-8 w-8 mx-auto rounded-lg text-xs font-medium transition-all
-                    ${isSel ? 'text-white shadow-sm' : 'text-gray-700'}
-                    ${dis ? 'opacity-30 cursor-not-allowed' : 'hover:bg-gray-100 cursor-pointer'}`}
+                    ${isSel ? 'text-white shadow-sm' : 'text-gray-700 dark:text-white/80'}
+                    ${dis ? 'opacity-30 cursor-not-allowed' : 'hover:bg-gray-100 dark:hover:bg-white/10 cursor-pointer'}`}
                   style={isSel ? { background: accentColor } : today && !isSel ? { color: accentColor, fontWeight: 700 } : {}}>
                   {format(day, 'd')}
                 </button>
@@ -254,14 +286,18 @@ export default function DatePicker({
           </div>
 
           {/* Footer */}
-          <div className="border-t border-gray-100 px-3 py-2 flex gap-2">
+          <div className="border-t border-gray-100 dark:border-white/10 px-3 py-2 flex gap-2">
             <button type="button"
               onClick={() => { const t = new Date(); if (!isDisabled(t)) selectDay(t) }}
-              className="flex-1 text-xs font-semibold py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors">
+              className="flex-1 text-xs font-semibold py-1.5 rounded-lg transition-colors
+                border border-gray-200 text-gray-600 hover:bg-gray-50
+                dark:border-white/15 dark:text-white/70 dark:hover:bg-white/10">
               Today
             </button>
             <button type="button" onClick={() => setOpen(false)}
-              className="flex-1 text-xs font-semibold py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors">
+              className="flex-1 text-xs font-semibold py-1.5 rounded-lg transition-colors
+                border border-gray-200 text-gray-600 hover:bg-gray-50
+                dark:border-white/15 dark:text-white/70 dark:hover:bg-white/10">
               Close
             </button>
           </div>

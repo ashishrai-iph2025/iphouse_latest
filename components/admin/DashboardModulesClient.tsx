@@ -142,7 +142,7 @@ export default function DashboardModulesClient({ initialModules }: { initialModu
         breadcrumb={[{ label: 'Configuration', href: '/admin/configuration' }, { label: 'PowerBI Dashboard Modules' }]}
         backHref="/admin/configuration"
         title="PowerBI Dashboard Modules"
-        description="Manage dashboard modules (Internet, Social Media, Telegram, etc.)"
+        description="Manage dashboard modules (Open Web, Social Media, Telegram, etc.)"
         actions={
           <button onClick={openAdd}
             className="px-4 py-2 rounded-xl text-sm font-semibold text-white hover:opacity-90 transition-all"

@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/ip-house/iphouse-api/db"
+	"github.com/ip-house/iphouse-api/notify"
 )
 
 // Data Sharing — client module. A granted user uploads an .xlsx file, which is
@@ -83,27 +84,32 @@ func sanitizeFileName(name string) string {
 func DataSharingUpload(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
-		Fail(w, 401, "Not authenticated"); return
+		Fail(w, 401, "Not authenticated")
+		return
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes+(1<<20))
 	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
-		Fail(w, 413, "File too large or invalid upload (max 50 MB)"); return
+		Fail(w, 413, "File too large or invalid upload (max 50 MB)")
+		return
 	}
 	file, hdr, err := r.FormFile("file")
 	if err != nil {
-		Fail(w, 422, "No file was uploaded"); return
+		Fail(w, 422, "No file was uploaded")
+		return
 	}
 	defer file.Close()
 
 	origName := filepath.Base(hdr.Filename)
 	if !strings.HasSuffix(strings.ToLower(origName), ".xlsx") {
-		Fail(w, 422, "Only .xlsx files are allowed"); return
+		Fail(w, 422, "Only .xlsx files are allowed")
+		return
 	}
 
 	cfg := loadDataSharingCfg()
 	if cfg.bucket == "" {
-		Fail(w, 500, "The file-sharing S3 target is not configured."); return
+		Fail(w, 500, "The file-sharing S3 target is not configured.")
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -111,7 +117,8 @@ func DataSharingUpload(w http.ResponseWriter, r *http.Request) {
 
 	client, cerr := s3ClientFor(ctx, cfg)
 	if cerr != nil {
-		Fail(w, 500, "AWS is not configured correctly: "+cerr.Error()); return
+		Fail(w, 500, "AWS is not configured correctly: "+cerr.Error())
+		return
 	}
 
 	// The file-sharing bucket may live in a different region than the one stored
@@ -136,7 +143,8 @@ func DataSharingUpload(w http.ResponseWriter, r *http.Request) {
 		ContentType: awssdk.String("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
 	}); uerr != nil {
 		log.Printf("[data-sharing] upload failed: %v", uerr)
-		Fail(w, 502, "Upload to S3 failed: "+tail(uerr.Error(), 200)); return
+		Fail(w, 502, "Upload to S3 failed: "+tail(uerr.Error(), 200))
+		return
 	}
 
 	presigned, perr := s3.NewPresignClient(client).PresignGetObject(ctx, &s3.GetObjectInput{
@@ -145,7 +153,8 @@ func DataSharingUpload(w http.ResponseWriter, r *http.Request) {
 	}, s3.WithPresignExpires(presignMaxTTL))
 	if perr != nil {
 		log.Printf("[data-sharing] presign failed: %v", perr)
-		Fail(w, 502, "Could not generate a share link: "+tail(perr.Error(), 200)); return
+		Fail(w, 502, "Could not generate a share link: "+tail(perr.Error(), 200))
+		return
 	}
 
 	uploadedBy := strings.TrimSpace(claims.LoginFirstName + " " + claims.LoginLastName)
@@ -163,12 +172,22 @@ func DataSharingUpload(w http.ResponseWriter, r *http.Request) {
 		// The file is already in S3 and the link is valid — don't fail the request.
 	}
 
+	// Raise it to the notification bell. The share link is deliberately NOT
+	// included — a presigned URL grants access to the file to anyone holding
+	// it, and the feed is read by more people than the uploader.
+	pushNotify(claims, notify.Event{
+		Type:    notify.TypeDataSharing,
+		Title:   "File shared",
+		Message: origName,
+		Meta:    map[string]any{"fileName": origName, "fileSize": hdr.Size},
+	})
+
 	OK(w, map[string]any{
-		"success":       true,
-		"fileName":      origName,
-		"presignedUrl":  presigned.URL,
-		"expiresAt":     expiresAt.Format(time.RFC3339),
-		"message":       "File uploaded. Share link is valid for 7 days.",
+		"success":      true,
+		"fileName":     origName,
+		"presignedUrl": presigned.URL,
+		"expiresAt":    expiresAt.Format(time.RFC3339),
+		"message":      "File uploaded. Share link is valid for 7 days.",
 	})
 }
 
@@ -177,7 +196,8 @@ func DataSharingUpload(w http.ResponseWriter, r *http.Request) {
 func DataSharingHistory(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
-		Fail(w, 401, "Not authenticated"); return
+		Fail(w, 401, "Not authenticated")
+		return
 	}
 	rows, _ := db.Query(`SELECT id, uploaded_by, client_name, file_name, file_size,
 		presigned_url, url_expires_at, created_at,

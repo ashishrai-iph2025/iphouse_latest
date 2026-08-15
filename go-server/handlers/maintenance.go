@@ -29,7 +29,8 @@ func MaintenanceUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	upsert := "INSERT INTO dcp_settings (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = ?"
 	if _, _, err := db.Exec(upsert, "maintenance_mode", val, val); err != nil {
-		Fail(w, 500, "Failed to save maintenance mode"); return
+		Fail(w, 500, "Failed to save maintenance mode")
+		return
 	}
 	db.Exec(upsert, "maintenance_message", body.Message, body.Message)
 

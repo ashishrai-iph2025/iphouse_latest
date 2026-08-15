@@ -44,16 +44,19 @@ func DataSharingConfig(w http.ResponseWriter, r *http.Request) {
 		body.S3Uri = strings.TrimSpace(body.S3Uri)
 		body.Region = strings.TrimSpace(body.Region)
 		if body.S3Uri == "" {
-			fail(w, 422, "S3 URI is required"); return
+			fail(w, 422, "S3 URI is required")
+			return
 		}
 		if !strings.HasPrefix(body.S3Uri, "s3://") {
-			fail(w, 422, "S3 URI must start with s3://"); return
+			fail(w, 422, "S3 URI must start with s3://")
+			return
 		}
 		if err := db.MustExec(`INSERT INTO data_sharing_config (id, s3_uri, region, updated_at)
 			VALUES (1, ?, ?, UTC_TIMESTAMP())
 			ON DUPLICATE KEY UPDATE s3_uri = ?, region = ?, updated_at = UTC_TIMESTAMP()`,
 			body.S3Uri, body.Region, body.S3Uri, body.Region); err != nil {
-			fail(w, 500, "Could not save file-sharing settings"); return
+			fail(w, 500, "Could not save file-sharing settings")
+			return
 		}
 		ok(w, map[string]any{"success": true})
 

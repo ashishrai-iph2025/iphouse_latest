@@ -16,7 +16,8 @@ import (
 // unique; the last active Super Admin can't be deactivated.
 func SuperAdminDetails(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		fail(w, 405, "Method not allowed"); return
+		fail(w, 405, "Method not allowed")
+		return
 	}
 	var body struct {
 		ID       int64  `json:"id"`
@@ -27,23 +28,27 @@ func SuperAdminDetails(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.ID == 0 {
-		fail(w, 422, "id is required"); return
+		fail(w, 422, "id is required")
+		return
 	}
 	name := strings.TrimSpace(body.Name)
 	email := strings.TrimSpace(body.Email)
 	if name == "" || email == "" {
-		fail(w, 422, "Name and email are required"); return
+		fail(w, 422, "Name and email are required")
+		return
 	}
 
 	target, _ := db.QueryOne("SELECT id, email, role FROM dcp_super_admin WHERE id = ? LIMIT 1", body.ID)
 	if target == nil {
-		fail(w, 404, "Account not found"); return
+		fail(w, 404, "Account not found")
+		return
 	}
 
 	// Email must remain unique across staff accounts.
 	if !strings.EqualFold(email, strVal(target["email"])) {
 		if dup, _ := db.QueryOne("SELECT id FROM dcp_super_admin WHERE email = ? AND id <> ? LIMIT 1", email, body.ID); dup != nil {
-			fail(w, 409, "Another account already uses this email address"); return
+			fail(w, 409, "Another account already uses this email address")
+			return
 		}
 	}
 
@@ -52,11 +57,13 @@ func SuperAdminDetails(w http.ResponseWriter, r *http.Request) {
 
 	if strings.TrimSpace(body.Password) != "" {
 		if len(body.Password) < 8 {
-			fail(w, 422, "Password must be at least 8 characters"); return
+			fail(w, 422, "Password must be at least 8 characters")
+			return
 		}
 		hashed, herr := ipauth.HashPassword(body.Password)
 		if herr != nil {
-			fail(w, 500, "Could not hash the new password"); return
+			fail(w, 500, "Could not hash the new password")
+			return
 		}
 		set = append(set, "password_hash = ?")
 		args = append(args, hashed)
@@ -64,7 +71,8 @@ func SuperAdminDetails(w http.ResponseWriter, r *http.Request) {
 
 	if body.IsActive != nil {
 		if !*body.IsActive && strVal(target["role"]) == "SuperAdmin" && activeSuperAdminCount() <= 1 {
-			fail(w, 422, "At least one Super Admin must remain active."); return
+			fail(w, 422, "At least one Super Admin must remain active.")
+			return
 		}
 		v := 0
 		if *body.IsActive {
@@ -76,7 +84,8 @@ func SuperAdminDetails(w http.ResponseWriter, r *http.Request) {
 
 	args = append(args, body.ID)
 	if err := db.MustExec("UPDATE dcp_super_admin SET "+strings.Join(set, ", ")+" WHERE id = ?", args...); err != nil {
-		fail(w, 500, "Could not update the account"); return
+		fail(w, 500, "Could not update the account")
+		return
 	}
 	ok(w, map[string]any{"success": true})
 }
@@ -124,13 +133,14 @@ func superAdminUpdate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		UserID        int64  `json:"userId"`
 		LoginUsername string `json:"loginUsername"` // shared-login/person-based grant — takes precedence over userId
-		GrantAdmin    bool   `json:"grantAdmin"`     // legacy: true→admin, false→client (used when Role is empty)
-		Role          string `json:"role"`           // "client" | "admin" | "superadmin" — takes precedence over grantAdmin
+		GrantAdmin    bool   `json:"grantAdmin"`    // legacy: true→admin, false→client (used when Role is empty)
+		Role          string `json:"role"`          // "client" | "admin" | "superadmin" — takes precedence over grantAdmin
 		Source        string `json:"source"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.Source == "super_admin" {
-		fail(w, 403, "Cannot modify the root super admin"); return
+		fail(w, 403, "Cannot modify the root super admin")
+		return
 	}
 
 	role := strings.ToLower(strings.TrimSpace(body.Role))
@@ -142,7 +152,8 @@ func superAdminUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if role != "client" && role != "admin" && role != "superadmin" {
-		fail(w, 422, "role must be client, admin or superadmin"); return
+		fail(w, 422, "role must be client, admin or superadmin")
+		return
 	}
 
 	if body.LoginUsername != "" {
@@ -151,17 +162,20 @@ func superAdminUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if body.UserID == 0 {
-		fail(w, 422, "userId or loginUsername required"); return
+		fail(w, 422, "userId or loginUsername required")
+		return
 	}
 	target, _ := db.QueryOne("SELECT userId FROM dcp_user WHERE userId = ? AND deleted = 0", body.UserID)
 	if target == nil {
-		fail(w, 404, "User not found"); return
+		fail(w, 404, "User not found")
+		return
 	}
 
 	currentSA, _ := db.QueryOne("SELECT role FROM dcp_super_admin WHERE userId = ? LIMIT 1", body.UserID)
 	if currentSA != nil && strVal(currentSA["role"]) == "SuperAdmin" && role != "superadmin" {
 		if activeSuperAdminCount() <= 1 {
-			fail(w, 422, "At least one Super Admin must remain — promote someone else first"); return
+			fail(w, 422, "At least one Super Admin must remain — promote someone else first")
+			return
 		}
 	}
 
@@ -170,14 +184,16 @@ func superAdminUpdate(w http.ResponseWriter, r *http.Request) {
 
 	if role == "client" {
 		db.Exec("DELETE FROM dcp_super_admin WHERE userId = ?", body.UserID)
-		ok(w, map[string]any{"success": true}); return
+		ok(w, map[string]any{"success": true})
+		return
 	}
 
 	login, _ := db.QueryOne(`
 		SELECT loginId, login_username, login_password, first_name, last_name
 		FROM dcp_user_login WHERE userId = ? AND is_active = 1 ORDER BY loginId ASC LIMIT 1`, body.UserID)
 	if login == nil {
-		fail(w, 422, "This user has no active login to grant portal access through"); return
+		fail(w, 422, "This user has no active login to grant portal access through")
+		return
 	}
 	name := strings.TrimSpace(strVal(login["first_name"]) + " " + strVal(login["last_name"]))
 	if name == "" {
@@ -197,7 +213,8 @@ func superAdminUpdate(w http.ResponseWriter, r *http.Request) {
 			is_active = 1, role = VALUES(role), userId = VALUES(userId), loginId = VALUES(loginId)`,
 		name, strVal(login["login_username"]), strVal(login["login_password"]), roleLabel, body.UserID, intVal(login["loginId"]))
 	if err != nil {
-		fail(w, 500, "Failed to grant portal access"); return
+		fail(w, 500, "Failed to grant portal access")
+		return
 	}
 
 	ok(w, map[string]any{"success": true})
@@ -223,20 +240,23 @@ func superAdminUpdateByLogin(w http.ResponseWriter, loginUsername, role string) 
 	current, _ := db.QueryOne("SELECT role FROM dcp_super_admin WHERE email = ? LIMIT 1", loginUsername)
 	if current != nil && strVal(current["role"]) == "SuperAdmin" && role != "superadmin" {
 		if activeSuperAdminCount() <= 1 {
-			fail(w, 422, "At least one Super Admin must remain — promote someone else first"); return
+			fail(w, 422, "At least one Super Admin must remain — promote someone else first")
+			return
 		}
 	}
 
 	if role == "client" {
 		db.Exec("DELETE FROM dcp_super_admin WHERE email = ?", loginUsername)
-		ok(w, map[string]any{"success": true}); return
+		ok(w, map[string]any{"success": true})
+		return
 	}
 
 	login, _ := db.QueryOne(`
 		SELECT login_username, login_password, first_name, last_name
 		FROM dcp_user_login WHERE login_username = ? AND is_active = 1 LIMIT 1`, loginUsername)
 	if login == nil {
-		fail(w, 404, "No active login found for this username"); return
+		fail(w, 404, "No active login found for this username")
+		return
 	}
 	name := strings.TrimSpace(strVal(login["first_name"]) + " " + strVal(login["last_name"]))
 	if name == "" {
@@ -254,7 +274,8 @@ func superAdminUpdateByLogin(w http.ResponseWriter, loginUsername, role string) 
 			is_active = 1, role = VALUES(role)`,
 		name, loginUsername, strVal(login["login_password"]), roleLabel)
 	if err != nil {
-		fail(w, 500, "Failed to grant portal access"); return
+		fail(w, 500, "Failed to grant portal access")
+		return
 	}
 	ok(w, map[string]any{"success": true})
 }
@@ -266,7 +287,8 @@ func superAdminUpdateByLogin(w http.ResponseWriter, loginUsername, role string) 
 // now", independent of any client company's dcp_user.role.
 func SuperAdminAccounts(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		fail(w, 405, "Method not allowed"); return
+		fail(w, 405, "Method not allowed")
+		return
 	}
 	accounts, _ := db.Query(`
 		SELECT id, name, email, role, is_active, last_login, created_at,
@@ -287,7 +309,8 @@ func SuperAdminAccounts(w http.ResponseWriter, r *http.Request) {
 // (checked first at login time), independent of any one company's dcp_user.role.
 func SuperAdminUserPermissions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		fail(w, 405, "Method not allowed"); return
+		fail(w, 405, "Method not allowed")
+		return
 	}
 	rows, err := db.Query(`
 		SELECT
@@ -338,16 +361,18 @@ func ForceLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.LoginID == 0 {
-		fail(w, 422, "loginId required"); return
+		fail(w, 422, "loginId required")
+		return
 	}
 	db.Exec("UPDATE dcp_user_login SET force_logout_at = UTC_TIMESTAMP() WHERE loginId = ?", body.LoginID)
 	ok(w, map[string]any{"success": true})
 }
 
 // GET/PUT /api/admin/super-admin/permissions
-//   GET                 → { users: [...] }    login users + role (Access Control + user picker)
-//   GET ?userId=<id>    → { modules: [...] }   dashboard modules with a granted flag for that user
-//   PUT {userId,moduleId,grant} → grant/revoke a dashboard module for the user
+//
+//	GET                 → { users: [...] }    login users + role (Access Control + user picker)
+//	GET ?userId=<id>    → { modules: [...] }   dashboard modules with a granted flag for that user
+//	PUT {userId,moduleId,grant} → grant/revoke a dashboard module for the user
 func SuperAdminPermissions(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -364,7 +389,8 @@ func SuperAdminPermissions(w http.ResponseWriter, r *http.Request) {
 			if mods == nil {
 				mods = []map[string]any{}
 			}
-			ok(w, map[string]any{"success": true, "modules": mods}); return
+			ok(w, map[string]any{"success": true, "modules": mods})
+			return
 		}
 
 		// Full login-user list (with the owning client's role).
@@ -390,7 +416,8 @@ func SuperAdminPermissions(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.UserID == 0 || body.ModuleID == 0 {
-			fail(w, 422, "userId and moduleId required"); return
+			fail(w, 422, "userId and moduleId required")
+			return
 		}
 		if body.Grant {
 			existing, _ := db.QueryOne("SELECT userId FROM dcp_user_module_map WHERE userId = ? AND moduleId = ?", body.UserID, body.ModuleID)

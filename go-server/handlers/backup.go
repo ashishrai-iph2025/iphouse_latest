@@ -171,7 +171,8 @@ func recordBackupRun(status, file, errMsg string) {
 // POST /api/admin/backup/run — dump the database and upload it to S3.
 func RunBackup(w http.ResponseWriter, r *http.Request) {
 	if !backupMu.TryLock() {
-		Fail(w, 409, "A backup is already running. Please wait for it to finish."); return
+		Fail(w, 409, "A backup is already running. Please wait for it to finish.")
+		return
 	}
 	defer backupMu.Unlock()
 
@@ -182,7 +183,8 @@ func RunBackup(w http.ResponseWriter, r *http.Request) {
 
 	file, dest, dur, err := performBackup(ctx, "manual")
 	if err != nil {
-		Fail(w, 502, "Backup failed: "+tail(err.Error(), 300)); return
+		Fail(w, 502, "Backup failed: "+tail(err.Error(), 300))
+		return
 	}
 	OK(w, map[string]any{
 		"success": true, "file": file, "destination": dest,
@@ -194,14 +196,16 @@ func RunBackup(w http.ResponseWriter, r *http.Request) {
 func ListBackups(w http.ResponseWriter, r *http.Request) {
 	cfg := loadBackupCfg()
 	if cfg.bucket == "" {
-		Fail(w, 500, "The backup S3 target is not configured. Set it on the AWS Credentials page."); return
+		Fail(w, 500, "The backup S3 target is not configured. Set it on the AWS Credentials page.")
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	client, err := s3ClientFor(ctx, cfg)
 	if err != nil {
-		Fail(w, 500, "AWS is not configured correctly: "+err.Error()); return
+		Fail(w, 500, "AWS is not configured correctly: "+err.Error())
+		return
 	}
 
 	prefix := cfg.prefix
@@ -218,7 +222,8 @@ func ListBackups(w http.ResponseWriter, r *http.Request) {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
 			log.Printf("[backup] list failed: %v", err)
-			Fail(w, 502, "Could not list backups from S3: "+tail(err.Error(), 250)); return
+			Fail(w, 502, "Could not list backups from S3: "+tail(err.Error(), 250))
+			return
 		}
 		for _, obj := range page.Contents {
 			k := awssdk.ToString(obj.Key)

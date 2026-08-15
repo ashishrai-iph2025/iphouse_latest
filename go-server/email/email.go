@@ -492,3 +492,34 @@ func SendRegistrationRejected(to, userName, reason string) error {
 		fmt.Sprintf(`<div style="font-family:Poppins,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;background:#fff;border-radius:12px;border:1px solid #e5e7eb;"><h2 style="color:#14254A;">Registration Update</h2><p>Dear <strong>%s</strong>, your registration could not be approved.</p>%s</div>`, strings.TrimSpace(userName), reasonHTML),
 	)
 }
+
+// SendDownloadReady tells the person who requested a data extraction that it
+// has finished and can be downloaded. Raised by the background watcher when
+// MarkScan flips the request from pending to ready.
+// Event key: download_ready.
+func SendDownloadReady(to, userName, platform, assetName, startDate, endDate string) error {
+	period := "—"
+	if startDate != "" || endDate != "" {
+		a, b := startDate, endDate
+		if a == "" {
+			a = "—"
+		}
+		if b == "" {
+			b = "—"
+		}
+		period = a + " to " + b
+	}
+	if assetName == "" {
+		assetName = "All assets"
+	}
+	return sendTemplate("download_ready", to, map[string]string{
+		"user_name": userName, "name": userName,
+		"platform": platform, "asset_name": assetName,
+		"start_date": startDate, "end_date": endDate, "date_range": period,
+		"date": time.Now().UTC().Format("02 Jan 2006, 15:04"),
+	},
+		"Your Download Request Is Ready",
+		fmt.Sprintf(`<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;"><div style="background:#14254A;padding:22px 28px;"><h2 style="color:#fff;margin:0;font-size:18px;">Your Download Is Ready</h2></div><div style="padding:28px;color:#14254A;"><p>Hi <strong>%s</strong>,</p><p>The data extraction you requested has been completed and is now available to download.</p><table style="width:100%%;font-size:14px;border-collapse:collapse;margin:12px 0;"><tr><td style="padding:6px 0;color:#5f768b;">Platform</td><td style="padding:6px 0;font-weight:600;">%s</td></tr><tr><td style="padding:6px 0;color:#5f768b;">Asset</td><td style="padding:6px 0;font-weight:600;">%s</td></tr><tr><td style="padding:6px 0;color:#5f768b;">Date range</td><td style="padding:6px 0;font-weight:600;">%s</td></tr></table><p style="margin:22px 0;"><a href="%s" style="background:#FC934C;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;display:inline-block;">Go to Download Request</a></p><p style="font-size:12px;color:#5f768b;">Open the <strong>Download Request</strong> page and use the Download button next to this request.</p></div></div>`,
+			userName, platform, assetName, period, DashboardURL),
+	)
+}

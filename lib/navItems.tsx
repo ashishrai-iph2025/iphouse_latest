@@ -78,6 +78,19 @@ export const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
+    // pageName matches the module seeded by ensureReportsModule
+    // (go-server/handlers/reportclientmap.go), so the grant, the nav and the API
+    // gate all key on the same identifier.
+    label:    'Reports',
+    href:     '/reports',
+    pageName: 'Reports',
+    icon: (
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 20V10M10 20V4M16 20v-7M21 20H3"/>
+      </svg>
+    ),
+  },
+  {
     label:    'Infringements Approval',
     href:     '/pending-count',
     matches:  ['/pending-count', '/qc-action'],
@@ -161,6 +174,30 @@ export function isItemAllowed(item: NavItem | NavDropdownItem, allowed: AllowedM
 // Pages reachable via a module-permission grant alone, with NO Markscan API
 // dependency — nav visibility and the route guard must not gate these behind
 // having API credentials. Data Sharing (S3 upload/link) is one such page.
+// Client Admin — company user administration.
+//
+// Deliberately kept OUT of NAV_ITEMS: every entry there is gated by
+// module_permission, which is granted per client company, whereas the Client
+// Admin grant is per person (dcp_user_login.is_client_admin). Driving it from
+// module_permission would show the page to every user of a company as soon as
+// one of them was made Client Admin.
+//
+// It is rendered in the profile dropdown (ClientNavbar), under Switch Account,
+// rather than as a nav tab — the grant is personal, like My Profile, and the
+// dropdown is the one piece of chrome present in every nav layout. The page and
+// its API re-check the grant server-side regardless.
+export const CLIENT_ADMIN_NAV_ITEM: NavItem = {
+  label:    'Access Details',
+  href:     '/account-access',
+  pageName: 'account-access',
+  icon: (
+    <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 0 0-5.36-1.86M17 20H7m10 0v-2c0-.66-.13-1.3-.36-1.86m0 0A5 5 0 0 0 7.36 16.14M7 20H2v-2a3 3 0 0 1 5.36-1.86M7 20v-2c0-.66.13-1.3.36-1.86" />
+      <circle cx="12" cy="7" r="3" /><circle cx="19" cy="9" r="2" /><circle cx="5" cy="9" r="2" />
+    </svg>
+  ),
+}
+
 export const API_INDEPENDENT_PAGES = ['data-sharing']
 
 export function isApiIndependentItem(item: NavItem): boolean {

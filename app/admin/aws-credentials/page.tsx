@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Navigate, Link } from 'react-router-dom'
+import BackToConfiguration from '@/components/admin/BackToConfiguration'
 import { useSession } from '@/lib/auth-client'
 
 interface Status {
@@ -145,9 +146,10 @@ export default function AwsCredentialsPage() {
         </div>
       )}
 
+      <BackToConfiguration />
+
       <div className="mb-6">
-        <Link to="/admin/configuration" className="text-brand-muted hover:text-[#FC934C] text-xs font-medium">← Configuration</Link>
-        <h1 className="text-2xl font-bold text-[#14254A] mt-1">AWS Credentials</h1>
+        <h1 className="text-2xl font-bold text-[#14254A]">AWS Credentials</h1>
         <p className="text-brand-muted text-sm mt-1">
           Credentials used by the database backup to upload to Amazon S3. Stored encrypted (AES-256) — the secret key is never shown again unless you reveal it.
         </p>

@@ -50,6 +50,10 @@ const PREVIEW_VARS: Record<string, string> = {
   urls_list:        '<ol style="margin:0;padding-left:20px;"><li>https://example.com/infringing-1</li><li>https://example.com/infringing-2</li><li>https://example.com/infringing-3</li></ol>',
   custom_var_1:     'Sample Value 1',
   custom_var_2:     'Sample Value 2',
+  // download_ready — sent when a data extraction finishes processing.
+  start_date:       '2026-07-01',
+  end_date:         '2026-07-31',
+  date_range:       '2026-07-01 to 2026-07-31',
 }
 
 function renderWithSampleVars(template: string): string {

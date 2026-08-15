@@ -52,27 +52,34 @@ func Dashboards(w http.ResponseWriter, r *http.Request) {
 				JOIN dcp_module m ON m.moduleId = mp.moduleId
 				WHERE mp.userId = ? AND mp.moduleId = ?`, uid, mid)
 			if row == nil {
-				fail(w, 404, "Not found"); return
+				fail(w, 404, "Not found")
+				return
 			}
-			ok(w, map[string]any{"success": true, "dashboard": row}); return
+			ok(w, map[string]any{"success": true, "dashboard": row})
+			return
 		}
 
 		// Modules dropdown (for add form)
 		if r.URL.Query().Get("modules") == "1" {
 			mods, _ := db.Query("SELECT moduleId, moduleName FROM dcp_module WHERE deleted = 0 ORDER BY moduleName")
-			if mods == nil { mods = []map[string]any{} }
-			ok(w, map[string]any{"success": true, "modules": mods}); return
+			if mods == nil {
+				mods = []map[string]any{}
+			}
+			ok(w, map[string]any{"success": true, "modules": mods})
+			return
 		}
 
 		// Full list
 		dashboards, _ := db.Query(`
-			SELECT u.userId, u.name, u.email, m.moduleId, m.moduleName, mp.link, mp.active, mp.`+"`default`"+`
+			SELECT u.userId, u.name, u.email, m.moduleId, m.moduleName, mp.link, mp.active, mp.` + "`default`" + `
 			FROM dcp_user u
 			JOIN dcp_user_module_map mp ON u.userId = mp.userId
 			JOIN dcp_module m ON m.moduleId = mp.moduleId
 			WHERE mp.link IS NOT NULL AND u.deleted = 0
 			ORDER BY u.name ASC, m.moduleName ASC`)
-		if dashboards == nil { dashboards = []map[string]any{} }
+		if dashboards == nil {
+			dashboards = []map[string]any{}
+		}
 
 		totalClients, _ := db.QueryOne("SELECT COUNT(*) AS c FROM dcp_user WHERE deleted = 0 AND (role IS NULL OR role != 1)")
 		totalDashboards, _ := db.QueryOne(`
@@ -83,9 +90,18 @@ func Dashboards(w http.ResponseWriter, r *http.Request) {
 			WHERE mp.link IS NOT NULL AND u.deleted = 0`)
 		totalModules, _ := db.QueryOne("SELECT COUNT(*) AS c FROM dcp_module WHERE deleted = 0")
 
-		tc := int64(0); if totalClients != nil { tc = intVal(totalClients["c"]) }
-		td := int64(0); if totalDashboards != nil { td = intVal(totalDashboards["c"]) }
-		tm := int64(0); if totalModules != nil { tm = intVal(totalModules["c"]) }
+		tc := int64(0)
+		if totalClients != nil {
+			tc = intVal(totalClients["c"])
+		}
+		td := int64(0)
+		if totalDashboards != nil {
+			td = intVal(totalDashboards["c"])
+		}
+		tm := int64(0)
+		if totalModules != nil {
+			tm = intVal(totalModules["c"])
+		}
 
 		ok(w, map[string]any{
 			"success":         true,
@@ -105,7 +121,8 @@ func Dashboards(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.UserID == 0 || body.ModuleID == 0 || body.Link == "" {
-			fail(w, 422, "userId, moduleId and link are required"); return
+			fail(w, 422, "userId, moduleId and link are required")
+			return
 		}
 		existing, _ := db.QueryOne("SELECT userId FROM dcp_user_module_map WHERE userId = ? AND moduleId = ?", body.UserID, body.ModuleID)
 		if existing != nil {
@@ -127,7 +144,8 @@ func Dashboards(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.UserID == 0 || body.ModuleID == 0 {
-			fail(w, 422, "userId and moduleId required"); return
+			fail(w, 422, "userId and moduleId required")
+			return
 		}
 		if body.Link != "" {
 			db.Exec("UPDATE dcp_user_module_map SET link=?, active=?, `default`=? WHERE userId=? AND moduleId=?",
@@ -157,7 +175,9 @@ func PowerBICreds(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		rows, _ := db.Query("SELECT id, client_id, client_secret, tenant_id, workspace_id, is_active FROM master_powerbi_credentials ORDER BY id ASC")
-		if rows == nil { rows = []map[string]any{} }
+		if rows == nil {
+			rows = []map[string]any{}
+		}
 		creds := make([]map[string]any, 0, len(rows))
 		for _, row := range rows {
 			creds = append(creds, map[string]any{
@@ -200,7 +220,9 @@ func PowerBICreds(w http.ResponseWriter, r *http.Request) {
 		}
 		ok(w, map[string]any{"success": true})
 	case http.MethodDelete:
-		var body struct { ID int64 `json:"id"` }
+		var body struct {
+			ID int64 `json:"id"`
+		}
 		json.NewDecoder(r.Body).Decode(&body)
 		db.Exec("DELETE FROM master_powerbi_credentials WHERE id = ?", body.ID)
 		ok(w, map[string]any{"success": true})
@@ -214,11 +236,13 @@ func PowerBICreds(w http.ResponseWriter, r *http.Request) {
 func PowerBICredsReveal(w http.ResponseWriter, r *http.Request) {
 	idStr := r.URL.Query().Get("id")
 	if idStr == "" {
-		fail(w, 422, "id required"); return
+		fail(w, 422, "id required")
+		return
 	}
 	row, err := db.QueryOne("SELECT id, client_id, client_secret, tenant_id, workspace_id, is_active FROM master_powerbi_credentials WHERE id = ?", idStr)
 	if err != nil || row == nil {
-		fail(w, 404, "Not found"); return
+		fail(w, 404, "Not found")
+		return
 	}
 	logReveal(r, "powerbi", idStr)
 	ok(w, map[string]any{
@@ -280,7 +304,8 @@ func PowerBIWorkspace(w http.ResponseWriter, r *http.Request) {
 
 	cred, _ := db.QueryOne("SELECT client_id, client_secret, tenant_id, workspace_id FROM master_powerbi_credentials WHERE is_active = 1 ORDER BY id DESC LIMIT 1")
 	if cred == nil {
-		fail(w, 400, "No PowerBI credentials configured"); return
+		fail(w, 400, "No PowerBI credentials configured")
+		return
 	}
 	tenantId := pbiDecrypt(cred["tenant_id"])
 	clientId := pbiDecrypt(cred["client_id"])
@@ -288,7 +313,8 @@ func PowerBIWorkspace(w http.ResponseWriter, r *http.Request) {
 	workspaceId := pbiDecrypt(cred["workspace_id"])
 
 	if tenantId == "" || clientId == "" || clientSecret == "" || workspaceId == "" {
-		fail(w, 400, "PowerBI credentials are incomplete or could not be decrypted"); return
+		fail(w, 400, "PowerBI credentials are incomplete or could not be decrypted")
+		return
 	}
 
 	token, err := pbiToken(tenantId, clientId, clientSecret)
@@ -296,7 +322,8 @@ func PowerBIWorkspace(w http.ResponseWriter, r *http.Request) {
 		// The Azure error body can echo back the client id / tenant — log it,
 		// don't ship it to the browser.
 		log.Printf("[powerbi] azure auth failed: %v", err)
-		fail(w, 502, "PowerBI authentication failed. Check the configured credentials."); return
+		fail(w, 502, "PowerBI authentication failed. Check the configured credentials.")
+		return
 	}
 
 	// Fetch workspace, reports and datasets concurrently.
@@ -311,8 +338,12 @@ func PowerBIWorkspace(w http.ResponseWriter, r *http.Request) {
 	workspaceName := workspaceId
 	workspaceType := ""
 	if wsData != nil {
-		if n, ok := wsData["name"].(string); ok { workspaceName = n }
-		if t, ok := wsData["type"].(string); ok { workspaceType = t }
+		if n, ok := wsData["name"].(string); ok {
+			workspaceName = n
+		}
+		if t, ok := wsData["type"].(string); ok {
+			workspaceType = t
+		}
 	}
 
 	// Build reports list
@@ -344,11 +375,17 @@ func PowerBIWorkspace(w http.ResponseWriter, r *http.Request) {
 
 			for i, v := range vals {
 				m, ok := v.(map[string]any)
-				if !ok { continue }
+				if !ok {
+					continue
+				}
 				dsId := ""
-				if s, ok := m["id"].(string); ok { dsId = s }
+				if s, ok := m["id"].(string); ok {
+					dsId = s
+				}
 				isRefreshable := false
-				if b, ok := m["isRefreshable"].(bool); ok { isRefreshable = b }
+				if b, ok := m["isRefreshable"].(bool); ok {
+					isRefreshable = b
+				}
 
 				ds := map[string]any{
 					"id":                         dsId,
@@ -384,7 +421,9 @@ func PowerBIWorkspace(w http.ResponseWriter, r *http.Request) {
 					go func() {
 						defer inner.Done()
 						if rd, _ := pbiGet(token, "groups/"+workspaceId+"/datasets/"+dsId+"/refreshes?$top=20"); rd != nil {
-							if vals2, ok := rd["value"].([]any); ok { refreshes = vals2 }
+							if vals2, ok := rd["value"].([]any); ok {
+								refreshes = vals2
+							}
 						}
 					}()
 					go func() {
@@ -401,7 +440,9 @@ func PowerBIWorkspace(w http.ResponseWriter, r *http.Request) {
 					}()
 					inner.Wait()
 
-					if refreshes != nil { ds["refreshes"] = refreshes }
+					if refreshes != nil {
+						ds["refreshes"] = refreshes
+					}
 					ds["refreshSchedule"] = refreshSchedule
 					ds["directQueryRefreshSchedule"] = dqSchedule
 				}(ds, dsId)
@@ -411,7 +452,9 @@ func PowerBIWorkspace(w http.ResponseWriter, r *http.Request) {
 			// Drop any nil slots from entries that failed the type assertion.
 			compact := datasets[:0]
 			for _, d := range datasets {
-				if d != nil { compact = append(compact, d) }
+				if d != nil {
+					compact = append(compact, d)
+				}
 			}
 			datasets = compact
 		}
@@ -430,11 +473,13 @@ func PowerBIWorkspace(w http.ResponseWriter, r *http.Request) {
 func PowerBIWorkspaceActivity(w http.ResponseWriter, r *http.Request) {
 	cred, _ := db.QueryOne("SELECT client_id, client_secret, tenant_id FROM master_powerbi_credentials WHERE is_active = 1 ORDER BY id DESC LIMIT 1")
 	if cred == nil {
-		fail(w, 400, "No PowerBI credentials configured"); return
+		fail(w, 400, "No PowerBI credentials configured")
+		return
 	}
 	token, err := pbiToken(pbiDecrypt(cred["tenant_id"]), pbiDecrypt(cred["client_id"]), pbiDecrypt(cred["client_secret"]))
 	if err != nil {
-		fail(w, 502, "Azure auth failed: "+err.Error()); return
+		fail(w, 502, "Azure auth failed: "+err.Error())
+		return
 	}
 
 	daysStr := r.URL.Query().Get("days")
@@ -442,8 +487,12 @@ func PowerBIWorkspaceActivity(w http.ResponseWriter, r *http.Request) {
 	if daysStr != "" {
 		fmt.Sscanf(daysStr, "%d", &days)
 	}
-	if days < 1 { days = 1 }
-	if days > 30 { days = 30 }
+	if days < 1 {
+		days = 1
+	}
+	if days > 30 {
+		days = 30
+	}
 
 	now := time.Now().UTC()
 	startDT := now.AddDate(0, 0, -days+1).Format("2006-01-02") + "T00:00:00"
@@ -455,7 +504,8 @@ func PowerBIWorkspaceActivity(w http.ResponseWriter, r *http.Request) {
 	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		ok(w, map[string]any{"events": []any{}, "days": days, "fetchedCount": 0, "error": err.Error()}); return
+		ok(w, map[string]any{"events": []any{}, "days": days, "fetchedCount": 0, "error": err.Error()})
+		return
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -468,7 +518,9 @@ func PowerBIWorkspaceActivity(w http.ResponseWriter, r *http.Request) {
 	var guidance []string
 	var errMsg string
 	if actData != nil {
-		if vals, ok2 := actData["activityEventEntities"].([]any); ok2 { events = vals }
+		if vals, ok2 := actData["activityEventEntities"].([]any); ok2 {
+			events = vals
+		}
 		if e, ok2 := actData["error"].(map[string]any); ok2 {
 			if c, ok2 := e["code"].(string); ok2 && strings.Contains(c, "Unauthorized") {
 				permErr = true

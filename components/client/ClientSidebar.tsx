@@ -15,7 +15,7 @@ interface SidebarProps {
 const navItems = [
   { href: '/dashboard',         icon: '⊞', label: 'Dashboard'         },
   { href: '/infringement',      icon: '🔍', label: 'Infringement'      },
-  { href: '/pending-count',     icon: '⏳', label: 'Pending QC Count'  },
+  { href: '/pending-count',     icon: '⏳', label: 'URL Approval Pending'  },
   { href: '/upload-url',        icon: '📤', label: 'Upload URLs'       },
   { href: '/download-request',  icon: '📥', label: 'Download Request'  },
   { href: '/search',            icon: '🔎', label: 'Search by URL'     },

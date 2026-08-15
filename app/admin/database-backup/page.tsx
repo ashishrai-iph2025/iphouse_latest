@@ -8,6 +8,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Navigate, Link } from 'react-router-dom'
+import BackToConfiguration from '@/components/admin/BackToConfiguration'
 import { useSession } from '@/lib/auth-client'
 
 interface Backup {
@@ -160,11 +161,12 @@ export default function DatabaseBackupPage() {
         </div>
       )}
 
+      <BackToConfiguration />
+
       {/* Header */}
       <div className="flex items-start justify-between mb-6 gap-3 flex-wrap">
         <div>
-          <Link to="/admin/configuration" className="text-brand-muted hover:text-[#FC934C] text-xs font-medium">← Configuration</Link>
-          <h1 className="text-2xl font-bold text-[#14254A] mt-1">Database Backup</h1>
+          <h1 className="text-2xl font-bold text-[#14254A]">Database Backup</h1>
           <p className="text-brand-muted text-sm mt-1">Take an on-demand backup or schedule automatic backups to Amazon S3.</p>
         </div>
         <button onClick={runBackup} disabled={running}

@@ -5,6 +5,7 @@ import SearchableSelect from '@/components/ui/SearchableSelect'
 import DatePicker from '@/components/ui/DatePicker'
 import Breadcrumb from '@/components/ui/Breadcrumb'
 import { useMasterData } from '@/lib/masterDataContext'
+import { platformLabel } from '@/lib/platformCategories'
 import PageLoader from '@/components/ui/PageLoader'
 
 const PER_PAGE = 10
@@ -41,6 +42,10 @@ export default function DownloadRequestPage() {
   const [history,     setHistory]     = useState<any[]>([])
   const [histLoading, setHistLoading] = useState(true)
   const [page,        setPage]        = useState(1)
+  // 'self' = only this login's requests (a plain client user); 'company' = every
+  // login's, which is what a Client Admin and IP House staff get. The server
+  // decides — see go-server/handlers/requestledger.go.
+  const [scope,       setScope]       = useState<'self' | 'company'>('self')
 
   const { platforms, assets } = useMasterData()
 
@@ -51,7 +56,10 @@ export default function DownloadRequestPage() {
     try {
       const res  = await fetch('/api/download?history=1', { credentials: 'include' })
       const data = await res.json()
-      if (data.success) setHistory(data.items || [])
+      if (data.success) {
+        setHistory(data.items || [])
+        setScope(data.scope === 'company' ? 'company' : 'self')
+      }
     } finally {
       setHistLoading(false)
     }
@@ -204,12 +212,24 @@ export default function DownloadRequestPage() {
         <div className="lg:col-span-3 bg-white rounded-2xl shadow-card border border-gray-100 overflow-hidden flex flex-col">
           <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between flex-shrink-0">
             <div>
-              <h2 className="font-bold text-[#14254A]">
-                <span className="mr-2" style={{ color: '#F97316' }}>≡</span>Download History
+              <h2 className="font-bold text-[#14254A] flex items-center gap-2 flex-wrap">
+                <span style={{ color: '#F97316' }}>≡</span>Download History
+                {/* Whose requests these are — the same account can be shared by
+                    several logins, so the list is never assumed to be everyone's. */}
+                <span className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full border ${
+                  scope === 'company'
+                    ? 'bg-[#14254A]/5 text-[#14254A] border-[#14254A]/15'
+                    : 'bg-orange-50 text-[#c2691f] border-orange-200'
+                }`}>
+                  {scope === 'company' ? 'All users' : 'Your requests'}
+                </span>
               </h2>
-              {history.length > 0 && (
-                <p className="text-xs text-brand-muted mt-0.5">{history.length} record{history.length !== 1 ? 's' : ''}</p>
-              )}
+              <p className="text-xs text-brand-muted mt-0.5">
+                {history.length > 0 && <>{history.length} record{history.length !== 1 ? 's' : ''} · </>}
+                {scope === 'company'
+                  ? 'Every request made on this account'
+                  : 'Only the requests you submitted'}
+              </p>
             </div>
             <button onClick={() => { loadHistory(); setPage(1) }}
               className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:text-[#14254A] hover:border-gray-300 transition-colors">
@@ -230,7 +250,11 @@ export default function DownloadRequestPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr style={{ background: '#14254A' }}>
-                      {['Platform', 'Asset', 'Date Range', 'Status', 'Action'].map(h => (
+                      {[
+                        'Platform', 'Asset', 'Date Range',
+                        ...(scope === 'company' ? ['Requested By'] : []),
+                        'Status', 'Action',
+                      ].map(h => (
                         <th key={h} className={`text-left px-4 py-3 text-[10px] font-bold text-white/60 uppercase tracking-widest whitespace-nowrap ${h === 'Date Range' ? 'hidden sm:table-cell' : ''}`}>
                           {h}
                         </th>
@@ -241,7 +265,7 @@ export default function DownloadRequestPage() {
                     {pageRows.map((row: any, i: number) => (
                       <tr key={i} className="border-b border-gray-50 hover:bg-orange-50/30 transition-colors">
                         <td className="px-4 py-3">
-                          <span className="font-semibold text-gray-800 text-xs">{row.platform}</span>
+                          <span className="font-semibold text-gray-800 text-xs">{platformLabel(row.platform)}</span>
                         </td>
                         <td className="px-4 py-3 text-xs text-gray-500">{row.assetName || '—'}</td>
                         <td className="px-4 py-3 text-xs text-gray-500 hidden sm:table-cell">
@@ -249,6 +273,26 @@ export default function DownloadRequestPage() {
                           <span className="mx-1 text-gray-300">→</span>
                           <span className="whitespace-nowrap">{row.endDate ? String(row.endDate).slice(0, 10) : '—'}</span>
                         </td>
+                        {scope === 'company' && (
+                          <td className="px-4 py-3 text-xs">
+                            {row.requestedBy ? (
+                              <span className="inline-flex items-center gap-1.5">
+                                <span className="font-semibold text-gray-700" title={row.requestedByEmail || ''}>
+                                  {row.requestedBy}
+                                </span>
+                                {row.isMine && (
+                                  <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-orange-50 text-[#c2691f] border border-orange-200">
+                                    You
+                                  </span>
+                                )}
+                              </span>
+                            ) : (
+                              /* Requests made before attribution existed, or straight
+                                 against the API rather than through the portal. */
+                              <span className="text-gray-300 italic">Unattributed</span>
+                            )}
+                          </td>
+                        )}
                         <td className="px-4 py-3">
                           <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold ${
                             row.processed

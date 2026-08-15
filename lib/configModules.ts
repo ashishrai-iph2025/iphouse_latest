@@ -17,9 +17,8 @@ export interface ConfigModule {
 export const CONFIG_MODULES: ConfigModule[] = [
   { key: 'modules',               href: '/admin/modules',               icon: '🔐', title: 'API Modules',                desc: 'Create, update and delete API modules.',                                          color: '#0078D4' },
   { key: 'api-credentials',       href: '/admin/api-credentials',       icon: '🔑', title: 'Manage API Credentials',     desc: 'Manage API credentials to access real-time data for clients.',                    color: '#7C3AED' },
-  { key: 'dashboard-modules',     href: '/admin/dashboard-modules',     icon: '📊', title: 'PowerBI Dashboard Modules',  desc: 'Manage dashboards like Internet, Social Media, Telegram etc.',                     color: '#F59E0B' },
+  { key: 'dashboard-modules',     href: '/admin/dashboard-modules',     icon: '📊', title: 'PowerBI Dashboard Modules',  desc: 'Manage dashboards like Open Web, Social Media, Telegram etc.',                     color: '#F59E0B' },
   { key: 'module-permissions',    href: '/admin/module-permissions',    icon: '🛡️', title: 'API Module Permissions',     desc: 'Grant and revoke API module access from/to clients.',                              color: '#10B981' },
-  { key: 'master-api',            href: '/admin/master-api',            icon: '🌐', title: 'Manage API Methods',         desc: 'Manage API URLs and endpoint methods.',                                           color: '#EC4899' },
   { key: 'powerbi-creds',         href: '/admin/powerbi-creds',         icon: '📈', title: 'PowerBI API Credentials',    desc: 'Configure PowerBI API credentials.',                                              color: '#F97316' },
   { key: 'powerbi-workspace',     href: '/admin/powerbi-workspace',     icon: '🗃️', title: 'PowerBI Workspace',          desc: 'View reports, datasets, refresh schedules and refresh history from your PowerBI workspace.', color: '#F59E0B' },
   { key: 'settings',              href: '/admin/settings',              icon: '📧', title: 'Email Credentials',          desc: 'Manage SMTP/email credentials and configuration.',                                color: '#0078D4' },
@@ -28,9 +27,11 @@ export const CONFIG_MODULES: ConfigModule[] = [
   { key: 'tracking',              href: '/admin/tracking',              icon: '📡', title: 'Tracking Report',            desc: 'Application tracking and activity monitoring.',                                    color: '#8B5CF6' },
   { key: 'asset-access',          href: '/admin/asset-access',          icon: '🗂️', title: 'Asset Based Access',         desc: 'Manage access based on required asset permissions.',                              color: '#EF4444' },
   { key: 'war-room-assets',       href: '/admin/war-room-assets',       icon: '⚔️', title: 'War Room Assets',            desc: 'Per-client War Room settings — enable or disable the Asset Comparison tab.',      color: '#FC934C' },
+  { key: 'report-config',          href: '/admin/report-config',          icon: '🧭', title: 'Report Configuration',      desc: 'Map platform reports to warehouse tables and control who can see them.', color: '#2763C4' },
   { key: 'email-templates',       href: '/admin/email-templates',       icon: '✉️', title: 'Email Templates',            desc: 'Manage and customise system email templates.',                                    color: '#0891B2' },
   { key: 'email-event-types',     href: '/admin/email-event-types',     icon: '🔔', title: 'Email Event Types',          desc: 'Configure the event types that trigger system emails and manage their variables.', color: '#0891B2' },
   { key: 'api-playground',        href: '/admin/api-playground',        icon: '🧪', title: 'API Playground',             desc: 'Browse and test every API endpoint used across the platform.',                    color: '#14254A' },
+  { key: 'client-admins',         href: '/admin/client-admins',         icon: '👥', title: 'Client Admins',              desc: 'Let a client user govern Account Access for their own company — view its users and grant or revoke their sign-in.', color: '#7C3AED' },
 ]
 
 export const CONFIG_MODULE_KEYS = CONFIG_MODULES.map(m => m.key)

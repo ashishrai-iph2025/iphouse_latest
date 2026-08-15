@@ -6,6 +6,7 @@ import SearchableSelect from '@/components/ui/SearchableSelect'
 import DatePicker from '@/components/ui/DatePicker'
 import Breadcrumb from '@/components/ui/Breadcrumb'
 import { useMasterData } from '@/lib/masterDataContext'
+import { platformLabel } from '@/lib/platformCategories'
 import { useTheme } from '@/lib/ThemeContext'
 import PageLoader from '@/components/ui/PageLoader'
 
@@ -19,7 +20,10 @@ interface PendingRow {
   [key: string]: unknown
 }
 
+// Wire value — this feeds the qc-action link, so it must stay as MarkScan named it.
 const getPlatform = (row: PendingRow) => String(row.platform ?? row.platformName ?? '–')
+// What the user reads for the same row ("Internet" → "Open Web").
+const getPlatformLabel = (row: PendingRow) => platformLabel(getPlatform(row))
 const getAsset    = (row: PendingRow) => String(row.assetName ?? '–')
 const getUrlCount = (row: PendingRow) => Number(row.urlCount ?? row.pendingCount ?? row.count ?? 0)
 
@@ -139,11 +143,11 @@ export default function PendingCountPage() {
     <div className="fade-in">
       {/* Header row: breadcrumb left, title right */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3 mb-4 sm:mb-6">
-        <Breadcrumb items={[{ label: 'Approvals', href: '/pending-count' }, { label: 'Pending QC Count' }]} />
+        <Breadcrumb items={[{ label: 'Approvals', href: '/pending-count' }, { label: 'URL Approval Pending' }]} />
         <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
           <div className="sm:text-right">
-            <h1 className="text-lg sm:text-xl font-bold text-[#14254A]">Platform Discovery QC Count</h1>
-            <p className="text-brand-muted text-xs sm:text-sm">View pending discovery QC counts per platform and asset.</p>
+            <h1 className="text-lg sm:text-xl font-bold text-[#14254A]">URL Approval Pending</h1>
+            <p className="text-brand-muted text-xs sm:text-sm">View URLs awaiting approval per platform and asset.</p>
           </div>
           {fetched && (
             <div className="flex items-center gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-2xl border border-orange-200 bg-orange-50 self-start sm:self-auto">
@@ -263,7 +267,7 @@ export default function PendingCountPage() {
                 <div className="flex items-center justify-between py-2.5 border-b border-gray-50">
                   <span className="text-xs text-gray-400">Mode</span>
                   <span className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full ${isAllMode ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-700'}`}>
-                    {isAllMode ? 'All Platforms' : platformName}
+                    {isAllMode ? 'All Platforms' : platformLabel(platformName)}
                   </span>
                 </div>
                 <div className="flex items-center justify-between py-2.5">
@@ -295,7 +299,7 @@ export default function PendingCountPage() {
                               {i + 1}
                             </span>
                             <span className="text-xs text-gray-700 flex-1 truncate font-medium">
-                              {isAllMode ? getPlatform(row) : getAsset(row)}
+                              {isAllMode ? getPlatformLabel(row) : getAsset(row)}
                             </span>
                             <span className="text-xs font-black text-gray-800">{cnt.toLocaleString()}</span>
                           </div>
@@ -356,7 +360,7 @@ export default function PendingCountPage() {
                 </svg>
               </div>
               <h3 className="text-gray-700 font-bold text-lg mb-1">No report loaded yet</h3>
-              <p className="text-gray-400 text-sm max-w-xs">Select a platform and date range, then click Load Report to view pending QC counts.</p>
+              <p className="text-gray-400 text-sm max-w-xs">Select a platform and date range, then click Load Report to view URLs awaiting approval.</p>
             </div>
           )}
 
@@ -368,7 +372,7 @@ export default function PendingCountPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
                 </svg>
               </div>
-              <h3 className="text-gray-600 font-bold text-lg mb-1">No pending QC items</h3>
+              <h3 className="text-gray-600 font-bold text-lg mb-1">No URLs awaiting approval</h3>
               <p className="text-gray-400 text-sm">Try adjusting your filters or date range.</p>
             </div>
           )}
@@ -394,7 +398,7 @@ export default function PendingCountPage() {
               <div className="px-5 py-4 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="font-bold text-[#14254A] text-base">
-                    {isAllMode ? 'All Platforms – Pending QC' : `${platformName} – Pending QC`}
+                    {isAllMode ? 'All Platforms – URL Approval Pending' : `${platformLabel(platformName)} – URL Approval Pending`}
                   </h2>
                   <p className="text-xs text-brand-muted mt-0.5">
                     {assetName ? `Asset: ${assetName} · ` : ''}From {effectiveDate}
@@ -438,9 +442,9 @@ export default function PendingCountPage() {
                             <div className="flex items-center gap-1.5 sm:gap-2.5">
                               <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center font-bold text-xs sm:text-sm text-white flex-shrink-0"
                                 style={{ background: `hsl(${(i * 47) % 360}, 55%, 45%)` }}>
-                                {getPlatform(row).charAt(0).toUpperCase()}
+                                {getPlatformLabel(row).charAt(0).toUpperCase()}
                               </div>
-                              <span className="font-semibold text-gray-800 text-xs sm:text-sm">{getPlatform(row)}</span>
+                              <span className="font-semibold text-gray-800 text-xs sm:text-sm">{getPlatformLabel(row)}</span>
                             </div>
                           </td>
                           {showAsset && (
@@ -474,7 +478,7 @@ export default function PendingCountPage() {
                                 }}
                                 className="inline-flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-bold text-white transition-all hover:opacity-90 shadow-sm whitespace-nowrap"
                                 style={{ background: '#FC934C' }}>
-                                <span className="hidden sm:inline">Start </span>QC
+                                <span className="hidden sm:inline">Start </span>Review
                                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                                 </svg>

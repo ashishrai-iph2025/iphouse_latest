@@ -144,73 +144,118 @@ export default function EmailEventTypesPage() {
       />
 
       {/* Info banner */}
-      <div className="rounded-xl p-4 mb-6 text-sm" style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e40af' }}>
+      <div className="rounded-xl p-4 mb-6 text-sm border
+        bg-blue-50 border-blue-200 text-blue-800
+        dark:bg-blue-500/10 dark:border-blue-400/25 dark:text-blue-200">
         <strong>What are Event Types?</strong> Each event type defines a trigger (e.g. "Registration Approved") and the placeholder variables available for that email template. The Email Templates page reads these dynamically — add a new event type here and it immediately appears in the template editor dropdown.
       </div>
 
-      {/* Search + table */}
-      <div className="bg-white rounded-2xl overflow-hidden" style={{ border: `1px solid ${NAVY_25}` }}>
-        <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: `1px solid ${NAVY_10}` }}>
-          <span className="text-sm font-semibold" style={{ color: NAVY }}>{filtered.length} event type{filtered.length !== 1 ? 's' : ''}</span>
+      {/* Search + table.
+          Colours here are Tailwind classes rather than the inline NAVY_* styles
+          used elsewhere on this page: an inline `style` cannot answer to the
+          `.dark` root class, which is why this table stayed white-on-white in
+          dark mode. */}
+      <div className="rounded-2xl overflow-hidden border bg-white border-[#0D244B]/15
+        dark:bg-[#14213a] dark:border-white/10">
+        {/* Wraps on a narrow screen instead of squeezing the search box */}
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 sm:px-5 py-3 border-b
+          border-[#0D244B]/10 dark:border-white/10">
+          <span className="text-sm font-semibold text-[#0D244B] dark:text-white">
+            {filtered.length} event type{filtered.length !== 1 ? 's' : ''}
+          </span>
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Search by key, label or description…"
-            className="text-xs rounded-xl px-3 py-1.5 focus:outline-none"
-            style={{ border: `1px solid ${NAVY_25}`, width: 280 }} />
+            className="text-xs rounded-xl px-3 py-1.5 w-full sm:w-[280px] border transition-shadow
+              bg-white border-[#0D244B]/20 text-[#0D244B] placeholder-[#0D244B]/40
+              focus:outline-none focus:border-[#0D244B] focus:ring-2 focus:ring-[#0D244B]/15
+              dark:bg-white/5 dark:border-white/15 dark:text-white dark:placeholder-white/30
+              dark:focus:border-[#FC934C] dark:focus:ring-[#FC934C]/25" />
         </div>
 
         {loading ? (
           <div className="flex justify-center py-16"><div className="spinner" /></div>
         ) : filtered.length === 0 ? (
-          <div className="py-16 text-center text-sm" style={{ color: NAVY_50 }}>No event types found.</div>
+          <div className="py-16 text-center text-sm text-[#0D244B]/50 dark:text-white/40">No event types found.</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            {/* min-w keeps the eight columns legible and lets the container
+                scroll, rather than crushing Description and Variables to nothing */}
+            <table className="w-full text-sm min-w-[980px]">
               <thead>
                 <tr style={{ background: NAVY }}>
                   {['Sort', 'Event Key', 'Label', 'Description', 'Variables', 'Notify Email', 'Status', 'Actions'].map(h => (
-                    <th key={h} className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wide whitespace-nowrap"
-                      style={{ color: 'rgba(255,255,255,0.75)' }}>{h}</th>
+                    <th key={h} className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wide whitespace-nowrap text-white/75">
+                      {h}
+                    </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((r, idx) => (
-                  <tr key={r.id} style={{ background: idx % 2 === 0 ? '#fff' : NAVY_5, borderBottom: `1px solid ${NAVY_10}` }}>
-                    <td className="px-4 py-3 text-xs font-mono" style={{ color: NAVY_50 }}>{r.sort_order}</td>
+                  <tr key={r.id}
+                    className={`border-b border-[#0D244B]/10 dark:border-white/[0.07] transition-colors
+                      hover:bg-[#FC934C]/[0.07] dark:hover:bg-white/[0.06] ${
+                      idx % 2 === 0
+                        ? 'bg-white dark:bg-transparent'
+                        : 'bg-[#0D244B]/[0.03] dark:bg-white/[0.03]'
+                    }`}>
+                    <td className="px-4 py-3 text-xs font-mono text-[#0D244B]/50 dark:text-white/40">{r.sort_order}</td>
                     <td className="px-4 py-3">
-                      <code className="text-xs px-2 py-0.5 rounded-lg" style={{ background: NAVY_10, color: NAVY }}>{r.key}</code>
+                      <code className="text-xs px-2 py-0.5 rounded-lg whitespace-nowrap
+                        bg-[#0D244B]/[0.07] text-[#0D244B] dark:bg-white/10 dark:text-white/85">
+                        {r.key}
+                      </code>
                     </td>
-                    <td className="px-4 py-3 text-sm font-medium" style={{ color: NAVY }}>{r.label}</td>
-                    <td className="px-4 py-3 text-xs max-w-[200px] truncate" style={{ color: NAVY_50 }} title={r.description}>{r.description || '—'}</td>
+                    <td className="px-4 py-3 text-sm font-medium text-[#0D244B] dark:text-white">{r.label}</td>
+                    <td className="px-4 py-3 text-xs max-w-[240px] truncate text-[#0D244B]/50 dark:text-white/45"
+                      title={r.description}>
+                      {r.description || '—'}
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-1">
                         {parseVars(r.variables).slice(0, 3).map(v => (
-                          <code key={v} className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>{v}</code>
+                          <code key={v} className="text-[10px] px-1.5 py-0.5 rounded border whitespace-nowrap
+                            bg-blue-50 text-blue-700 border-blue-200
+                            dark:bg-blue-500/15 dark:text-blue-200 dark:border-blue-400/25">
+                            {v}
+                          </code>
                         ))}
                         {parseVars(r.variables).length > 3 && (
-                          <span className="text-[10px]" style={{ color: NAVY_50 }}>+{parseVars(r.variables).length - 3} more</span>
+                          <span className="text-[10px] text-[#0D244B]/50 dark:text-white/40">
+                            +{parseVars(r.variables).length - 3} more
+                          </span>
                         )}
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`text-xs px-2 py-0.5 rounded-lg ${r.has_notify_email ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-gray-50 text-gray-400 border border-gray-200'}`}>
+                      <span className={`text-xs px-2 py-0.5 rounded-lg border whitespace-nowrap ${
+                        r.has_notify_email
+                          ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-500/15 dark:text-amber-200 dark:border-amber-400/25'
+                          : 'bg-gray-50 text-gray-400 border-gray-200 dark:bg-white/5 dark:text-white/35 dark:border-white/10'
+                      }`}>
                         {r.has_notify_email ? 'Yes' : 'No'}
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: NAVY_50 }}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${r.is_active ? 'bg-emerald-500' : 'bg-gray-300'}`} />
+                      <span className="inline-flex items-center gap-1.5 text-xs whitespace-nowrap text-[#0D244B]/50 dark:text-white/45">
+                        <span className={`w-1.5 h-1.5 rounded-full ${r.is_active ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-white/25'}`} />
                         {r.is_active ? 'Active' : 'Inactive'}
                       </span>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
                         <button onClick={() => openEdit(r)}
-                          className="px-2.5 py-1 text-xs rounded-lg border hover:opacity-80 transition-opacity"
-                          style={{ borderColor: NAVY_25, color: NAVY }}>Edit</button>
+                          className="px-2.5 py-1 text-xs font-semibold rounded-lg border transition-colors
+                            border-[#0D244B]/20 text-[#0D244B] hover:bg-[#0D244B] hover:text-white hover:border-[#0D244B]
+                            dark:border-white/15 dark:text-white/80 dark:hover:bg-white/15 dark:hover:text-white">
+                          Edit
+                        </button>
                         <button onClick={() => openDelete(r)}
-                          className="px-2.5 py-1 text-xs rounded-lg border hover:bg-red-50 transition-colors"
-                          style={{ borderColor: NAVY_25, color: '#dc2626' }}>Delete</button>
+                          className="px-2.5 py-1 text-xs font-semibold rounded-lg border transition-colors
+                            border-[#0D244B]/20 text-red-600 hover:bg-red-50 hover:border-red-300
+                            dark:border-white/15 dark:text-red-300 dark:hover:bg-red-500/15 dark:hover:border-red-400/40">
+                          Delete
+                        </button>
                       </div>
                     </td>
                   </tr>

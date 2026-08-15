@@ -16,7 +16,6 @@ var configModuleKeys = []string{
 	"api-credentials",
 	"dashboard-modules",
 	"module-permissions",
-	"master-api",
 	"powerbi-creds",
 	"powerbi-workspace",
 	"settings",
@@ -28,6 +27,8 @@ var configModuleKeys = []string{
 	"email-templates",
 	"email-event-types",
 	"api-playground",
+	"client-admins",
+	"report-config",
 }
 
 func isConfigModuleKey(k string) bool {
@@ -96,14 +97,16 @@ func RequireConfigModule(moduleKey string, next http.HandlerFunc) http.HandlerFu
 func MyConfigAccess(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetClaims(r)
 	if claims == nil {
-		fail(w, 401, "Not authenticated"); return
+		fail(w, 401, "Not authenticated")
+		return
 	}
 	role := int64(0)
 	if claims.Role != nil {
 		role = *claims.Role
 	}
 	if role >= 2 {
-		ok(w, map[string]any{"success": true, "role": role, "granted": configModuleKeys}); return
+		ok(w, map[string]any{"success": true, "role": role, "granted": configModuleKeys})
+		return
 	}
 	ok(w, map[string]any{"success": true, "role": role, "granted": grantedKeys(claims.LoginID)})
 }
@@ -117,26 +120,29 @@ func MyConfigAccess(w http.ResponseWriter, r *http.Request) {
 // a shared login (they have many dcp_user_login rows, one per company, but
 // only one dcp_super_admin row/id) — that mismatch is fixed here.
 //
-//   GET                       → { admins: [...] }        every Admin/SuperAdmin (from dcp_super_admin)
-//   GET ?loginId=<sa.id>      → { granted: [keys] }       modules currently shared with that person
-//   GET ?loginUsername=<email> → { id, role, granted }    resolve a person by email in one call
-//   PUT {loginId,moduleKey,grant} → share / unshare one module with that person
+//	GET                       → { admins: [...] }        every Admin/SuperAdmin (from dcp_super_admin)
+//	GET ?loginId=<sa.id>      → { granted: [keys] }       modules currently shared with that person
+//	GET ?loginUsername=<email> → { id, role, granted }    resolve a person by email in one call
+//	PUT {loginId,moduleKey,grant} → share / unshare one module with that person
 func SuperAdminConfigAccess(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		if lu := r.URL.Query().Get("loginUsername"); lu != "" {
 			sa := superAdminByEmailPublic(lu)
 			if sa == nil {
-				ok(w, map[string]any{"success": true, "id": nil, "role": 0, "granted": []string{}}); return
+				ok(w, map[string]any{"success": true, "id": nil, "role": 0, "granted": []string{}})
+				return
 			}
 			role := int64(1)
 			if strVal(sa["role"]) == "SuperAdmin" {
 				role = 2
 			}
-			ok(w, map[string]any{"success": true, "id": intVal(sa["id"]), "role": role, "granted": grantedKeys(intVal(sa["id"]))}); return
+			ok(w, map[string]any{"success": true, "id": intVal(sa["id"]), "role": role, "granted": grantedKeys(intVal(sa["id"]))})
+			return
 		}
 		if lid := r.URL.Query().Get("loginId"); lid != "" {
-			ok(w, map[string]any{"success": true, "granted": grantedKeys(lid)}); return
+			ok(w, map[string]any{"success": true, "granted": grantedKeys(lid)})
+			return
 		}
 		admins, _ := db.Query(`
 			SELECT id AS loginId, name, email AS login_username, role
@@ -156,14 +162,17 @@ func SuperAdminConfigAccess(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.LoginID == 0 || body.ModuleKey == "" {
-			fail(w, 422, "loginId and moduleKey required"); return
+			fail(w, 422, "loginId and moduleKey required")
+			return
 		}
 		if !isConfigModuleKey(body.ModuleKey) {
-			fail(w, 422, "Unknown module key"); return
+			fail(w, 422, "Unknown module key")
+			return
 		}
 		target, _ := db.QueryOne("SELECT id FROM dcp_super_admin WHERE id = ? AND is_active = 1", body.LoginID)
 		if target == nil {
-			fail(w, 404, "Admin not found"); return
+			fail(w, 404, "Admin not found")
+			return
 		}
 		if body.Grant {
 			db.Exec(`INSERT INTO dcp_admin_config_access (loginId, module_key, granted, updated_at)

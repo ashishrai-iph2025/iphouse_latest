@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	ipauth "github.com/ip-house/iphouse-api/auth"
 	"github.com/ip-house/iphouse-api/activity"
+	ipauth "github.com/ip-house/iphouse-api/auth"
 	"github.com/ip-house/iphouse-api/db"
 )
 
@@ -28,7 +28,8 @@ import (
 func AdminUserSearch(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
-		OK(w, map[string]any{"success": true, "users": []any{}}); return
+		OK(w, map[string]any{"success": true, "users": []any{}})
+		return
 	}
 	like := "%" + q + "%"
 	// Clients only — never surface Admin / Super Admin logins in the "access a
@@ -58,10 +59,12 @@ func AdminUserSearch(w http.ResponseWriter, r *http.Request) {
 func Impersonate(w http.ResponseWriter, r *http.Request) {
 	admin := ClaimsFrom(r)
 	if admin == nil || admin.Role == nil || *admin.Role < 1 {
-		Fail(w, 403, "Forbidden"); return
+		Fail(w, 403, "Forbidden")
+		return
 	}
 	if admin.ImpersonatorLoginID != 0 {
-		Fail(w, 400, "You are already viewing as a client. Exit first."); return
+		Fail(w, 400, "You are already viewing as a client. Exit first.")
+		return
 	}
 
 	var body struct {
@@ -77,6 +80,7 @@ func Impersonate(w http.ResponseWriter, r *http.Request) {
 	case body.LoginID != 0:
 		row, _ = db.QueryOne(`
 			SELECT l.loginId, l.userId, l.first_name, l.last_name, l.login_username, l.login_type,
+			       l.is_client_admin,
 			       u.name, u.role, u.api_user_name, u.api_password
 			FROM dcp_user_login l
 			INNER JOIN dcp_user u ON u.userId = l.userId
@@ -84,22 +88,26 @@ func Impersonate(w http.ResponseWriter, r *http.Request) {
 	case body.UserID != 0:
 		row, _ = db.QueryOne(`
 			SELECT l.loginId, l.userId, l.first_name, l.last_name, l.login_username, l.login_type,
+			       l.is_client_admin,
 			       u.name, u.role, u.api_user_name, u.api_password
 			FROM dcp_user_login l
 			INNER JOIN dcp_user u ON u.userId = l.userId
 			WHERE l.userId = ? AND l.is_active = 1 AND u.deleted = 0
 			ORDER BY l.loginId ASC LIMIT 1`, body.UserID)
 	default:
-		Fail(w, 422, "loginId (or userId) is required"); return
+		Fail(w, 422, "loginId (or userId) is required")
+		return
 	}
 	if row == nil {
-		Fail(w, 404, "This login is no longer active or does not exist."); return
+		Fail(w, 404, "This login is no longer active or does not exist.")
+		return
 	}
 
 	// Never allow impersonating a portal-staff account (would be an escalation
 	// path — e.g. an Admin becoming a Super Admin).
 	if sa := superAdminByEmail(strFromAny(row["login_username"])); sa != nil {
-		Fail(w, 403, "This account is an Admin/Super Admin and cannot be accessed as a client."); return
+		Fail(w, 403, "This account is an Admin/Super Admin and cannot be accessed as a client.")
+		return
 	}
 
 	targetUserID := intFromAny(row["userId"])
@@ -122,7 +130,8 @@ func Impersonate(w http.ResponseWriter, r *http.Request) {
 
 	tok, err := ipauth.SignToken(claims)
 	if err != nil {
-		Fail(w, 500, "Token error"); return
+		Fail(w, 500, "Token error")
+		return
 	}
 	SetTokenCookie(w, tok)
 	go activity.Log(admin.LoginID, "impersonate_start", "admin/impersonate",
@@ -138,7 +147,8 @@ func Impersonate(w http.ResponseWriter, r *http.Request) {
 func ExitImpersonation(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil || claims.ImpersonatorLoginID == 0 || claims.ImpersonatorEmail == "" {
-		Fail(w, 400, "Not currently viewing as a client."); return
+		Fail(w, 400, "Not currently viewing as a client.")
+		return
 	}
 
 	// Rebuild the admin session fresh from dcp_super_admin (works even if the
@@ -146,12 +156,14 @@ func ExitImpersonation(w http.ResponseWriter, r *http.Request) {
 	sa := superAdminByEmail(claims.ImpersonatorEmail)
 	if sa == nil {
 		ClearTokenCookie(w)
-		Fail(w, 401, "Your admin session could not be restored — please sign in again."); return
+		Fail(w, 401, "Your admin session could not be restored — please sign in again.")
+		return
 	}
 	adminClaims := claimsForSuperAdminRow(sa)
 	tok, err := ipauth.SignToken(adminClaims)
 	if err != nil {
-		Fail(w, 500, "Token error"); return
+		Fail(w, 500, "Token error")
+		return
 	}
 	SetTokenCookie(w, tok)
 	go activity.Log(adminClaims.LoginID, "impersonate_exit", "admin/impersonate",

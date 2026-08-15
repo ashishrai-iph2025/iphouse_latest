@@ -135,14 +135,76 @@ export interface WarRoomFilters {
   searchEngine?: string // Open Web: infringing-URL search engine
 }
 
-// TAT bucket definitions — exported so WarRoomReport can import and reuse them.
-export const TAT_BUCKETS = [
-  { label: '0-15 min',  test: (m: number) => m >= 0 && m <= 15 },
-  { label: '15-30 min', test: (m: number) => m > 15 && m <= 30 },
-  { label: '31-45 min', test: (m: number) => m > 30 && m <= 45 },
-  { label: '46-60 min', test: (m: number) => m > 45 && m <= 60 },
-  { label: '1hr+',      test: (m: number) => m > 60 },
+/* ─── TAT buckets ──────────────────────────────────────────────────────────
+   A bucket covers `lo < minutes <= hi`; the first bucket uses lo = -1 so 0 is
+   included, and the last uses hi = Infinity. Buckets are no longer a fixed
+   list: BASE_TAT_BUCKETS is only the starting grid, and buildTatBuckets()
+   collapses it against the actual data so empty buckets never render and no
+   surviving bucket holds less than MIN_TAT_SHARE of the rows. */
+export interface TatBucket { label: string; lo: number; hi: number }
+
+export const inTatBucket = (b: TatBucket, m: number): boolean => m > b.lo && m <= b.hi
+
+// Smallest share of the total a bucket may hold before it is merged into a
+// neighbour (i.e. before its range is widened).
+export const MIN_TAT_SHARE = 0.2
+
+export function tatBucketLabel(lo: number, hi: number): string {
+  if (!isFinite(hi)) return lo === 60 ? '1hr+' : `${lo + 1} min+`
+  return `${Math.max(0, lo + 1)}-${hi} min`
+}
+
+const mkBucket = (lo: number, hi: number): TatBucket => ({ label: tatBucketLabel(lo, hi), lo, hi })
+
+export const BASE_TAT_BUCKETS: TatBucket[] = [
+  mkBucket(-1, 15), mkBucket(15, 30), mkBucket(30, 45), mkBucket(45, 60), mkBucket(60, Infinity),
 ]
+
+/**
+ * Collapse BASE_TAT_BUCKETS against a set of TAT measurements so the rendered
+ * distribution is self-adjusting:
+ *   1. leading/trailing empty buckets are dropped outright (no data lives
+ *      there, so widening into them would add nothing);
+ *   2. any remaining bucket holding < MIN_TAT_SHARE of the rows is merged into
+ *      its smaller neighbour, which widens that neighbour's range — repeated
+ *      until every bucket clears the threshold.
+ * Returns [] when there is no measurable data at all.
+ */
+export function buildTatBuckets(minutes: number[]): TatBucket[] {
+  const valid = minutes.filter(m => m !== null && isFinite(m) && m >= 0)
+  const total = valid.length
+  if (total === 0) return []
+
+  let cells = BASE_TAT_BUCKETS.map(b => ({
+    lo: b.lo, hi: b.hi,
+    count: valid.reduce((n, m) => n + (inTatBucket(b, m) ? 1 : 0), 0),
+  }))
+
+  // 1. Trim empty buckets at both ends.
+  while (cells.length > 1 && cells[0].count === 0) cells = cells.slice(1)
+  while (cells.length > 1 && cells[cells.length - 1].count === 0) cells = cells.slice(0, -1)
+
+  // 2. Merge undersized buckets into the smaller adjacent one. Merging is
+  //    always between neighbours, so the buckets stay contiguous ranges.
+  while (cells.length > 1) {
+    let worst = -1
+    for (let i = 0; i < cells.length; i++) {
+      if (cells[i].count / total >= MIN_TAT_SHARE) continue
+      if (worst === -1 || cells[i].count < cells[worst].count) worst = i
+    }
+    if (worst === -1) break
+
+    const left  = worst > 0 ? cells[worst - 1] : null
+    const right = worst < cells.length - 1 ? cells[worst + 1] : null
+    // Prefer the lighter neighbour so the widened range stays as tight as it can.
+    const mergeLeft = !!left && (!right || left.count <= right.count)
+    const a = mergeLeft ? worst - 1 : worst
+    const b = a + 1
+    cells.splice(a, 2, { lo: cells[a].lo, hi: cells[b].hi, count: cells[a].count + cells[b].count })
+  }
+
+  return cells.map(c => mkBucket(c.lo, c.hi))
+}
 
 const parseTatTime = (v?: string | null): Date | null => {
   const s = String(v ?? '').trim()
@@ -151,7 +213,7 @@ const parseTatTime = (v?: string | null): Date | null => {
   return isFinite(d.getTime()) ? d : null
 }
 
-const diffTatMins = (from?: string | null, to?: string | null): number | null => {
+export const diffTatMins = (from?: string | null, to?: string | null): number | null => {
   const a = parseTatTime(from); const b = parseTatTime(to)
   if (!a || !b) return null
   return (b.getTime() - a.getTime()) / 60000
@@ -160,7 +222,7 @@ const diffTatMins = (from?: string | null, to?: string | null): number | null =>
 // Effective removal timestamp for TAT: Open Web infringing URLs (no host URL)
 // are delisted rather than removed, so use delistingTime once Approved; Open Web
 // host URLs must be Dead to count; every other platform uses removalTime.
-const effectiveRemovalTime = (r: WarRoomRow): string | null | undefined => {
+export const effectiveRemovalTime = (r: WarRoomRow): string | null | undefined => {
   if (String(r.platform ?? '').trim().toLowerCase() === 'internet') {
     if (r.isSource) {
       return String(r.removalStatus ?? '').trim().toLowerCase() === 'dead' ? r.removalTime : null
@@ -169,6 +231,24 @@ const effectiveRemovalTime = (r: WarRoomRow): string | null | undefined => {
   }
   return r.removalTime
 }
+
+// The two TAT measurements the report buckets. Exported so the bucket builder
+// and the cross-filter always measure a row exactly the same way.
+export const tatUrlToEnforcementMins = (r: WarRoomRow): number | null =>
+  diffTatMins(r.urlUploadDate ?? r.discoveryDoneAt, r.enforcementTime)
+export const tatEnforcementToRemovalMins = (r: WarRoomRow): number | null =>
+  diffTatMins(r.enforcementTime, effectiveRemovalTime(r))
+
+/** n days before an ISO day (YYYY-MM-DD), as an ISO day. Used to turn a
+    "last N days" preset into a concrete window anchored on a known date. */
+export function shiftIsoDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`)
+  if (!isFinite(d.getTime())) return iso
+  d.setUTCDate(d.getUTCDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+
+export const todayIsoDay = (): string => new Date().toISOString().slice(0, 10)
 
 export type WarRoomMode = 'auto' | 'full' | 'incremental'
 
@@ -366,7 +446,7 @@ const profileDead = (r: WarRoomRow): boolean =>
 // Fallback chain mirrors the backend's ReportDay: not every platform populates
 // urlUploadDate/discoveryDoneAt, so rows without either would otherwise get no
 // day at all and drop out of date-bucketed views (trend chart, TAT).
-const rowDay = (r: WarRoomRow): string => {
+export const rowDay = (r: WarRoomRow): string => {
   const s = String(r.urlUploadDate ?? r.discoveryDoneAt ?? r.uploadDate ?? r.createdAt ?? '')
   return s.length >= 10 ? s.slice(0, 10) : ''
 }
@@ -470,8 +550,20 @@ function aggregateSet(rows: WarRoomRow[]): {
   return { totals, funnel, removal, breakdowns }
 }
 
+/** Bucket sets behind the two TAT filters. Both default to the base grid so
+    callers that don't render TAT charts (e.g. the comparison tab) can omit them. */
+export interface AggregateOptions {
+  tatUrlEnfBuckets?: TatBucket[]
+  tatEnfRemBuckets?: TatBucket[]
+}
+
 /** Recompute the full report from trimmed rows under the active cross-filters. */
-export function aggregate(rows: WarRoomRow[], filters: WarRoomFilters): WarRoomReport {
+export function aggregate(
+  rows: WarRoomRow[], filters: WarRoomFilters, opts: AggregateOptions = {}
+): WarRoomReport {
+  const urlEnfBuckets = opts.tatUrlEnfBuckets ?? BASE_TAT_BUCKETS
+  const enfRemBuckets = opts.tatEnfRemBuckets ?? BASE_TAT_BUCKETS
+
   const match = (r: WarRoomRow): boolean => {
     if (filters.platform && r.platform !== filters.platform) return false
     if (filters.subPlatform && rowSubPlatform(r) !== filters.subPlatform.toLowerCase()) return false
@@ -482,14 +574,14 @@ export function aggregate(rows: WarRoomRow[], filters: WarRoomFilters): WarRoomR
     if (filters.country  && String(r.country          ?? '').toLowerCase() !== filters.country.toLowerCase())  return false
     if (filters.status   && rowStatus(r).toLowerCase() !== filters.status.toLowerCase()) return false
     if (filters.tatUrlEnf) {
-      const bkt = TAT_BUCKETS.find(b => b.label === filters.tatUrlEnf)
-      const mins = diffTatMins(r.urlUploadDate ?? r.discoveryDoneAt, r.enforcementTime)
-      if (!bkt || mins === null || !bkt.test(mins)) return false
+      const bkt = urlEnfBuckets.find(b => b.label === filters.tatUrlEnf)
+      const mins = tatUrlToEnforcementMins(r)
+      if (!bkt || mins === null || !inTatBucket(bkt, mins)) return false
     }
     if (filters.tatEnfRem) {
-      const bkt = TAT_BUCKETS.find(b => b.label === filters.tatEnfRem)
-      const mins = diffTatMins(r.enforcementTime, effectiveRemovalTime(r))
-      if (!bkt || mins === null || !bkt.test(mins)) return false
+      const bkt = enfRemBuckets.find(b => b.label === filters.tatEnfRem)
+      const mins = tatEnforcementToRemovalMins(r)
+      if (!bkt || mins === null || !inTatBucket(bkt, mins)) return false
     }
     if (filters.searchEngine &&
         String(r.searchEngine ?? '').trim().toLowerCase() !== filters.searchEngine.toLowerCase()) return false
@@ -511,14 +603,14 @@ export function aggregate(rows: WarRoomRow[], filters: WarRoomFilters): WarRoomR
     if (f.country && String(r.country ?? '') !== f.country) return false
     if (f.status && rowStatus(r) !== f.status) return false
     if (f.tatUrlEnf) {
-      const bkt = TAT_BUCKETS.find(b => b.label === f.tatUrlEnf)
-      const mins = diffTatMins(r.urlUploadDate ?? r.discoveryDoneAt, r.enforcementTime)
-      if (!bkt || mins === null || !bkt.test(mins)) return false
+      const bkt = urlEnfBuckets.find(b => b.label === f.tatUrlEnf)
+      const mins = tatUrlToEnforcementMins(r)
+      if (!bkt || mins === null || !inTatBucket(bkt, mins)) return false
     }
     if (f.tatEnfRem) {
-      const bkt = TAT_BUCKETS.find(b => b.label === f.tatEnfRem)
-      const mins = diffTatMins(r.enforcementTime, effectiveRemovalTime(r))
-      if (!bkt || mins === null || !bkt.test(mins)) return false
+      const bkt = enfRemBuckets.find(b => b.label === f.tatEnfRem)
+      const mins = tatEnforcementToRemovalMins(r)
+      if (!bkt || mins === null || !inTatBucket(bkt, mins)) return false
     }
     if (f.searchEngine &&
         String(r.searchEngine ?? '').trim().toLowerCase() !== f.searchEngine.toLowerCase()) return false

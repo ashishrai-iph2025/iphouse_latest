@@ -158,20 +158,22 @@ export default function ClientsPageClient({ clients, totalClients, totalDashboar
 
           {/* Tabs */}
           <div className="flex flex-wrap items-center gap-2 px-5 py-3 border-b border-gray-100 bg-gray-50/50">
+            {/* Brand tabs: navy is the primary state, the yellow→orange gradient
+                the secondary one — the same pairing the sidebar uses. */}
             <button
               onClick={() => changeTab('active')}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-150 ${
                 tab === 'active'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'bg-white text-gray-500 border border-gray-200 hover:border-emerald-300 hover:text-emerald-700'
+                  ? 'bg-[#14254A] text-white shadow-sm'
+                  : 'bg-white text-gray-500 border border-gray-200 hover:border-[#14254A]/40 hover:text-[#14254A]'
               }`}
             >
               <span className={`flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-bold flex-shrink-0 ${
-                tab === 'active' ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-700'
+                tab === 'active' ? 'bg-white/20 text-white' : 'bg-[#14254A]/10 text-[#14254A]'
               }`}>✓</span>
               Active Clients
               <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                tab === 'active' ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-700'
+                tab === 'active' ? 'bg-white/20 text-white' : 'bg-[#14254A]/10 text-[#14254A]'
               }`}>
                 {active.length}
               </span>
@@ -181,16 +183,16 @@ export default function ClientsPageClient({ clients, totalClients, totalDashboar
               onClick={() => changeTab('inactive')}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-150 ${
                 tab === 'inactive'
-                  ? 'bg-gray-700 text-white shadow-sm'
-                  : 'bg-white text-gray-500 border border-gray-200 hover:border-gray-400 hover:text-gray-700'
+                  ? 'bg-gradient-to-r from-[#FFC82B] to-[#FC934C] text-white shadow-sm'
+                  : 'bg-white text-gray-500 border border-gray-200 hover:border-[#FC934C]/50 hover:text-[#FC934C]'
               }`}
             >
               <span className={`flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-bold flex-shrink-0 ${
-                tab === 'inactive' ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500'
+                tab === 'inactive' ? 'bg-white/25 text-white' : 'bg-[#FC934C]/15 text-[#d97b2e]'
               }`}>✕</span>
               Inactive Clients
               <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                tab === 'inactive' ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500'
+                tab === 'inactive' ? 'bg-white/25 text-white' : 'bg-[#FC934C]/15 text-[#d97b2e]'
               }`}>
                 {inactive.length}
               </span>

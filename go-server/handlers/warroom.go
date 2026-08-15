@@ -537,16 +537,19 @@ func WarRoomClientToken(w http.ResponseWriter, r *http.Request) {
 func WarRoomAssets(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
-		Fail(w, 401, "Not authenticated"); return
+		Fail(w, 401, "Not authenticated")
+		return
 	}
 	token := ResolveAPIToken(claims)
 	if token == "" {
-		Fail(w, 401, "API token missing"); return
+		Fail(w, 401, "API token missing")
+		return
 	}
 	raw, err := markscan.GetAllWarRoomAssets(token)
 	if err != nil {
 		log.Printf("[warroom assets] loginId=%d fetch failed: %v", claims.LoginID, err)
-		Fail(w, 502, "Fetching War Room assets from MarkScan failed. Please try again."); return
+		Fail(w, 502, "Fetching War Room assets from MarkScan failed. Please try again.")
+		return
 	}
 	log.Printf("[warroom assets] loginId=%d rawAssets=%d item[0]=%v", claims.LoginID, len(raw), firstAny(raw))
 	OK(w, map[string]any{
@@ -565,8 +568,12 @@ func warRoomComparisonEnabled(userID int64) bool {
 }
 
 // assetOptions reduces a loosely-typed MarkScan asset list to unique
-// {key,label,warRoomEndDate} options — the name plus the war-room end date,
-// which the frontend uses to auto-select the most recent asset.
+// {key,label,warRoomStartDate,warRoomEndDate} options — the name plus the
+// war-room date bounds. The end date auto-selects the most recent asset; the
+// start date lets Asset Comparison size a "first N days" window per asset
+// without scanning that asset's whole history first. Either may be absent:
+// MarkScan does not guarantee them, and the frontend falls back to deriving the
+// bound from the rows it gets back.
 func assetOptions(raw []any) []map[string]string {
 	assets := make([]map[string]string, 0, len(raw))
 	seen := map[string]bool{}
@@ -576,18 +583,30 @@ func assetOptions(raw []any) []map[string]string {
 			continue
 		}
 		seen[name] = true
-		end := ""
-		if m, ok := a.(map[string]any); ok {
-			for _, k := range []string{"warRoomEndDate", "WarRoomEndDate", "war_room_end_date"} {
-				if s, ok := m[k].(string); ok && s != "" {
-					end = s
-					break
-				}
-			}
-		}
-		assets = append(assets, map[string]string{"key": name, "label": name, "warRoomEndDate": end})
+		m, _ := a.(map[string]any)
+		assets = append(assets, map[string]string{
+			"key": name, "label": name,
+			"warRoomStartDate": firstStringOf(m,
+				"warRoomStartDate", "WarRoomStartDate", "war_room_start_date",
+				"urlUploadDate", "URLUploadDate", "url_upload_date"),
+			"warRoomEndDate": firstStringOf(m,
+				"warRoomEndDate", "WarRoomEndDate", "war_room_end_date"),
+		})
 	}
 	return assets
+}
+
+// firstStringOf returns the first non-empty string value among the given keys.
+func firstStringOf(m map[string]any, keys ...string) string {
+	if m == nil {
+		return ""
+	}
+	for _, k := range keys {
+		if s, ok := m[k].(string); ok && s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func firstAny(s []any) any {

@@ -1,0 +1,393 @@
+'use client'
+
+// Reports — the in-house replacement for the embedded PowerBI report files.
+//
+// Layout ported from MadiaScanAnalytics `src/app/sport-report/page.tsx`, but
+// rebuilt in this project's stack rather than copied: recharts instead of
+// ApexCharts (already a dependency here), inline SVG instead of lucide-react,
+// and Tailwind classes with `dark:` variants instead of that project's inline
+// `T.*` theme-token styles. The structure is the same — gradient header, tab
+// row, slicer row, KPI band, cross-filterable panels, debounced auto-run — so it
+// reads as the same report.
+//
+// Data comes from the analytics warehouse over /api/reports/* (see
+// go-server/handlers/reports.go), which is a SEPARATE database from the portal's
+// own. Those endpoints are staff-only, which is why this page lives under
+// /admin: the report is keyed on a warehouse ClientId supplied by the caller,
+// and there is no portal-login → warehouse-client mapping yet.
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  ResponsiveContainer, AreaChart, Area, BarChart, Bar, XAxis, YAxis,
+  CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell,
+} from 'recharts'
+import { Link } from 'react-router-dom'
+import SearchableSelect from '@/components/ui/SearchableSelect'
+import DatePicker from '@/components/ui/DatePicker'
+
+/* ── Palette — Identification = navy, Removal = orange (as in the original) ── */
+const NAVY   = '#14254A'
+const ORANGE = '#F5A623'
+const BLUE   = '#2763C4'
+const CYAN   = '#3B9FD4'
+const AMBER  = '#F7B84E'
+const DEEP   = '#16335F'
+const GREEN  = '#22C55E'
+const PALETTE = [NAVY, ORANGE, BLUE, AMBER, DEEP, CYAN, '#E08A00', '#8FB3D9', GREEN]
+
+/* ── Formatting ───────────────────────────────────────────────────────────── */
+function fmt(v: number, dec = 1): string {
+  if (!v && v !== 0) return '–'
+  const a = Math.abs(v)
+  if (a >= 1_000_000_000) return (v / 1_000_000_000).toFixed(dec) + 'B'
+  if (a >= 1_000_000)     return (v / 1_000_000).toFixed(dec) + 'M'
+  if (a >= 1_000)         return (v / 1_000).toFixed(dec) + 'K'
+  return String(Math.round(v))
+}
+const full = (v: number) => Number(v || 0).toLocaleString()
+
+/* ── Types ────────────────────────────────────────────────────────────────── */
+type TabKey = 'infringing' | 'source' | 'telegram' | 'social' | 'complete'
+type SubTab = 'metrics' | 'overview' | 'breakdown'
+
+interface Filters {
+  clientId: string; assetId: string; from: string; to: string
+  language: string; country: string; searchEngine: string
+  tatBucket: string; note2: string
+}
+
+const today    = new Date().toISOString().slice(0, 10)
+const oneYrAgo = new Date(Date.now() - 365 * 86400e3).toISOString().slice(0, 10)
+const EMPTY: Filters = {
+  clientId: '', assetId: '', from: oneYrAgo, to: today,
+  language: '', country: '', searchEngine: '', tatBucket: '', note2: '',
+}
+
+const TABS: { key: TabKey; label: string; color: string; icon: React.ReactNode }[] = [
+  { key: 'infringing', label: 'Infringing URLs', color: NAVY,      icon: <Ico d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z" /> },
+  { key: 'source',     label: 'Source URLs',     color: BLUE,      icon: <Ico d="M12 3a9 9 0 100 18 9 9 0 000-18zM3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18" /> },
+  { key: 'telegram',   label: 'Telegram',        color: '#229ED9', icon: <Ico d="M21 4L3 11l5 2 2 6 4-4 5 3z" /> },
+  { key: 'social',     label: 'Social / UGC',    color: ORANGE,    icon: <Ico d="M4 12v.01M4 12a8 8 0 018-8M4 12a8 8 0 008 8m0-16a8 8 0 018 8 8 8 0 01-8 8" /> },
+  { key: 'complete',   label: 'Complete Report', color: AMBER,     icon: <Ico d="M4 6h16M4 12h16M4 18h10" /> },
+]
+
+const SUBTABS: { key: SubTab; label: string }[] = [
+  { key: 'metrics',   label: 'Metrics' },
+  { key: 'overview',  label: 'Overview' },
+  { key: 'breakdown', label: 'Breakdown' },
+]
+
+function Ico({ d }: { d: string }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
+      <path d={d} />
+    </svg>
+  )
+}
+
+/* ── Primitives ───────────────────────────────────────────────────────────── */
+
+function KpiCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color: string }) {
+  return (
+    <div className="relative overflow-hidden rounded-2xl px-4 py-3.5 flex flex-col gap-2 shadow-card
+      bg-white border border-[#14254A]/10 dark:bg-[#14213a] dark:border-white/10"
+      style={{ borderLeft: `3px solid ${color}` }}>
+      <div className="absolute inset-0 pointer-events-none"
+        style={{ background: `radial-gradient(circle at top right,${color}1f 0%,transparent 70%)` }} />
+      <span className="relative text-[10px] font-bold uppercase tracking-[0.06em] leading-tight
+        text-[#14254A]/60 dark:text-white/50">
+        {label}
+      </span>
+      <div className="relative text-[26px] font-extrabold leading-none tracking-tight text-[#14254A] dark:text-white">
+        {value}
+      </div>
+      {sub && (
+        <div className="relative text-[11px] pt-2 border-t text-[#14254A]/45 border-[#14254A]/10
+          dark:text-white/40 dark:border-white/10">
+          {sub}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Panel({ title, sub, color = BLUE, action, children }: {
+  title: string; sub?: string; color?: string; action?: React.ReactNode; children: React.ReactNode
+}) {
+  return (
+    <div className="rounded-2xl overflow-hidden shadow-card bg-white border border-[#14254A]/10
+      dark:bg-[#14213a] dark:border-white/10">
+      <div className="px-4 py-3 border-b flex items-center gap-2.5 border-[#14254A]/10
+        bg-[#14254A]/[0.03] dark:border-white/10 dark:bg-white/[0.03]">
+        <span className="w-1 h-6 rounded-full flex-shrink-0" style={{ background: color }} />
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] font-bold text-[#14254A] dark:text-white truncate">{title}</div>
+          {sub && <div className="text-[10px] text-[#14254A]/45 dark:text-white/40 truncate">{sub}</div>}
+        </div>
+        {action}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function SectionDivider({ title, desc, color = BLUE }: { title: string; desc?: string; color?: string }) {
+  return (
+    <div className="flex items-center gap-3.5 my-1">
+      <div className="w-1 h-9 rounded flex-shrink-0"
+        style={{ background: `linear-gradient(180deg,${color},${color}66)` }} />
+      <div>
+        <div className="text-[13px] font-extrabold tracking-tight text-[#14254A] dark:text-white">{title}</div>
+        {desc && <div className="text-[11px] mt-0.5 text-[#14254A]/45 dark:text-white/40">{desc}</div>}
+      </div>
+      <div className="flex-1 h-px ml-1 bg-[#14254A]/10 dark:bg-white/10" />
+    </div>
+  )
+}
+
+/** Active cross-filter chip, clearable. */
+function Chip({ label, value, onClear }: { label: string; value: string; onClear: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md
+      bg-[#FC934C]/12 text-[#c2691f] border border-[#FC934C]/30
+      dark:bg-[#FC934C]/15 dark:text-[#FFC82B] dark:border-[#FC934C]/30">
+      <span className="opacity-70">{label}:</span>
+      <span className="truncate max-w-[140px]">{value}</span>
+      <button onClick={onClear} aria-label={`Clear ${label}`}
+        className="ml-0.5 leading-none hover:opacity-60">×</button>
+    </span>
+  )
+}
+
+/**
+ * Horizontal bar list, cross-filterable. Clicking a row applies it as a filter;
+ * clicking the active row clears it — the same toggle the original had, which is
+ * what makes the panels behave like PowerBI slicers.
+ */
+function HBar({ title, rows, color = BLUE, activeVal = '', onPick, labelKey = 'label' }: {
+  title: string
+  rows: any[]
+  color?: string
+  activeVal?: string
+  onPick?: (v: string) => void
+  labelKey?: string
+}) {
+  const max = Math.max(1, ...rows.map(r => Number(r.urls) || 0))
+  return (
+    <Panel title={title} color={color} sub={onPick ? 'Click a row to filter the report' : undefined}>
+      <div className="p-3 space-y-1.5 max-h-[320px] overflow-y-auto">
+        {rows.length === 0 && (
+          <p className="text-xs text-center py-8 text-[#14254A]/40 dark:text-white/35">No data in range.</p>
+        )}
+        {rows.map((r, i) => {
+          const label = String(r[labelKey] ?? '—')
+          const urls = Number(r.urls) || 0
+          const removed = Number(r.removed) || 0
+          const on = activeVal !== '' && activeVal === label
+          return (
+            <button key={label + i} type="button" disabled={!onPick}
+              onClick={() => onPick?.(label)}
+              className={`w-full text-left rounded-lg px-2.5 py-1.5 transition-colors ${
+                onPick ? 'cursor-pointer' : 'cursor-default'} ${
+                on ? 'bg-[#FC934C]/12 dark:bg-[#FC934C]/15' : 'hover:bg-[#14254A]/[0.04] dark:hover:bg-white/[0.06]'}`}>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className={`text-[11px] truncate ${on
+                  ? 'font-bold text-[#c2691f] dark:text-[#FFC82B]'
+                  : 'font-semibold text-[#14254A]/75 dark:text-white/70'}`} title={label}>
+                  {label}
+                </span>
+                <span className="text-[11px] font-mono font-bold flex-shrink-0 text-[#14254A] dark:text-white">
+                  {full(urls)}
+                  {removed > 0 && (
+                    <span className="ml-1.5 font-normal text-[10px] text-emerald-600 dark:text-emerald-400">
+                      {full(removed)} rm
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full overflow-hidden bg-[#14254A]/[0.07] dark:bg-white/10">
+                <div className="h-full rounded-full" style={{ width: `${(urls / max) * 100}%`, background: color }} />
+                {removed > 0 && (
+                  <div className="h-full rounded-full -mt-1.5"
+                    style={{ width: `${(removed / max) * 100}%`, background: ORANGE, opacity: 0.85 }} />
+                )}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+    </Panel>
+  )
+}
+
+/** Full-card empty state — a dashed rectangle alone on the page read as broken. */
+function EmptyState({ icon, title, body, tone }: {
+  icon: React.ReactNode; title: string; body: string; tone: string
+}) {
+  return (
+    <div className="rounded-2xl shadow-card px-6 py-14 text-center bg-white border border-[#14254A]/10
+      dark:bg-[#14213a] dark:border-white/10">
+      <div className="w-14 h-14 mx-auto mb-4 rounded-2xl grid place-items-center"
+        style={{ background: tone + '14', color: tone, border: `1px solid ${tone}2e` }}>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+          {icon}
+        </svg>
+      </div>
+      <p className="font-bold text-base mb-1.5 text-[#14254A] dark:text-white">{title}</p>
+      <p className="text-sm max-w-md mx-auto leading-relaxed text-[#14254A]/50 dark:text-white/45">{body}</p>
+    </div>
+  )
+}
+
+/** Slicer-style labelled select. */
+function FSelect({ label, value, onChange, options, placeholder = 'All' }: {
+  label: string; value: string; onChange: (v: string) => void
+  options: { key: string; label: string }[]; placeholder?: string
+}) {
+  return (
+    <div className="min-w-0">
+      <label className="block text-[10px] font-bold uppercase tracking-widest mb-1
+        text-[#14254A]/50 dark:text-white/45">
+        {label}
+      </label>
+      <SearchableSelect options={options} value={value} onChange={onChange}
+        placeholder={placeholder} emptyLabel={`— ${placeholder} —`} />
+    </div>
+  )
+}
+
+/* ── Page ─────────────────────────────────────────────────────────────────── */
+
+export default function ReportsPage() {
+  const [tab,     setTab]     = useState<TabKey>('infringing')
+  const [subTab,  setSubTab]  = useState<SubTab>('metrics')
+  const [filters, setFilters] = useState<Filters>(EMPTY)
+  const [data,    setData]    = useState<any>(null)
+  const [opts,    setOpts]    = useState<any>({ clients: [], assets: [], tatBuckets: [], languages: [], countries: [], searchEngines: [], note2Values: [] })
+  const [loading, setLoading] = useState(false)
+  const [err,     setErr]     = useState('')
+  const [unavailable, setUnavailable] = useState('')
+  const [lastRun, setLastRun] = useState<Date | null>(null)
+  // Warehouse connection state, so the page can say WHY a list is empty instead
+  // of just rendering nothing.
+  const [health, setHealth] = useState<{
+    configured: boolean; connected: boolean; host?: string; database?: string
+    error?: string; tables?: Record<string, boolean>
+  } | null>(null)
+  const mounted = useRef(true)
+
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+
+  const loadHealth = useCallback(() => {
+    fetch('/api/reports/health', { credentials: 'include' })
+      .then(async r => {
+        if (r.status === 401 || r.status === 403) {
+          throw new Error('Your session does not have staff access to the reports API')
+        }
+        return r.json()
+      })
+      .then(d => { if (mounted.current) setHealth(d) })
+      .catch(e => {
+        if (mounted.current) setHealth({ configured: false, connected: false, error: e.message })
+      })
+  }, [])
+
+  useEffect(() => { loadHealth() }, [loadHealth])
+
+  const notImplemented = tab === 'telegram' || tab === 'social' || tab === 'complete'
+
+  // Filter options reload on tab change and whenever the client changes, so the
+  // asset list is always scoped to the chosen client.
+  useEffect(() => {
+    if (notImplemented) return
+    const p = new URLSearchParams({ type: tab })
+    if (filters.clientId) p.set('clientId', filters.clientId)
+    fetch(`/api/reports/options?${p}`, { credentials: 'include' })
+      .then(async r => {
+        // A 401/403 used to be swallowed, leaving an empty dropdown and no clue.
+        if (r.status === 401 || r.status === 403) {
+          throw new Error('Your session does not have staff access to the reports API')
+        }
+        if (!r.ok) throw new Error(`Options request failed (${r.status})`)
+        return r.json()
+      })
+      .then(d => {
+        if (!mounted.current) return
+        if (d.available === false) { setUnavailable(d.error || 'Reports database unavailable'); return }
+        setUnavailable('')
+        setOpts(d)
+      })
+      .catch(e => { if (mounted.current) setUnavailable(e.message) })
+  }, [tab, filters.clientId, notImplemented])
+
+  // Auto-run on every filter change, debounced — the report has no Run button,
+  // the same as the original.
+  useEffect(() => {
+    if (notImplemented) { setData(null); return }
+    if (!filters.clientId) { setData(null); setLoading(false); return }
+    setLoading(true)
+    let active = true
+    const t = setTimeout(async () => {
+      try {
+        const p = new URLSearchParams({ type: tab, clientId: filters.clientId, from: filters.from, to: filters.to })
+        if (filters.assetId)      p.set('assetId',      filters.assetId)
+        if (filters.language)     p.set('language',     filters.language)
+        if (filters.country)      p.set('country',      filters.country)
+        if (filters.searchEngine) p.set('searchEngine', filters.searchEngine)
+        if (filters.tatBucket)    p.set('tatBucket',    filters.tatBucket)
+        if (filters.note2)        p.set('note2',        filters.note2)
+        const res  = await fetch(`/api/reports/data?${p}`, { credentials: 'include' })
+        const json = await res.json()
+        if (!active) return
+        if (json.available === false) { setUnavailable(json.error || 'Reports database unavailable'); return }
+        if (json.ok) { setData(json); setLastRun(new Date()); setErr(''); setUnavailable('') }
+        else setErr(json.error || 'Query failed')
+      } catch (e: any) {
+        if (active) setErr(e.message)
+      } finally {
+        if (active) setLoading(false)
+      }
+    }, 350)
+    return () => { active = false; clearTimeout(t) }
+  }, [filters, tab, notImplemented])
+
+  const setF = useCallback(<K extends keyof Filters>(k: K) => (v: string) =>
+    setFilters(f => ({ ...f, [k]: v })), [])
+
+  /** Chart click → toggle that value as a filter. */
+  const cross = (k: keyof Filters) => (label: string) =>
+    setFilters(f => ({ ...f, [k]: f[k] === label ? '' : label }))
+
+  function switchTab(t: TabKey) {
+    setTab(t); setSubTab('metrics'); setData(null); setErr('')
+    setFilters(f => ({ ...f, language: '', country: '', searchEngine: '', note2: '' }))
+  }
+
+  const asOpts = (arr: any[], idKey = 'id', nameKey = 'name') =>
+    (arr || []).map((o: any) => typeof o === 'string'
+      ? { key: o, label: o }
+      : { key: String(o[idKey]), label: String(o[nameKey] ?? o[idKey]) })
+
+  const clientOpts = useMemo(() => asOpts(opts.clients), [opts.clients])
+  const assetOpts  = useMemo(() => asOpts(opts.assets), [opts.assets])
+  const tatOpts    = useMemo(() => asOpts(opts.tatBuckets), [opts.tatBuckets])
+  const langOpts   = useMemo(() => asOpts(opts.languages), [opts.languages])
+  const cntryOpts  = useMemo(() => asOpts(opts.countries), [opts.countries])
+  const seOpts     = useMemo(() => asOpts(opts.searchEngines), [opts.searchEngines])
+  const noteOpts   = useMemo(() => asOpts(opts.note2Values), [opts.note2Values])
+
+  const kpi = data?.kpi
+  const activeTab = TABS.find(t => t.key === tab)!
+
+  const chips = ([
+    { label: 'Asset',    key: 'assetId',      display: assetOpts.find(o => o.key === filters.assetId)?.label || filters.assetId },
+    { label: 'Language', key: 'language',     display: filters.language },
+    { label: 'Country',  key: 'country',      display: filters.country },
+    { label: 'Engine',   key: 'searchEngine', display: filters.searchEngine },
+    { label: 'TAT',      key: 'tatBucket',    display: filters.tatBucket },
+    { label: 'Note2',    key: 'note2',        display: filters.note2 },
+  ] as { label: string; key: keyof Filters; display: string }[]).filter(c => c.display)
+
+  const axis = { fontSize: 11, fill: 'currentColor' }

@@ -108,6 +108,12 @@ func isTrustedProxy(ip string) bool {
 	return false
 }
 
+// ClientIP is clientIP for callers in other packages. Exported rather than
+// reimplemented: "who is this request from" decides both rate-limit buckets and
+// the geo lookup, and two copies of the trusted-proxy rules is how one of them
+// ends up wrong.
+func ClientIP(r *http.Request) string { return clientIP(r) }
+
 // clientIP returns the peer address, substituting the first X-Forwarded-For hop
 // ONLY when the immediate peer is a trusted proxy (see trustedProxies).
 func clientIP(r *http.Request) string {

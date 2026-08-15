@@ -292,6 +292,15 @@ func Migrate() {
 	addColumnIfMissing("dcp_user_login", "created_at", "DATETIME NULL")
 	addColumnIfMissing("dcp_user_login", "updated_at", "DATETIME NULL")
 
+	// Client Admin: a per-(person × company) grant, deliberately NOT a value on
+	// the dcp_user.role ladder. RequireAdmin gates on role >= 1, so a "role 3"
+	// would have inherited portal-wide staff access to every client; and the
+	// grant is company-scoped by nature — the same person can administer
+	// [CLIENT-A]'s users while remaining an ordinary user of [CLIENT-B]. Since
+	// dcp_user_login already holds exactly one row per (person, company), the
+	// flag belongs here. Default 0 = nobody gains anything on migration.
+	addColumnIfMissing("dcp_user_login", "is_client_admin", "TINYINT(1) NOT NULL DEFAULT 0")
+
 	// dcp_user (client companies) has createdOn but never had an update
 	// timestamp — same gap as dcp_user_login, same fix.
 	addColumnIfMissing("dcp_user", "updated_at", "DATETIME NULL")
@@ -329,6 +338,18 @@ func Migrate() {
 	// controlled from /admin/modules. Default 0 → code order is preserved until
 	// an admin reorders (reorder writes sequential values to every active row).
 	addColumnIfMissing("module_permission", "nav_order", "INT NOT NULL DEFAULT 0")
+
+	// Email event types added after the initial schema. db/schema.sql seeds
+	// these too, but that file only runs on a FRESH install — without a runtime
+	// seed an existing deployment would never see the new event in the Email
+	// Templates / Email Event Types configuration pages, and the sender would
+	// silently fall back to its built-in copy with no way to customise it.
+	// INSERT IGNORE against the unique key makes this a no-op once seeded, and
+	// it never overwrites an event an admin has since edited.
+	seedEmailEventType("download_ready", "Download Request Ready",
+		"Sent when a requested data extraction finishes and can be downloaded.",
+		"{{user_name}},{{platform}},{{asset_name}},{{start_date}},{{end_date}},{{date_range}},{{date}}",
+		10)
 
 	// Admin-configurable dropdown sub-items for a nav module. Each row is a child
 	// link under a parent module (keyed by the parent's pageName). The href must
@@ -383,6 +404,20 @@ func addColumnIfMissing(table, column, ddl string) {
 		return
 	}
 	log.Printf("[db] migrate: %s.%s added", table, column)
+}
+
+// seedEmailEventType registers a built-in email event so it appears in the
+// Email Templates configuration page (event dropdown + available variables) and
+// in Email Event Types. A missing dcp_email_event_types table — an install that
+// predates it — is logged and skipped rather than treated as fatal.
+func seedEmailEventType(key, label, description, variables string, sortOrder int) {
+	if _, _, err := Exec(
+		"INSERT IGNORE INTO dcp_email_event_types (`key`, label, description, has_notify_email, variables, sort_order, is_active) VALUES (?, ?, ?, 0, ?, ?, 1)",
+		key, label, description, variables, sortOrder); err != nil {
+		log.Printf("[db] seed email event type %q: %v", key, err)
+		return
+	}
+	log.Printf("[db] seed: email event type %q present", key)
 }
 
 // addIndexIfMissing mirrors addColumnIfMissing for indexes/unique keys.

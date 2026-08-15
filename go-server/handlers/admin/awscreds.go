@@ -32,17 +32,18 @@ func AWSCredentials(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		row, _ := db.QueryOne("SELECT id, access_key_id, secret_access_key, region, s3_uri, updated_at FROM aws_credentials ORDER BY id DESC LIMIT 1")
 		if row == nil {
-			ok(w, map[string]any{"success": true, "configured": false}); return
+			ok(w, map[string]any{"success": true, "configured": false})
+			return
 		}
 		ak := safeDecryptMain(row["access_key_id"])
 		ok(w, map[string]any{
-			"success":      true,
-			"configured":   ak != "",
-			"accessKeyId":  maskAKID(ak),
-			"region":       strVal(row["region"]),
-			"s3Uri":        strVal(row["s3_uri"]),
-			"hasSecret":    safeDecryptMain(row["secret_access_key"]) != "",
-			"updatedAt":    strVal(row["updated_at"]),
+			"success":     true,
+			"configured":  ak != "",
+			"accessKeyId": maskAKID(ak),
+			"region":      strVal(row["region"]),
+			"s3Uri":       strVal(row["s3_uri"]),
+			"hasSecret":   safeDecryptMain(row["secret_access_key"]) != "",
+			"updatedAt":   strVal(row["updated_at"]),
 		})
 
 	case http.MethodPost:
@@ -57,10 +58,12 @@ func AWSCredentials(w http.ResponseWriter, r *http.Request) {
 		body.Region = strings.TrimSpace(body.Region)
 		body.S3Uri = strings.TrimSpace(body.S3Uri)
 		if body.AccessKeyId == "" || body.Region == "" || body.S3Uri == "" {
-			fail(w, 422, "Access Key ID, Region and S3 URI are required"); return
+			fail(w, 422, "Access Key ID, Region and S3 URI are required")
+			return
 		}
 		if !strings.HasPrefix(body.S3Uri, "s3://") {
-			fail(w, 422, "S3 URI must start with s3://"); return
+			fail(w, 422, "S3 URI must start with s3://")
+			return
 		}
 
 		existing, _ := db.QueryOne("SELECT id, secret_access_key FROM aws_credentials ORDER BY id DESC LIMIT 1")
@@ -74,19 +77,22 @@ func AWSCredentials(w http.ResponseWriter, r *http.Request) {
 			secretEnc, _ = existing["secret_access_key"].(string)
 		}
 		if secretEnc == "" {
-			fail(w, 422, "Secret Access Key is required"); return
+			fail(w, 422, "Secret Access Key is required")
+			return
 		}
 
 		akEnc := ipauth.EncryptMain(body.AccessKeyId)
 		if existing != nil {
 			if err := db.MustExec("UPDATE aws_credentials SET access_key_id=?, secret_access_key=?, region=?, s3_uri=? WHERE id=?",
 				akEnc, secretEnc, body.Region, body.S3Uri, intVal(existing["id"])); err != nil {
-				fail(w, 500, "Could not save AWS credentials"); return
+				fail(w, 500, "Could not save AWS credentials")
+				return
 			}
 		} else {
 			if err := db.MustExec("INSERT INTO aws_credentials (access_key_id, secret_access_key, region, s3_uri) VALUES (?, ?, ?, ?)",
 				akEnc, secretEnc, body.Region, body.S3Uri); err != nil {
-				fail(w, 500, "Could not save AWS credentials"); return
+				fail(w, 500, "Could not save AWS credentials")
+				return
 			}
 		}
 		ok(w, map[string]any{"success": true})
@@ -100,7 +106,8 @@ func AWSCredentials(w http.ResponseWriter, r *http.Request) {
 func AWSCredentialsReveal(w http.ResponseWriter, r *http.Request) {
 	row, _ := db.QueryOne("SELECT id, access_key_id, secret_access_key FROM aws_credentials ORDER BY id DESC LIMIT 1")
 	if row == nil {
-		fail(w, 404, "No AWS credentials configured"); return
+		fail(w, 404, "No AWS credentials configured")
+		return
 	}
 	logReveal(r, "aws", "aws_credentials")
 	ok(w, map[string]any{

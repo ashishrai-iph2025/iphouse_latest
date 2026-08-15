@@ -18,9 +18,20 @@ interface Props {
   children: React.ReactNode
 }
 
+/*
+Pages that manage their own width.
+
+Most client pages are a column of content and read better inside a measure —
+which is what the `maxW` wrapper below gives them. These are not: they are
+dashboards with their own rails and grids, and the wrapper leaves a band of
+empty page on either side while their charts squeeze into the middle. They set
+their own padding, so bypassing the wrapper costs nothing.
+*/
+const FULL_WIDTH_PAGES = ['/dashboard', '/war-room', '/reports']
+
 function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const fullWidth = pathname === '/dashboard' || pathname === '/war-room'
+  const fullWidth = FULL_WIDTH_PAGES.includes(pathname)
   const { layoutWidth, navLayout, navbarStyle } = useCustomizer()
 
   const sidebar = isSidebarLayout(navLayout)
@@ -57,12 +68,27 @@ function Shell({ children }: { children: React.ReactNode }) {
     )
   }
 
-  // Horizontal layout (default)
+  /*
+  Horizontal layout (default).
+
+  The shell is exactly one viewport tall and `main` is the thing that scrolls —
+  the same arrangement the sidebar layout above and the admin shell already use.
+  It was `minHeight: 100dvh` with an `overflow-hidden` main, which scrolled the
+  BODY instead, and that quietly broke every `position: sticky` inside a page:
+  `overflow-hidden` establishes a scroll container, sticky travels within the
+  nearest one, and that container never scrolled. The reports rails were pinned
+  to a box that moved with the page, so they scrolled away like ordinary
+  content. Nothing was wrong with the rails.
+
+  The footer moves inside `main` for the same reason it already lives there in
+  the sidebar layout: it belongs at the end of the content, not pinned as a bar
+  the page can never scroll past.
+  */
   return (
-    <div className="flex flex-col bg-[#eef2f7] dark:bg-[#0f1f3d] layout-container" style={{ minHeight: '100dvh' }}>
+    <div className="flex flex-col bg-[#eef2f7] dark:bg-[#0f1f3d] layout-container" style={{ height: '100dvh' }}>
       <ImpersonationBanner />
       <ClientNavbar />
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 flex flex-col min-h-0 overflow-y-auto">
         {fullWidth ? (
           children
         ) : (
@@ -70,8 +96,8 @@ function Shell({ children }: { children: React.ReactNode }) {
             {children}
           </div>
         )}
+        <Footer />
       </main>
-      <Footer />
       <ThemeCustomizer />
     </div>
   )

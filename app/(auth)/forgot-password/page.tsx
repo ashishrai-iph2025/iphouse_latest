@@ -15,12 +15,62 @@ export default function ForgotPasswordPage() {
   const [error,      setError]      = useState('')
   const [loading,    setLoading]    = useState(false)
 
+  /* Whether the address typed so far belongs to an account.
+     'unknown' also covers the case where the server declines to say — see
+     AUTH_HIDE_UNKNOWN_EMAIL — and the form then behaves as it did before,
+     submitting and letting the reset endpoint answer. */
+  const [emailState, setEmailState] = useState<'idle' | 'checking' | 'found' | 'missing' | 'unknown'>('idle')
+
+  /* Only a syntactically plausible address is worth asking the server about.
+     Firing on every keystroke would spend the 10/min rate limit before the
+     reader finished typing their own domain. */
+  const looksLikeEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim())
+
+  /* Checked when the field is left, not on every keystroke. The point is to say
+     "that address has no account here" while the reader is still looking at the
+     field — rather than after they have submitted, been told to check their
+     email, and gone to wait at an inbox nothing is coming to. */
+  async function checkEmail(value: string): Promise<boolean> {
+    const v = value.trim()
+    if (!looksLikeEmail(v)) { setEmailState('idle'); return true }
+    setEmailState('checking')
+    try {
+      const res  = await fetch('/api/auth/check-email', {
+        credentials: 'include',
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ email: v }),
+      })
+      const data = await res.json()
+      // `checked: false` means the server is configured not to distinguish.
+      // Treat that as "carry on" so the form works under either setting.
+      if (!data.success || data.checked === false) { setEmailState('unknown'); return true }
+      if (data.exists) { setEmailState('found'); setError(''); return true }
+      setEmailState('missing')
+      setError('No account is registered with that email address.')
+      return false
+    } catch {
+      // A failed check must not block a legitimate reset: fall through to the
+      // submit, where the server has the final say either way.
+      setEmailState('unknown')
+      return true
+    }
+  }
+
   // ── Step 1: send reset token to email ──────────────────────────────────────
   async function handleSend(e: React.FormEvent) {
     e.preventDefault()
     setError('')
+
+    /* Re-checked on submit rather than trusting the field state. The blur check
+       may never have run — a browser autofill plus Enter never blurs the input —
+       and the account could have been deactivated in between. The server checks
+       again regardless; this is only so the reader is not made to wait for a
+       round trip that ends in the same message. */
     setLoading(true)
     try {
+      if (!(await checkEmail(email))) return
+
       const res  = await fetch('/api/auth/forgot-password', {
         credentials: 'include',
         method:  'POST',
@@ -144,17 +194,38 @@ export default function ForgotPasswordPage() {
                 </label>
                 <input
                   autoComplete="off" type="email" value={email}
-                  onChange={e => setEmail(e.target.value)} required
+                  onChange={e => {
+                    setEmail(e.target.value)
+                    // A verdict about the previous value must not linger over
+                    // the new one.
+                    setEmailState('idle')
+                    if (error) setError('')
+                  }}
+                  onBlur={e => { void checkEmail(e.target.value) }}
+                  required
                   placeholder="you@example.com"
-                  className="w-full px-4 py-2.5 text-sm rounded-xl border focus:outline-none mb-4"
-                  style={{ borderColor: '#dce3ee' }}
-                  onFocus={e => (e.target.style.borderColor = '#14254A')}
-                  onBlur={e  => (e.target.style.borderColor = '#dce3ee')}
+                  className="w-full px-4 py-2.5 text-sm rounded-xl border focus:outline-none"
+                  style={{ borderColor: emailState === 'missing' ? '#ef4444'
+                         : emailState === 'found' ? '#16A34A' : '#dce3ee' }}
                 />
-                <button type="submit" disabled={loading}
+
+                {/* One line under the field, so the answer is where the reader
+                    is looking rather than only in the banner above. */}
+                <div className="mb-4 mt-1 text-xs" style={{ minHeight: 16 }}>
+                  {emailState === 'checking' && <span style={{ color: '#6b7c93' }}>Checking…</span>}
+                  {emailState === 'found'    && <span style={{ color: '#16A34A' }}>✓ Account found</span>}
+                  {emailState === 'missing'  && (
+                    <span style={{ color: '#b91c1c' }}>
+                      No account is registered with this email.{' '}
+                      <Link to="/login" style={{ color: '#14254A', fontWeight: 600 }}>Back to login</Link>
+                    </span>
+                  )}
+                </div>
+
+                <button type="submit" disabled={loading || emailState === 'checking' || emailState === 'missing'}
                   className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-60"
                   style={{ background: 'linear-gradient(135deg,#FFC82B,#FC934C)', color: '#14254A', border: 'none' }}>
-                  {loading ? 'Sending…' : 'Send Reset Token'}
+                  {loading ? 'Sending…' : emailState === 'checking' ? 'Checking…' : 'Send Reset Token'}
                 </button>
               </form>
             </>

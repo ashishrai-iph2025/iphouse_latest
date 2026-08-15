@@ -51,9 +51,13 @@ func TokenForUser(userID int64) string {
 		return ""
 	}
 	apiUser := ipauth.DecryptMain(strFromAny(row["api_user_name"]))
-	if apiUser == "" { apiUser = strFromAny(row["api_user_name"]) }
+	if apiUser == "" {
+		apiUser = strFromAny(row["api_user_name"])
+	}
 	apiPass := ipauth.DecryptMain(strFromAny(row["api_password"]))
-	if apiPass == "" { apiPass = strFromAny(row["api_password"]) }
+	if apiPass == "" {
+		apiPass = strFromAny(row["api_password"])
+	}
 	if apiUser == "" || apiPass == "" {
 		return ""
 	}

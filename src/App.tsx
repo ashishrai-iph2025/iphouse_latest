@@ -22,7 +22,10 @@ const RegisterPage         = lazy(() => import('@/app/(auth)/register/page'))
 // ── Client pages ─────────────────────────────────────────────────────────────
 const DashboardPage        = lazy(() => import('@/app/(client)/dashboard/page'))
 const InfringementPage     = lazy(() => import('@/app/(client)/infringement/page'))
+// The staff report in scoped mode — see app/(client)/reports/page.tsx.
+const ClientReportsPage    = lazy(() => import('@/app/(client)/reports/page'))
 const InfringementPlatPage = lazy(() => import('@/app/(client)/infringement/[platform]/page'))
+const InfringementCatPage  = lazy(() => import('@/app/(client)/infringement/category/page'))
 const SearchPage           = lazy(() => import('@/app/(client)/search/page'))
 const DownloadRequestPage  = lazy(() => import('@/app/(client)/download-request/page'))
 const UploadUrlPage        = lazy(() => import('@/app/(client)/upload-url/page'))
@@ -33,6 +36,9 @@ const SwitchAccountPage    = lazy(() => import('@/app/(client)/switch-account/pa
 const IpTrackingPage       = lazy(() => import('@/app/(client)/ip-tracking/page'))
 const WarRoomPage          = lazy(() => import('@/app/(client)/war-room/page'))
 const DataSharingPage      = lazy(() => import('@/app/(client)/data-sharing/page'))
+const AccountAccessPage    = lazy(() => import('@/app/(client)/account-access/page'))
+const NotificationsPage    = lazy(() => import('@/app/(client)/notifications/page'))
+const NotificationDetail   = lazy(() => import('@/app/(client)/notifications/detail'))
 
 // ── Admin pages ───────────────────────────────────────────────────────────────
 const AdminHomePage        = lazy(() => import('@/app/admin/home/page'))
@@ -42,6 +48,9 @@ const AdminClientEditPage  = lazy(() => import('@/app/admin/clients/[id]/edit/pa
 const AdminClientsAddPage  = lazy(() => import('@/app/admin/clients/add/page'))
 const AdminUsersPage       = lazy(() => import('@/app/admin/users/page'))
 const AdminUsersAddPage    = lazy(() => import('@/app/admin/users/add/page'))
+const AdminClientAdminsPage = lazy(() => import('@/app/admin/client-admins/page'))
+const AdminNotificationsPage = lazy(() => import('@/app/admin/notifications/page'))
+const AdminNotificationDetail = lazy(() => import('@/app/admin/notifications/detail'))
 const RegistrationsPage    = lazy(() => import('@/app/admin/registrations/page'))
 const RegRequestsPage      = lazy(() => import('@/app/admin/registration-requests/page'))
 const ConfigurationPage    = lazy(() => import('@/app/admin/configuration/page'))
@@ -50,6 +59,8 @@ const DashboardsAddPage    = lazy(() => import('@/app/admin/dashboards/add/page'
 const DashboardsEditPage   = lazy(() => import('@/app/admin/dashboards/edit/page'))
 const EmailTemplatesPage   = lazy(() => import('@/app/admin/email-templates/page'))
 const EmailEventTypesPage  = lazy(() => import('@/app/admin/email-event-types/page'))
+const AdminReportsPage     = lazy(() => import('@/app/admin/reports/page'))
+const ReportConfigPage     = lazy(() => import('@/app/admin/report-config/page'))
 const ModulesPage          = lazy(() => import('@/app/admin/modules/page'))
 const DashboardModulesPage = lazy(() => import('@/app/admin/dashboard-modules/page'))
 const ModulePermsPage      = lazy(() => import('@/app/admin/module-permissions/page'))
@@ -61,7 +72,6 @@ const PlatformBriefPage    = lazy(() => import('@/app/admin/platform-brief/page'
 const DatabaseBackupPage   = lazy(() => import('@/app/admin/database-backup/page'))
 const AwsCredentialsPage   = lazy(() => import('@/app/admin/aws-credentials/page'))
 const ApiCredsPage         = lazy(() => import('@/app/admin/api-credentials/page'))
-const MasterApiPage        = lazy(() => import('@/app/admin/master-api/page'))
 const ActivityPage         = lazy(() => import('@/app/admin/activity/page'))
 const TrackingPage         = lazy(() => import('@/app/admin/tracking/page'))
 const PowerBICredsPage     = lazy(() => import('@/app/admin/powerbi-creds/page'))
@@ -344,6 +354,21 @@ function InfringementPlatformRoute() {
   return <InfringementPlatPage platform={platform!} />
 }
 
+function InfringementCategoryRoute() {
+  const { category } = useParams<{ category: string }>()
+  return <InfringementCatPage category={category!} />
+}
+
+function NotificationDetailRoute() {
+  const { id } = useParams<{ id: string }>()
+  return <NotificationDetail id={id!} />
+}
+
+function AdminNotificationDetailRoute() {
+  const { id } = useParams<{ id: string }>()
+  return <AdminNotificationDetail id={id!} />
+}
+
 function AdminClientDashRoute() {
   const { id } = useParams<{ id: string }>()
   return <AdminClientDashPage id={id!} />
@@ -471,7 +496,10 @@ export default function App() {
         <Route element={<ClientLayout />}>
           <Route path="/dashboard"                element={<DashboardPage />} />
           <Route path="/war-room"                 element={<WarRoomPage />} />
+          <Route path="/reports"                  element={<ClientReportsPage />} />
           <Route path="/infringement"             element={<InfringementPage />} />
+          {/* Three segments, so it never competes with /infringement/:platform. */}
+          <Route path="/infringement/category/:category" element={<InfringementCategoryRoute />} />
           <Route path="/infringement/:platform"   element={<InfringementPlatformRoute />} />
           <Route path="/search"                   element={<SearchPage />} />
           <Route path="/download-request"         element={<DownloadRequestPage />} />
@@ -482,6 +510,9 @@ export default function App() {
           <Route path="/switch-account"           element={<SwitchAccountPage />} />
           <Route path="/ip-tracking"              element={<IpTrackingPage />} />
           <Route path="/data-sharing"             element={<DataSharingPage />} />
+          <Route path="/account-access"           element={<AccountAccessPage />} />
+          <Route path="/notifications"            element={<NotificationsPage />} />
+          <Route path="/notifications/:id"        element={<NotificationDetailRoute />} />
         </Route>
 
         {/* Admin pages */}
@@ -493,6 +524,9 @@ export default function App() {
           <Route path="/admin/clients/:id/edit"           element={<AdminClientEditRoute />} />
           <Route path="/admin/users"                      element={<AdminUsersPage />} />
           <Route path="/admin/users/add"                  element={<AdminUsersAddPage />} />
+          <Route path="/admin/client-admins"              element={<AdminClientAdminsPage />} />
+          <Route path="/admin/notifications"              element={<AdminNotificationsPage />} />
+          <Route path="/admin/notifications/:id"          element={<AdminNotificationDetailRoute />} />
           <Route path="/admin/registrations"              element={<RegistrationsPage />} />
           <Route path="/admin/registration-requests"      element={<RegRequestsPage />} />
           <Route path="/admin/configuration"              element={<ConfigurationPage />} />
@@ -501,6 +535,8 @@ export default function App() {
           <Route path="/admin/dashboards/edit"            element={<DashboardsEditPage />} />
           <Route path="/admin/email-templates"            element={<EmailTemplatesPage />} />
           <Route path="/admin/email-event-types"         element={<EmailEventTypesPage />} />
+          <Route path="/admin/reports"                   element={<AdminReportsPage />} />
+          <Route path="/admin/report-config"             element={<ReportConfigPage />} />
           <Route path="/admin/modules"                    element={<ModulesPage />} />
           <Route path="/admin/dashboard-modules"          element={<DashboardModulesPage />} />
           <Route path="/admin/module-permissions"         element={<ModulePermsPage />} />
@@ -512,7 +548,6 @@ export default function App() {
           <Route path="/admin/database-backup"            element={<DatabaseBackupPage />} />
           <Route path="/admin/aws-credentials"            element={<AwsCredentialsPage />} />
           <Route path="/admin/api-credentials"            element={<ApiCredsPage />} />
-          <Route path="/admin/master-api"                 element={<MasterApiPage />} />
           <Route path="/admin/activity"                   element={<ActivityPage />} />
           <Route path="/admin/tracking"                   element={<TrackingPage />} />
           <Route path="/admin/powerbi-creds"              element={<PowerBICredsPage />} />
