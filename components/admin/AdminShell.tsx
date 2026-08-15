@@ -9,6 +9,7 @@ import { ThemeProvider, useTheme } from '@/lib/ThemeContext'
 import { ThemeCustomizerProvider } from '@/lib/ThemeCustomizerContext'
 import ThemeCustomizer from '@/components/ui/ThemeCustomizer'
 import ClientAccessSearch from './ClientAccessSearch'
+import NotificationBell from '@/components/shared/NotificationBell'
 
 type NavItem = { label: string; href: string; icon: string }
 type NavGroup = { label: string; items: NavItem[]; superAdminOnly?: boolean }
@@ -27,6 +28,12 @@ const navGroups: NavGroup[] = [
       { href: '/admin/users',         icon: '👥', label: 'Users'         },
       { href: '/admin/registrations', icon: '📝', label: 'Registrations' },
       { href: '/admin/registration-requests', icon: '📋', label: 'Reg. Requests' },
+    ],
+  },
+  {
+    label: 'Reporting',
+    items: [
+      { href: '/admin/reports', icon: '📈', label: 'Reports' },
     ],
   },
   {
@@ -210,6 +217,8 @@ function AdminShellInner({ children }: { children: React.ReactNode }) {
           <div className="ml-auto flex items-center gap-3.5">
             {/* Client access search — real-time client lookup + view-as-client */}
             <ClientAccessSearch />
+            {/* Portal activity — staff see every client's events */}
+            <NotificationBell variant="admin" />
             {/* Dark / Light toggle — plain icon, no box */}
             <button
               onClick={toggle}

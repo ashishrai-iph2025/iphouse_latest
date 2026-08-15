@@ -272,7 +272,8 @@ func APICredentials(w http.ResponseWriter, r *http.Request) {
 				ipauth.EncryptMain(body.ApiUserName), body.UserID)
 		}
 		if uerr != nil {
-			fail(w, 500, "Save failed: "+uerr.Error()); return
+			fail(w, 500, "Save failed: "+uerr.Error())
+			return
 		}
 		ok(w, map[string]any{"success": true})
 	case http.MethodDelete:
@@ -296,11 +297,13 @@ func APICredentials(w http.ResponseWriter, r *http.Request) {
 func APICredentialsReveal(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		fail(w, 422, "userId required"); return
+		fail(w, 422, "userId required")
+		return
 	}
 	row, err := db.QueryOne("SELECT userId, api_user_name, api_password FROM dcp_user WHERE userId = ? AND deleted = 0 LIMIT 1", userID)
 	if err != nil || row == nil {
-		fail(w, 404, "Not found"); return
+		fail(w, 404, "Not found")
+		return
 	}
 	logReveal(r, "api", userID)
 	ok(w, map[string]any{
@@ -316,11 +319,13 @@ func APICredentialsReveal(w http.ResponseWriter, r *http.Request) {
 func EmailCredentialsReveal(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	if id == "" {
-		fail(w, 422, "id required"); return
+		fail(w, 422, "id required")
+		return
 	}
 	row, err := db.QueryOne("SELECT id, email_id, email_password FROM master_email_credentials WHERE id = ? LIMIT 1", id)
 	if err != nil || row == nil {
-		fail(w, 404, "Not found"); return
+		fail(w, 404, "Not found")
+		return
 	}
 	logReveal(r, "email", id)
 	ok(w, map[string]any{
@@ -595,28 +600,11 @@ func AssetAccess(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET/POST/PUT/DELETE /api/admin/master-api
-func MasterAPI(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		rows, _ := db.Query("SELECT * FROM dcp_master_api ORDER BY id DESC")
-		if rows == nil {
-			rows = []map[string]any{}
-		}
-		ok(w, map[string]any{"success": true, "items": rows})
-	case http.MethodPost, http.MethodPut:
-		var body any
-		json.NewDecoder(r.Body).Decode(&body)
-		ok(w, map[string]any{"success": true})
-	default:
-		fail(w, 405, "Method not allowed")
-	}
-}
-
 // user_activity_log.user_id can reference three different identity tables:
 //   - dcp_user_login.loginId  (client / staff-with-login portal actions)
 //   - dcp_super_admin.id       (hand-seeded staff whose loginId is 0)
 //   - dcp_user.userId          (legacy client-dashboard rows)
+//
 // These shared fragments resolve every actor row from a SINGLE consistent
 // source (login → staff → user → placeholder) so a row's name and email never
 // come from different accounts. `l` must alias user_activity_log in the query.
@@ -738,7 +726,7 @@ func TrackingAnalytics(w http.ResponseWriter, r *http.Request) {
 	actionCounts, _ := db.Query("SELECT action, COUNT(*) AS count FROM user_activity_log GROUP BY action ORDER BY count DESC")
 	dailyTrend, _ := db.Query("SELECT DATE(created_at) AS date, COUNT(*) AS count FROM user_activity_log WHERE created_at >= DATE_SUB(UTC_DATE(), INTERVAL 30 DAY) GROUP BY DATE(created_at) ORDER BY date ASC")
 	topPages, _ := db.Query("SELECT page_url, COUNT(*) AS count FROM user_activity_log GROUP BY page_url ORDER BY count DESC LIMIT 10")
-	topUsers, _ := db.Query(`SELECT `+actorUsername+` AS username, COUNT(*) AS count, MAX(DATE_FORMAT(l.created_at, '%Y-%m-%d %H:%i')) AS last_seen FROM user_activity_log l`+actorJoins+` GROUP BY l.user_id ORDER BY count DESC LIMIT 10`)
+	topUsers, _ := db.Query(`SELECT ` + actorUsername + ` AS username, COUNT(*) AS count, MAX(DATE_FORMAT(l.created_at, '%Y-%m-%d %H:%i')) AS last_seen FROM user_activity_log l` + actorJoins + ` GROUP BY l.user_id ORDER BY count DESC LIMIT 10`)
 	dashboardAccess, _ := db.Query("SELECT dashboard_name AS title, COUNT(*) AS count FROM user_dashboard_access GROUP BY report_id ORDER BY count DESC LIMIT 10")
 	hourlyDist, _ := db.Query("SELECT HOUR(created_at) AS hour, COUNT(*) AS count FROM user_activity_log GROUP BY HOUR(created_at) ORDER BY hour ASC")
 	ok(w, map[string]any{
@@ -1194,13 +1182,13 @@ func EmailEventTypes(w http.ResponseWriter, r *http.Request) {
 		ok(w, map[string]any{"success": true, "eventTypes": rows})
 	case http.MethodPost:
 		var body struct {
-			Key         string `json:"key"`
-			Label       string `json:"label"`
-			Description string `json:"description"`
-			HasNotifyEmail int `json:"has_notify_email"`
-			Variables   string `json:"variables"`
-			SortOrder   int    `json:"sort_order"`
-			IsActive    int    `json:"is_active"`
+			Key            string `json:"key"`
+			Label          string `json:"label"`
+			Description    string `json:"description"`
+			HasNotifyEmail int    `json:"has_notify_email"`
+			Variables      string `json:"variables"`
+			SortOrder      int    `json:"sort_order"`
+			IsActive       int    `json:"is_active"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.Key == "" || body.Label == "" {
@@ -1218,14 +1206,14 @@ func EmailEventTypes(w http.ResponseWriter, r *http.Request) {
 		ok(w, map[string]any{"success": true})
 	case http.MethodPut:
 		var body struct {
-			ID          int64  `json:"id"`
-			Key         string `json:"key"`
-			Label       string `json:"label"`
-			Description string `json:"description"`
-			HasNotifyEmail int `json:"has_notify_email"`
-			Variables   string `json:"variables"`
-			SortOrder   int    `json:"sort_order"`
-			IsActive    int    `json:"is_active"`
+			ID             int64  `json:"id"`
+			Key            string `json:"key"`
+			Label          string `json:"label"`
+			Description    string `json:"description"`
+			HasNotifyEmail int    `json:"has_notify_email"`
+			Variables      string `json:"variables"`
+			SortOrder      int    `json:"sort_order"`
+			IsActive       int    `json:"is_active"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.ID == 0 {

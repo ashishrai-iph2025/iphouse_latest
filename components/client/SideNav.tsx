@@ -53,6 +53,11 @@ export default function SideNav() {
     })
     .sort((a, b) => navOrderOf(a, allowedModules) - navOrderOf(b, allowedModules))
 
+  // Client Admin's own entry (Access Details) is not a sidebar item — it hangs
+  // off the profile dropdown in ClientNavbar, which renders above every sidebar
+  // layout too. See CLIENT_ADMIN_NAV_ITEM.
+  const visibleItems: NavItem[] = navItems.filter(isNavAllowed)
+
   const bg = SIDEBAR_HEX[sidebarColor] ?? '#14254A'
   const isOverlay = navLayout === 'overlay'
   const isTwoCol  = navLayout === 'two-column'
@@ -93,7 +98,7 @@ export default function SideNav() {
           <SideNavInner bg={bg} showLabels pathname={pathname} navLayout={navLayout}
             isModern={false} isDetach={false} isTwoCol={false}
             openDropdown={openDropdown} setOpenDropdown={setOpenDropdown}
-            items={navItems.filter(isNavAllowed)}
+            items={visibleItems}
             allowedDropdownItems={allowedDropdownItems} />
         </aside>
       </>
@@ -116,7 +121,7 @@ export default function SideNav() {
       <SideNavInner bg={bg} showLabels={showLabels} pathname={pathname} navLayout={navLayout}
         isModern={isModern} isDetach={isDetach} isTwoCol={isTwoCol}
         openDropdown={openDropdown} setOpenDropdown={setOpenDropdown}
-        items={navItems.filter(isNavAllowed)}
+        items={visibleItems}
         allowedDropdownItems={allowedDropdownItems} />
     </aside>
   )

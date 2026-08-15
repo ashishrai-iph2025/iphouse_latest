@@ -52,9 +52,9 @@ func usersList(w http.ResponseWriter, r *http.Request) {
 			WHERE u.deleted = 0 AND l.userId = ? ORDER BY l.loginId DESC`, uid)
 	} else {
 		rows, err = db.Query(`SELECT l.loginId, l.userId, l.first_name, l.last_name, l.login_username,
-			l.login_type, l.is_active, l.created_at, l.updated_at, u.name AS user_name, u.email AS user_email, `+roleSelect+`
+			l.login_type, l.is_active, l.created_at, l.updated_at, u.name AS user_name, u.email AS user_email, ` + roleSelect + `
 			FROM dcp_user_login l INNER JOIN dcp_user u ON u.userId = l.userId
-			`+roleJoin+`
+			` + roleJoin + `
 			WHERE u.deleted = 0 ORDER BY l.loginId DESC`)
 	}
 	if err != nil {
@@ -87,12 +87,14 @@ func usersCreate(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&body)
 	body.Email = strings.TrimSpace(body.Email)
 	if len(body.UserIDs) == 0 || body.FirstName == "" || body.LoginUsername == "" || body.Email == "" {
-		fail(w, 422, "userIds, firstName, loginUsername, email required"); return
+		fail(w, 422, "userIds, firstName, loginUsername, email required")
+		return
 	}
 
 	existing, _ := db.QueryOne("SELECT loginId FROM dcp_user_login WHERE login_username = ? LIMIT 1", body.LoginUsername)
 	if existing != nil {
-		ok(w, map[string]any{"success": false, "error": "Username already exists"}); return
+		ok(w, map[string]any{"success": false, "error": "Username already exists"})
+		return
 	}
 
 	rawPassword := body.LoginPassword
@@ -101,7 +103,8 @@ func usersCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	hashed, err := ipauth.HashPassword(rawPassword)
 	if err != nil {
-		fail(w, 500, "Hash error"); return
+		fail(w, 500, "Hash error")
+		return
 	}
 
 	// Every assigned client (dcp_user is always a client — the picker feeding
@@ -133,7 +136,8 @@ func usersUpdate(w http.ResponseWriter, r *http.Request) {
 
 	loginID := intVal(body["loginId"])
 	if loginID == 0 {
-		fail(w, 422, "loginId required"); return
+		fail(w, 422, "loginId required")
+		return
 	}
 
 	// Every branch below stamps updated_at = UTC_TIMESTAMP() (server-evaluated,
@@ -145,26 +149,31 @@ func usersUpdate(w http.ResponseWriter, r *http.Request) {
 			active = 1
 		}
 		db.Exec("UPDATE dcp_user_login SET is_active = ?, updated_at = UTC_TIMESTAMP() WHERE loginId = ?", active, loginID)
-		ok(w, map[string]any{"success": true}); return
+		ok(w, map[string]any{"success": true})
+		return
 	}
 
 	if lt, has := body["loginType"]; has {
 		t := int(intVal(lt))
 		if t != 0 && t != 1 && t != 2 {
-			fail(w, 422, "loginType must be 0, 1, or 2"); return
+			fail(w, 422, "loginType must be 0, 1, or 2")
+			return
 		}
 		db.Exec("UPDATE dcp_user_login SET login_type = ?, updated_at = UTC_TIMESTAMP() WHERE loginId = ?", t, loginID)
-		ok(w, map[string]any{"success": true}); return
+		ok(w, map[string]any{"success": true})
+		return
 	}
 
 	if fn, has := body["firstName"]; has {
 		firstName := strVal(fn)
 		if firstName == "" {
-			fail(w, 422, "First name is required"); return
+			fail(w, 422, "First name is required")
+			return
 		}
 		db.Exec("UPDATE dcp_user_login SET first_name = ?, last_name = ?, updated_at = UTC_TIMESTAMP() WHERE loginId = ?",
 			firstName, strVal(body["lastName"]), loginID)
-		ok(w, map[string]any{"success": true}); return
+		ok(w, map[string]any{"success": true})
+		return
 	}
 
 	fail(w, 422, "Nothing to update")

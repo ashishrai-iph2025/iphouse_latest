@@ -57,7 +57,8 @@ func DashboardModules(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query(q)
 		if err != nil {
 			log.Printf("[dashboard-modules] query failed: %v", err)
-			fail(w, 500, "Could not load dashboard modules."); return
+			fail(w, 500, "Could not load dashboard modules.")
+			return
 		}
 		if rows == nil {
 			rows = []map[string]any{}
@@ -72,12 +73,14 @@ func DashboardModules(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.ModuleName == "" {
-			fail(w, 422, "moduleName required"); return
+			fail(w, 422, "moduleName required")
+			return
 		}
 		_, _, err := db.Exec("INSERT INTO dcp_module (moduleName, moduleIcon, deleted) VALUES (?, ?, 0)",
 			body.ModuleName, nullStr(body.ModuleIcon))
 		if err != nil {
-			fail(w, 500, "Could not create module"); return
+			fail(w, 500, "Could not create module")
+			return
 		}
 		ok(w, map[string]any{"success": true})
 
@@ -90,13 +93,15 @@ func DashboardModules(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.ModuleID == 0 {
-			fail(w, 422, "moduleId required"); return
+			fail(w, 422, "moduleId required")
+			return
 		}
 		if body.Restore {
 			db.Exec("UPDATE dcp_module SET deleted = 0 WHERE moduleId = ?", body.ModuleID)
 		} else {
 			if body.ModuleName == "" {
-				fail(w, 422, "moduleName required"); return
+				fail(w, 422, "moduleName required")
+				return
 			}
 			db.Exec("UPDATE dcp_module SET moduleName = ?, moduleIcon = ? WHERE moduleId = ?",
 				body.ModuleName, nullStr(body.ModuleIcon), body.ModuleID)
@@ -109,7 +114,8 @@ func DashboardModules(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.ModuleID == 0 {
-			fail(w, 422, "moduleId required"); return
+			fail(w, 422, "moduleId required")
+			return
 		}
 		db.Exec("UPDATE dcp_module SET deleted = 1 WHERE moduleId = ?", body.ModuleID)
 		ok(w, map[string]any{"success": true})
@@ -130,7 +136,9 @@ func ModulePermissions(w http.ResponseWriter, r *http.Request) {
 		} else {
 			rows, _ = db.Query("SELECT Id, ModuleName, pageName, status, nav_order, created, updated FROM module_permission WHERE status = 0 ORDER BY nav_order ASC, Id ASC")
 		}
-		if rows == nil { rows = []map[string]any{} }
+		if rows == nil {
+			rows = []map[string]any{}
+		}
 		ok(w, map[string]any{"success": true, "modules": rows})
 	case http.MethodPost:
 		var body struct {
@@ -138,7 +146,10 @@ func ModulePermissions(w http.ResponseWriter, r *http.Request) {
 			PageName   string `json:"pageName"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		if body.ModuleName == "" { fail(w, 422, "moduleName required"); return }
+		if body.ModuleName == "" {
+			fail(w, 422, "moduleName required")
+			return
+		}
 		db.Exec("INSERT INTO module_permission (ModuleName, pageName, status, created, updated) VALUES (?, ?, 0, UTC_TIMESTAMP(), UTC_TIMESTAMP())",
 			body.ModuleName, body.PageName)
 		ok(w, map[string]any{"success": true})
@@ -150,19 +161,30 @@ func ModulePermissions(w http.ResponseWriter, r *http.Request) {
 			Restore    bool   `json:"restore"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		if body.ID == 0 { fail(w, 422, "id required"); return }
+		if body.ID == 0 {
+			fail(w, 422, "id required")
+			return
+		}
 		if body.Restore {
 			db.Exec("UPDATE module_permission SET status = 0, updated = UTC_TIMESTAMP() WHERE Id = ?", body.ID)
 		} else {
-			if body.ModuleName == "" { fail(w, 422, "moduleName required"); return }
+			if body.ModuleName == "" {
+				fail(w, 422, "moduleName required")
+				return
+			}
 			db.Exec("UPDATE module_permission SET ModuleName = ?, pageName = ?, updated = UTC_TIMESTAMP() WHERE Id = ?",
 				body.ModuleName, body.PageName, body.ID)
 		}
 		ok(w, map[string]any{"success": true})
 	case http.MethodDelete:
-		var body struct { ID int64 `json:"id"` }
+		var body struct {
+			ID int64 `json:"id"`
+		}
 		json.NewDecoder(r.Body).Decode(&body)
-		if body.ID == 0 { fail(w, 422, "id required"); return }
+		if body.ID == 0 {
+			fail(w, 422, "id required")
+			return
+		}
 		db.Exec("UPDATE module_permission SET status = 1, updated = UTC_TIMESTAMP() WHERE Id = ?", body.ID)
 		ok(w, map[string]any{"success": true})
 	default:
@@ -179,7 +201,8 @@ func ModulePermissionsReorder(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if len(body.OrderedIds) == 0 {
-		fail(w, 422, "orderedIds required"); return
+		fail(w, 422, "orderedIds required")
+		return
 	}
 	for i, id := range body.OrderedIds {
 		db.Exec("UPDATE module_permission SET nav_order = ?, updated = UTC_TIMESTAMP() WHERE Id = ?", i+1, id)
@@ -210,8 +233,12 @@ func UserModulePermissions(w http.ResponseWriter, r *http.Request) {
 			WHERE l.is_active = 1 AND u.deleted = 0
 			ORDER BY u.name, l.login_username`)
 		modules, _ := db.Query(`SELECT Id, ModuleName, pageName, status FROM module_permission WHERE status = 0 ORDER BY Id ASC`)
-		if users == nil { users = []map[string]any{} }
-		if modules == nil { modules = []map[string]any{} }
+		if users == nil {
+			users = []map[string]any{}
+		}
+		if modules == nil {
+			modules = []map[string]any{}
+		}
 		ok(w, map[string]any{"success": true, "users": users, "modules": modules})
 		return
 	}
@@ -222,7 +249,8 @@ func UserModulePermissions(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.LoginID == 0 {
-		fail(w, 422, "loginId required"); return
+		fail(w, 422, "loginId required")
+		return
 	}
 
 	db.Exec("DELETE FROM user_module_permission_test WHERE loginId = ?", body.LoginID)

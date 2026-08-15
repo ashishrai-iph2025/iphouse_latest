@@ -18,7 +18,8 @@ import (
 func Keepalive(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
-		Fail(w, 401, "Not authenticated"); return
+		Fail(w, 401, "Not authenticated")
+		return
 	}
 	expiryMs := time.Now().Add(time.Duration(config.C.SessionIdleSeconds) * time.Second).UnixMilli()
 	OK(w, map[string]any{"alive": true, "expiryMs": expiryMs})
@@ -30,7 +31,8 @@ func Keepalive(w http.ResponseWriter, r *http.Request) {
 func TestDB(w http.ResponseWriter, r *http.Request) {
 	if err := db.Get().Ping(); err != nil {
 		log.Printf("[test-db] ping failed: %v", err)
-		Fail(w, 503, "Service unavailable"); return
+		Fail(w, 503, "Service unavailable")
+		return
 	}
 	OK(w, map[string]any{"success": true, "message": "DB OK"})
 }
@@ -40,7 +42,8 @@ func PendingCount(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	apiToken := ResolveAPIToken(claims)
 	if apiToken == "" {
-		Fail(w, 401, "API token missing"); return
+		Fail(w, 401, "API token missing")
+		return
 	}
 
 	var body struct {
@@ -50,7 +53,8 @@ func PendingCount(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.PlatformName == "" {
-		Fail(w, 422, "platformName is required"); return
+		Fail(w, 422, "platformName is required")
+		return
 	}
 
 	payload := map[string]any{"platformName": body.PlatformName}
@@ -63,7 +67,8 @@ func PendingCount(w http.ResponseWriter, r *http.Request) {
 
 	data, err := markscan.PendingCount(apiToken, payload)
 	if err != nil {
-		Fail(w, 502, err.Error()); return
+		Fail(w, 502, err.Error())
+		return
 	}
 	OK(w, map[string]any{"success": true, "data": data})
 }
@@ -72,11 +77,13 @@ func PendingCount(w http.ResponseWriter, r *http.Request) {
 func Notifications(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
-		Fail(w, 401, "Not authenticated"); return
+		Fail(w, 401, "Not authenticated")
+		return
 	}
 	rows, err := db.Query("SELECT * FROM dcp_notifications WHERE userId = ? ORDER BY created_at DESC LIMIT 50", claims.UserID)
 	if err != nil || rows == nil {
-		OK(w, map[string]any{"success": true, "notifications": []any{}}); return
+		OK(w, map[string]any{"success": true, "notifications": []any{}})
+		return
 	}
 	OK(w, map[string]any{"success": true, "notifications": rows})
 }
@@ -85,7 +92,8 @@ func Notifications(w http.ResponseWriter, r *http.Request) {
 func Token(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
-		Fail(w, 401, "Not authenticated"); return
+		Fail(w, 401, "Not authenticated")
+		return
 	}
 	apiToken := ResolveAPIToken(claims)
 	OK(w, map[string]any{"success": true, "token": apiToken})
@@ -95,7 +103,8 @@ func Token(w http.ResponseWriter, r *http.Request) {
 func UserNav(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
-		Fail(w, 401, "Unauthorized"); return
+		Fail(w, 401, "Unauthorized")
+		return
 	}
 
 	allowed, _ := db.Query(`
@@ -163,7 +172,8 @@ func UserNav(w http.ResponseWriter, r *http.Request) {
 func UserIdleTimeout(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
-		Fail(w, 401, "Not authenticated"); return
+		Fail(w, 401, "Not authenticated")
+		return
 	}
 	row, _ := db.QueryOne("SELECT idle_minutes, is_active FROM user_idle_settings WHERE user_id = ? LIMIT 1", claims.UserID)
 	defaultMinutes := config.C.SessionIdleSeconds / 60
@@ -185,7 +195,8 @@ func UserIdleTimeout(w http.ResponseWriter, r *http.Request) {
 func ChangePassword(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
-		Fail(w, 401, "Not authenticated"); return
+		Fail(w, 401, "Not authenticated")
+		return
 	}
 
 	var body struct {
@@ -194,10 +205,12 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.Current == "" || body.NewPass == "" {
-		OK(w, map[string]any{"success": false, "error": "Both passwords are required"}); return
+		OK(w, map[string]any{"success": false, "error": "Both passwords are required"})
+		return
 	}
 	if len(body.NewPass) < 8 {
-		OK(w, map[string]any{"success": false, "error": "New password must be at least 8 characters"}); return
+		OK(w, map[string]any{"success": false, "error": "New password must be at least 8 characters"})
+		return
 	}
 
 	// Portal staff (Admin / Super Admin) authenticate against dcp_super_admin,
@@ -210,14 +223,17 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 	if row, _ := db.QueryOne("SELECT id, password_hash FROM dcp_super_admin WHERE email = ? AND is_active = 1 LIMIT 1", claims.LoginUsername); row != nil {
 		hash, _ := row["password_hash"].(string)
 		if !ipauth.VerifyPassword(body.Current, hash) {
-			OK(w, map[string]any{"success": false, "error": "Current password is incorrect"}); return
+			OK(w, map[string]any{"success": false, "error": "Current password is incorrect"})
+			return
 		}
 		hashed, err := ipauth.HashPassword(body.NewPass)
 		if err != nil {
-			Fail(w, 500, "Hash error"); return
+			Fail(w, 500, "Hash error")
+			return
 		}
 		if err := db.MustExec("UPDATE dcp_super_admin SET password_hash = ? WHERE id = ?", hashed, intFromAny(row["id"])); err != nil {
-			Fail(w, 500, "Could not update your password. Please try again."); return
+			Fail(w, 500, "Could not update your password. Please try again.")
+			return
 		}
 		OK(w, map[string]any{"success": true})
 		return
@@ -233,19 +249,23 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 		INNER JOIN dcp_user u ON u.userId = l.userId
 		WHERE l.login_username = ? AND l.is_active = 1 AND u.deleted = 0 LIMIT 1`, claims.LoginUsername)
 	if row == nil {
-		OK(w, map[string]any{"success": false, "error": "Account not found"}); return
+		OK(w, map[string]any{"success": false, "error": "Account not found"})
+		return
 	}
 	hash, _ := row["login_password"].(string)
 	if !ipauth.VerifyPassword(body.Current, hash) {
-		OK(w, map[string]any{"success": false, "error": "Current password is incorrect"}); return
+		OK(w, map[string]any{"success": false, "error": "Current password is incorrect"})
+		return
 	}
 
 	hashed, err := ipauth.HashPassword(body.NewPass)
 	if err != nil {
-		Fail(w, 500, "Hash error"); return
+		Fail(w, 500, "Hash error")
+		return
 	}
 	if err := db.MustExec("UPDATE dcp_user_login SET login_password = ? WHERE login_username = ? AND is_active = 1", hashed, claims.LoginUsername); err != nil {
-		Fail(w, 500, "Could not update your password. Please try again."); return
+		Fail(w, 500, "Could not update your password. Please try again.")
+		return
 	}
 	OK(w, map[string]any{"success": true})
 }
@@ -254,24 +274,28 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 func IPTracking(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
-		Fail(w, 401, "Not authenticated"); return
+		Fail(w, 401, "Not authenticated")
+		return
 	}
 	apiToken := ResolveAPIToken(claims)
 	if apiToken == "" {
-		Fail(w, 401, "API token missing"); return
+		Fail(w, 401, "API token missing")
+		return
 	}
 	var body struct {
-		StartDate       string `json:"startDate"`
-		EndDate         string `json:"endDate"`
-		CopyrightOwner  string `json:"copyrightOwner"`
-		PageNo          int    `json:"pageNo"`
-		Asset           string `json:"asset"`
+		StartDate      string `json:"startDate"`
+		EndDate        string `json:"endDate"`
+		CopyrightOwner string `json:"copyrightOwner"`
+		PageNo         int    `json:"pageNo"`
+		Asset          string `json:"asset"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		Fail(w, 422, "Invalid request body"); return
+		Fail(w, 422, "Invalid request body")
+		return
 	}
 	if body.CopyrightOwner == "" {
-		Fail(w, 422, "copyrightOwner is required"); return
+		Fail(w, 422, "copyrightOwner is required")
+		return
 	}
 	payload := map[string]any{
 		"startDate":      body.StartDate,
@@ -280,11 +304,11 @@ func IPTracking(w http.ResponseWriter, r *http.Request) {
 		"pageNo":         body.PageNo,
 	}
 	if body.Asset != "" {
-		payload["asset"]      = body.Asset
-		payload["assetName"]  = body.Asset
+		payload["asset"] = body.Asset
+		payload["assetName"] = body.Asset
 		payload["assetTitle"] = body.Asset
-		payload["Asset"]      = body.Asset
-		payload["AssetName"]  = body.Asset
+		payload["Asset"] = body.Asset
+		payload["AssetName"] = body.Asset
 		payload["AssetTitle"] = body.Asset
 	}
 	b, _ := json.Marshal(payload)
@@ -297,12 +321,14 @@ func IPTracking(w http.ResponseWriter, r *http.Request) {
 	resp, err := tlsClient.Do(req)
 	if err != nil {
 		log.Printf("[ip-tracking] markscan request failed: %v", err)
-		Fail(w, 502, "Upstream request failed. Please try again."); return
+		Fail(w, 502, "Upstream request failed. Please try again.")
+		return
 	}
 	defer resp.Body.Close()
 	rawBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		Fail(w, 502, "Markscan API error "+string(rawBody[:min(len(rawBody), 200)])); return
+		Fail(w, 502, "Markscan API error "+string(rawBody[:min(len(rawBody), 200)]))
+		return
 	}
 	var data map[string]any
 	json.Unmarshal(rawBody, &data)
@@ -317,12 +343,16 @@ func IPTracking(w http.ResponseWriter, r *http.Request) {
 }
 
 func nilToSlice(v any) any {
-	if v == nil { return []any{} }
+	if v == nil {
+		return []any{}
+	}
 	return v
 }
 
 func min(a, b int) int {
-	if a < b { return a }
+	if a < b {
+		return a
+	}
 	return b
 }
 
@@ -330,11 +360,13 @@ func min(a, b int) int {
 func IPTrackingClientDetails(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
-		Fail(w, 401, "Not authenticated"); return
+		Fail(w, 401, "Not authenticated")
+		return
 	}
 	apiToken := ResolveAPIToken(claims)
 	if apiToken == "" {
-		Fail(w, 401, "API token missing"); return
+		Fail(w, 401, "API token missing")
+		return
 	}
 	base := config.C.MarkscanBase
 	req, _ := http.NewRequest("GET", base+"/GetClientDetails", nil)
@@ -343,7 +375,8 @@ func IPTrackingClientDetails(w http.ResponseWriter, r *http.Request) {
 	tlsClient := &http.Client{Timeout: 20 * time.Second}
 	resp, err := tlsClient.Do(req)
 	if err != nil {
-		Fail(w, 502, "Markscan request failed"); return
+		Fail(w, 502, "Markscan request failed")
+		return
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -383,7 +416,8 @@ func IPTrackingClientDetails(w http.ResponseWriter, r *http.Request) {
 func UserDashboardData(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
-		Fail(w, 401, "Not authenticated"); return
+		Fail(w, 401, "Not authenticated")
+		return
 	}
 	logo, _ := db.QueryOne("SELECT userLogo, companyLogo FROM dcp_user WHERE userId = ? AND deleted = 0", claims.UserID)
 	modules, _ := db.Query(`
@@ -403,13 +437,14 @@ func MasterData(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	apiToken := ResolveAPIToken(claims)
 	if apiToken == "" {
-		Fail(w, 401, "API token missing"); return
+		Fail(w, 401, "API token missing")
+		return
 	}
 
 	rawP, _ := markscan.GetAllPlatforms(apiToken)
 	rawA, _ := markscan.GetAllAssets(apiToken)
 	platforms := normalizeMasterList(rawP, "platformName", "platform_name", "name", "platform", "PlatformName", "Platform")
-	assets    := normalizeMasterList(rawA, "assetName", "asset_name", "name", "AssetName", "Asset")
+	assets := normalizeMasterList(rawA, "assetName", "asset_name", "name", "AssetName", "Asset")
 	log.Printf("[master-data] raw assets from MarkScan: %d items → normalised: %d items; raw[0]=%v", len(rawA), len(assets), first(rawA))
 	OK(w, map[string]any{"success": true, "platforms": platforms, "assets": assets})
 }
@@ -449,12 +484,14 @@ func normalizeMasterList(raw []any, outKey string, fieldKeys ...string) []map[st
 func EmbedToken(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
-		Fail(w, 401, "SESSION_EXPIRED"); return
+		Fail(w, 401, "SESSION_EXPIRED")
+		return
 	}
 
 	reportID := r.URL.Query().Get("reportId")
 	if reportID == "" {
-		Fail(w, 400, "Missing reportId"); return
+		Fail(w, 400, "Missing reportId")
+		return
 	}
 
 	// ROLLED BACK: Per-report embed authorisation was too restrictive
@@ -464,7 +501,8 @@ func EmbedToken(w http.ResponseWriter, r *http.Request) {
 
 	row, err := db.QueryOne("SELECT client_id, client_secret, tenant_id, workspace_id FROM master_powerbi_credentials WHERE is_active = 1 ORDER BY id DESC LIMIT 1")
 	if err != nil || row == nil {
-		Fail(w, 500, "No Power BI API credentials found in database"); return
+		Fail(w, 500, "No Power BI API credentials found in database")
+		return
 	}
 
 	clientID := safeDecryptField(row["client_id"])
@@ -478,20 +516,24 @@ func EmbedToken(w http.ResponseWriter, r *http.Request) {
 
 	tokenResp, err := postFormHTTP(azureURL, formData)
 	if err != nil {
-		Fail(w, 500, "Azure AD request failed"); return
+		Fail(w, 500, "Azure AD request failed")
+		return
 	}
 	accessToken, _ := tokenResp["access_token"].(string)
 	if accessToken == "" {
-		Fail(w, 500, "Azure AD authentication failed"); return
+		Fail(w, 500, "Azure AD authentication failed")
+		return
 	}
 
 	reportInfo, err := getWithBearer("https://api.powerbi.com/v1.0/myorg/groups/"+workspaceID+"/reports/"+reportID, accessToken)
 	if err != nil {
-		Fail(w, 500, "Report fetch failed"); return
+		Fail(w, 500, "Report fetch failed")
+		return
 	}
 	embedURL, _ := reportInfo["embedUrl"].(string)
 	if embedURL == "" {
-		Fail(w, 500, "Invalid reportId or no API permission"); return
+		Fail(w, 500, "Invalid reportId or no API permission")
+		return
 	}
 
 	embedTokenResp, err := postJSONWithBearer(
@@ -499,11 +541,13 @@ func EmbedToken(w http.ResponseWriter, r *http.Request) {
 		accessToken, map[string]string{"accessLevel": "View"},
 	)
 	if err != nil {
-		Fail(w, 500, "Embed token generation failed"); return
+		Fail(w, 500, "Embed token generation failed")
+		return
 	}
 	embedTok, _ := embedTokenResp["token"].(string)
 	if embedTok == "" {
-		Fail(w, 500, "Embed token generation failed"); return
+		Fail(w, 500, "Embed token generation failed")
+		return
 	}
 
 	go db.Exec(`INSERT INTO user_dashboard_access (login_id, user_id, report_id, dashboard_name, workspace_id) VALUES (?, ?, ?, ?, ?)`,

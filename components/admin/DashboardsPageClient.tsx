@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import BackToConfiguration from '@/components/admin/BackToConfiguration'
 import { useRouter } from '@/lib/router'
 import PaginationBar, { PER_PAGE } from './PaginationBar'
 
@@ -93,15 +94,7 @@ export default function DashboardsPageClient({ dashboards, totalClients, totalDa
         </div>
       )}
 
-      {/* Back button */}
-      <div className="mb-3">
-        <Link to="/admin/configuration" className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-[#14254A] transition-colors">
-          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-          </svg>
-          Back to Configuration
-        </Link>
-      </div>
+      <BackToConfiguration />
 
       {/* Breadcrumb */}
       <div className="flex items-center gap-1 text-xs text-gray-400 mb-4">
@@ -163,16 +156,16 @@ export default function DashboardsPageClient({ dashboards, totalClients, totalDa
               onClick={() => changeTab('active')}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-150 ${
                 tab === 'active'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'bg-white text-gray-500 border border-gray-200 hover:border-emerald-300 hover:text-emerald-700'
+                  ? 'bg-[#14254A] text-white shadow-sm'
+                  : 'bg-white text-gray-500 border border-gray-200 hover:border-[#14254A]/40 hover:text-[#14254A]'
               }`}
             >
               <span className={`flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-bold flex-shrink-0 ${
-                tab === 'active' ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-700'
+                tab === 'active' ? 'bg-white/20 text-white' : 'bg-[#14254A]/10 text-[#14254A]'
               }`}>✓</span>
               Active Dashboards
               <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                tab === 'active' ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-700'
+                tab === 'active' ? 'bg-white/20 text-white' : 'bg-[#14254A]/10 text-[#14254A]'
               }`}>
                 {active.length}
               </span>
@@ -182,16 +175,16 @@ export default function DashboardsPageClient({ dashboards, totalClients, totalDa
               onClick={() => changeTab('inactive')}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-150 ${
                 tab === 'inactive'
-                  ? 'bg-gray-700 text-white shadow-sm'
-                  : 'bg-white text-gray-500 border border-gray-200 hover:border-gray-400 hover:text-gray-700'
+                  ? 'bg-gradient-to-r from-[#FFC82B] to-[#FC934C] text-white shadow-sm'
+                  : 'bg-white text-gray-500 border border-gray-200 hover:border-[#FC934C]/50 hover:text-[#FC934C]'
               }`}
             >
               <span className={`flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-bold flex-shrink-0 ${
-                tab === 'inactive' ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500'
+                tab === 'inactive' ? 'bg-white/25 text-white' : 'bg-[#FC934C]/15 text-[#d97b2e]'
               }`}>✕</span>
               Inactive Dashboards
               <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                tab === 'inactive' ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500'
+                tab === 'inactive' ? 'bg-white/25 text-white' : 'bg-[#FC934C]/15 text-[#d97b2e]'
               }`}>
                 {inactive.length}
               </span>

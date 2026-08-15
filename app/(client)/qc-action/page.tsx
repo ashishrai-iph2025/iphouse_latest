@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from '@/lib/router'
 import Breadcrumb from '@/components/ui/Breadcrumb'
 import PageLoader from '@/components/ui/PageLoader'
+import Portal from '@/components/ui/Portal'
+import { platformLabel } from '@/lib/platformCategories'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -25,14 +27,14 @@ const SCHEMAS: Record<PlatformType, SchemaCol[]> = {
   internet: [
     { label: 'Type',             keys: ['isSourceURL'] },
     { label: 'Asset Name',       keys: ['assetName','AssetName','asset','Asset'] },
-    { label: 'Source URL',       keys: ['sourceURL','sourceUrl','SourceURL','source'] },
-    { label: 'Infringing URL',   keys: ['infringingURL','infringingUrl','url','URL','link'] },
-    { label: 'Infringing Domain',keys: ['infringingDomain','infringingHost','domain'] },
+    { label: 'Host URL',         keys: ['sourceURL','sourceUrl','SourceURL','source'] },
+    { label: 'Linking URL',      keys: ['infringingURL','infringingUrl','url','URL','link'] },
+    { label: 'Linking Domain',   keys: ['infringingDomain','infringingHost','domain'] },
     { label: 'Language',         keys: ['language','lang'] },
   ],
   youtube: [
     { label: 'Asset Name',       keys: ['assetName','AssetName','asset'] },
-    { label: 'Video URL',        keys: ['videoURL','videoUrl','video','VideoURL'] },
+    { label: 'Media File',       keys: ['videoURL','videoUrl','video','VideoURL'] },
     { label: 'Channel URL',      keys: ['channelURL','channelUrl','ChannelURL'] },
     { label: 'Channel Name',     keys: ['channelName','ChannelName'] },
     { label: 'Channel ID',       keys: ['channelId','channelID','ChannelId'] },
@@ -51,7 +53,7 @@ const SCHEMAS: Record<PlatformType, SchemaCol[]> = {
   ],
   other: [
     { label: 'Asset Name',       keys: ['assetName','AssetName','asset'] },
-    { label: 'Video URL',        keys: ['videoURL','videoUrl','video','VideoURL'] },
+    { label: 'Media File',       keys: ['videoURL','videoUrl','video','VideoURL'] },
     { label: 'Profile URL',      keys: ['profileURL','profileUrl','ProfileURL'] },
     { label: 'Profile Name',     keys: ['profileName','ProfileName','name','userFullName'] },
     { label: 'Type',             keys: ['infringementType'] },
@@ -104,6 +106,14 @@ function isUrl(s: string): boolean {
 
 const PAGE_SIZE_OPTIONS = [15, 25, 50, 100, 250, 1000]
 
+// Brand palette — modal chrome is built on #14254A
+const NAVY       = '#14254A'
+const NAVY_LIGHT = '#1E3766'
+
+const TILE       = 'rounded-xl p-3 bg-[#14254A]/5 dark:bg-white/5 border border-[#14254A]/10 dark:border-white/10'
+const TILE_LABEL = 'text-[10px] uppercase tracking-wide font-bold mb-0.5 text-[#14254A]/60 dark:text-white/50'
+const TILE_VALUE = 'text-sm text-[#14254A] dark:text-white'
+
 // ─── Inner component (uses useSearchParams) ───────────────────────────────────
 
 function QcActionInner() {
@@ -152,6 +162,27 @@ function QcActionInner() {
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [platform, asset, startDate])
+
+  // ─── Modal open/close ───────────────────────────────────────────────────────
+
+  const closeModal = useCallback(() => {
+    if (submitting) return
+    setModal(null)
+    setSubmitResult(null)
+  }, [submitting])
+
+  // Lock page scroll + close on Escape while the modal is open
+  useEffect(() => {
+    if (!modal) return
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal() }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = prevOverflow
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [modal, closeModal])
 
   // ─── Derived ────────────────────────────────────────────────────────────────
 
@@ -209,11 +240,26 @@ function QcActionInner() {
 
     // Debug: log available field keys so we can identify the ID field if urlIds is empty
     if (urlIds.length === 0 && selectedRows.length > 0) {
-      console.warn('[QC] Could not resolve IDs. Available fields in first row:', Object.keys(selectedRows[0]))
+      console.warn('[Approval Review] Could not resolve IDs. Available fields in first row:', Object.keys(selectedRows[0]))
       setSubmitResult({ success: false, message: `Could not find ID field in row data. Available fields: ${Object.keys(selectedRows[0]).join(', ')}` })
       setSubmitting(false)
       return
     }
+
+    // Markscan needs isSourceURL alongside the ids. Internet lists host and
+    // linking URLs together, each with its own flag, so a mixed selection goes
+    // up as one group per flag; every other platform is fetched as source-only.
+    const groups = platformType === 'internet'
+      ? [true, false]
+          .map(isSourceURL => ({
+            isSourceURL,
+            urlids: selectedRows
+              .filter(r => Boolean(r.isSourceURL) === isSourceURL)
+              .map(r => getId(r))
+              .filter(Boolean),
+          }))
+          .filter(g => g.urlids.length > 0)
+      : [{ isSourceURL: true, urlids: urlIds }]
 
     try {
       const res  = await fetch('/api/qc-enforce', {
@@ -225,7 +271,8 @@ function QcActionInner() {
           platform,
           assetName:  asset || (firstAsset !== '–' ? firstAsset : undefined),
           comment:    comment.trim(),
-          urlIds,
+          urlids:     urlIds,
+          groups,
         }),
       })
       const json = await res.json()
@@ -233,9 +280,11 @@ function QcActionInner() {
         setSubmitResult({ success: true, message: `${selected.size} URL(s) ${modal.action} successfully.` })
         setToast({ count: selected.size, action: modal.action, platform })
         setTimeout(() => setToast(null), 6000)
-        // Remove approved/rejected rows from data
-        const selectedIdxs = new Set(selected)
-        setData(prev => prev.filter((_, i) => !selectedIdxs.has(i)))
+        // Remove approved/rejected rows from data. Selection is indexed against
+        // `filtered`, so the rows themselves — not their indices — are what map
+        // back onto `data` when a search filter is active.
+        const done = new Set(selectedRows)
+        setData(prev => prev.filter(row => !done.has(row)))
         setSelected(new Set())
         setModal(null)
         setComment('')
@@ -273,7 +322,7 @@ function QcActionInner() {
     <div className="flex flex-col fade-in">
 
       {/* ── BREADCRUMB ── */}
-      <Breadcrumb items={[{ label: 'Approvals', href: '/pending-count' }, { label: 'QC Action' }]} />
+      <Breadcrumb items={[{ label: 'Approvals', href: '/pending-count' }, { label: 'Approval Review' }]} />
 
       {/* ── HEADER ── */}
       <div className="bg-white border-b border-gray-100 shadow-sm px-3 sm:px-5 py-3">
@@ -290,7 +339,7 @@ function QcActionInner() {
             </div>
             <div className="min-w-0">
               <h1 className="font-bold text-[#14254A] text-sm sm:text-base leading-tight truncate">
-                QC Review – {platform}
+                Approval Review – {platformLabel(platform)}
               </h1>
               <p className="text-xs text-gray-400 truncate">
                 {asset && <span className="mr-2">Asset: <strong>{asset}</strong></span>}
@@ -317,7 +366,7 @@ function QcActionInner() {
       {loading && (
         <div className="flex flex-col items-center">
           <PageLoader />
-          <p className="text-xs text-gray-400 -mt-4">Platform: <strong>{platform}</strong></p>
+          <p className="text-xs text-gray-400 -mt-4">Platform: <strong>{platformLabel(platform)}</strong></p>
         </div>
       )}
 
@@ -389,7 +438,7 @@ function QcActionInner() {
           {data.length === 0 ? (
             <div className="bg-white rounded-2xl border border-gray-100 shadow-card flex flex-col items-center justify-center py-20 text-center">
               <p className="text-4xl mb-3">📭</p>
-              <p className="font-semibold text-gray-600">No URLs found for QC</p>
+              <p className="font-semibold text-gray-600">No URLs awaiting approval</p>
               <p className="text-sm text-gray-400 mt-1">Try adjusting your filters on the previous page</p>
             </div>
           ) : (
@@ -504,103 +553,132 @@ function QcActionInner() {
         </div>
       )}
 
-      {/* ── APPROVAL / REJECTION MODAL ── */}
+      {/* ── APPROVAL / REJECTION MODAL (portalled to <body> — the page wrapper
+             carries a persisted `transform` from .fade-in, which would otherwise
+             trap a position:fixed overlay inside the content box) ── */}
       {modal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center pt-16 px-4"
-          onClick={() => { if (!submitting) setModal(null) }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden"
-            onClick={e => e.stopPropagation()}>
+        <Portal>
+          <div
+            className="fixed inset-0 z-[99999] flex items-start sm:items-center justify-center p-4 sm:p-6 overflow-y-auto"
+            style={{ background: 'rgba(20,37,74,0.62)', backdropFilter: 'blur(3px)' }}
+            role="dialog"
+            aria-modal="true"
+            onClick={closeModal}>
+            <div
+              className="bg-white dark:bg-[#1a2d55] rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden"
+              style={{ border: `1px solid ${NAVY}1a`, maxHeight: 'calc(100dvh - 3rem)' }}
+              onClick={e => e.stopPropagation()}>
 
-            {/* Modal header */}
-            <div className={`px-5 py-4 flex items-center gap-3 ${modal.action === 'approved' ? 'bg-emerald-600' : 'bg-red-500'}`}>
-              <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center text-2xl">
-                {modal.action === 'approved' ? '✓' : '✕'}
+              {/* Modal header */}
+              <div className="px-5 py-4 flex items-center gap-3"
+                style={{
+                  background: `linear-gradient(135deg, ${NAVY} 0%, ${NAVY_LIGHT} 100%)`,
+                  borderBottom: `3px solid ${modal.action === 'approved' ? '#16A34A' : '#DC2626'}`,
+                }}>
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-2xl text-white flex-shrink-0"
+                  style={{ background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.18)' }}>
+                  {modal.action === 'approved' ? '✓' : '✕'}
+                </div>
+                <div className="min-w-0">
+                  <h2 className="font-bold text-white text-base">
+                    {modal.action === 'approved' ? 'Approve' : 'Reject'} Selected URLs
+                  </h2>
+                  <p className="text-white/70 text-xs truncate">{selected.size} URL{selected.size !== 1 ? 's' : ''} selected · {platformLabel(platform)}</p>
+                </div>
+                <button type="button" onClick={closeModal} aria-label="Close"
+                  className="ml-auto text-white/60 hover:text-white text-xl leading-none flex-shrink-0">×</button>
               </div>
-              <div>
-                <h2 className="font-bold text-white text-base">
-                  {modal.action === 'approved' ? 'Approve' : 'Reject'} Selected URLs
-                </h2>
-                <p className="text-white/70 text-xs">{selected.size} URL{selected.size !== 1 ? 's' : ''} selected · {platform}</p>
-              </div>
-              <button onClick={() => !submitting && setModal(null)}
-                className="ml-auto text-white/60 hover:text-white text-xl leading-none">×</button>
-            </div>
 
-            <form onSubmit={handleSubmit} className="p-5 space-y-4">
-              {/* Info row */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-gray-50 rounded-xl p-3">
-                  <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-0.5">Action</div>
-                  <div className={`text-sm font-bold ${modal.action === 'approved' ? 'text-emerald-600' : 'text-red-500'}`}>
-                    {modal.action === 'approved' ? 'Approve' : 'Reject'}
+              <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto"
+                style={{ maxHeight: 'calc(100dvh - 9rem)' }}>
+                {/* Info row */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className={TILE}>
+                    <div className={TILE_LABEL}>Action</div>
+                    <div className={`${TILE_VALUE} font-bold flex items-center gap-1.5`}>
+                      <span className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                        style={{ background: modal.action === 'approved' ? '#16A34A' : '#DC2626' }} />
+                      {modal.action === 'approved' ? 'Approve' : 'Reject'}
+                    </div>
+                  </div>
+                  <div className={TILE}>
+                    <div className={TILE_LABEL}>URLs Selected</div>
+                    <div className={`${TILE_VALUE} font-bold`}>{selected.size.toLocaleString()}</div>
+                  </div>
+                  <div className={TILE}>
+                    <div className={TILE_LABEL}>Platform</div>
+                    <div className={`${TILE_VALUE} font-semibold truncate`}>{platformLabel(platform)}</div>
+                  </div>
+                  {asset && (
+                    <div className={TILE}>
+                      <div className={TILE_LABEL}>Asset</div>
+                      <div className={`${TILE_VALUE} font-semibold truncate`}>{asset}</div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Comment */}
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wide mb-1.5 text-[#14254A] dark:text-white/80">
+                    Remarks / Comment <span className="text-red-500">*</span>
+                  </label>
+                  <textarea
+                    value={comment}
+                    onChange={e => setComment(e.target.value)}
+                    rows={4}
+                    required
+                    minLength={10}
+                    autoFocus
+                    placeholder="Enter reason for this action (min 10 characters)…"
+                    className="w-full rounded-xl px-3 py-2.5 text-sm resize-none bg-white dark:bg-white/5
+                      border border-[#14254A]/20 dark:border-white/15 text-[#14254A] dark:text-white
+                      placeholder-[#14254A]/40 dark:placeholder-white/30
+                      focus:outline-none focus:border-[#14254A] dark:focus:border-[#FFC82B]
+                      focus:ring-2 focus:ring-[#14254A]/20 dark:focus:ring-[#FFC82B]/25 transition-shadow"
+                  />
+                  <div className="flex justify-between mt-1">
+                    <p className="text-xs text-[#14254A]/50 dark:text-white/40">Minimum 10 characters required</p>
+                    <p className={`text-xs font-semibold ${comment.length < 10 ? 'text-red-500' : 'text-[#14254A] dark:text-[#FFC82B]'}`}>
+                      {comment.length} chars
+                    </p>
                   </div>
                 </div>
-                <div className="bg-gray-50 rounded-xl p-3">
-                  <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-0.5">URLs Selected</div>
-                  <div className="text-sm font-bold text-gray-800">{selected.size.toLocaleString()}</div>
-                </div>
-                <div className="bg-gray-50 rounded-xl p-3">
-                  <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-0.5">Platform</div>
-                  <div className="text-sm font-semibold text-gray-800 truncate">{platform}</div>
-                </div>
-                {asset && (
-                  <div className="bg-gray-50 rounded-xl p-3">
-                    <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-0.5">Asset</div>
-                    <div className="text-sm font-semibold text-gray-800 truncate">{asset}</div>
+
+                {/* Error/success */}
+                {submitResult && !submitResult.success && (
+                  <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">
+                    <pre className="whitespace-pre-wrap break-all font-mono text-xs">{submitResult.message}</pre>
                   </div>
                 )}
-              </div>
 
-              {/* Comment */}
-              <div>
-                <label className="block text-xs font-bold text-gray-600 uppercase tracking-wide mb-1.5">
-                  Remarks / Comment <span className="text-red-500">*</span>
-                </label>
-                <textarea
-                  value={comment}
-                  onChange={e => setComment(e.target.value)}
-                  rows={4}
-                  required
-                  minLength={10}
-                  placeholder="Enter reason for this action (min 10 characters)…"
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
-                />
-                <div className="flex justify-between mt-1">
-                  <p className="text-xs text-gray-400">Minimum 10 characters required</p>
-                  <p className={`text-xs ${comment.length < 10 ? 'text-red-400' : 'text-emerald-600'}`}>{comment.length} chars</p>
+                {/* Actions */}
+                <div className="flex gap-3 pt-1">
+                  <button type="button" disabled={submitting} onClick={closeModal}
+                    className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-colors disabled:opacity-50
+                      border border-[#14254A]/20 text-[#14254A] hover:bg-[#14254A]/5
+                      dark:border-white/20 dark:text-white/80 dark:hover:bg-white/10">
+                    Cancel
+                  </button>
+                  <button type="submit"
+                    disabled={submitting || comment.trim().length < 10}
+                    className="flex-1 py-2.5 rounded-xl text-white text-sm font-bold transition-all
+                      disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2
+                      bg-[#14254A] hover:bg-[#1E3766] shadow-[0_4px_14px_rgba(20,37,74,0.28)]">
+                    {submitting
+                      ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Submitting…</>
+                      : modal.action === 'approved' ? '✓ Submit Approval' : '✕ Submit Rejection'}
+                  </button>
                 </div>
-              </div>
-
-              {/* Error/success */}
-              {submitResult && !submitResult.success && (
-                <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">
-                  <pre className="whitespace-pre-wrap break-all font-mono text-xs">{submitResult.message}</pre>
-                </div>
-              )}
-
-              {/* Actions */}
-              <div className="flex gap-3 pt-1">
-                <button type="button" disabled={submitting} onClick={() => setModal(null)}
-                  className="flex-1 py-2.5 rounded-xl border border-gray-200 text-gray-600 text-sm font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50">
-                  Cancel
-                </button>
-                <button type="submit"
-                  disabled={submitting || comment.trim().length < 10}
-                  className={`flex-1 py-2.5 rounded-xl text-white text-sm font-bold transition-all disabled:opacity-50 flex items-center justify-center gap-2
-                    ${modal.action === 'approved' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-500 hover:bg-red-600'}`}>
-                  {submitting
-                    ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Submitting…</>
-                    : modal.action === 'approved' ? '✓ Submit Approval' : '✕ Submit Rejection'}
-                </button>
-              </div>
-            </form>
+              </form>
+            </div>
           </div>
-        </div>
+        </Portal>
       )}
 
       {/* ── TOAST (top-right) ── */}
       {toast && (
-        <div className="fixed top-20 right-5 z-50 w-72 rounded-2xl shadow-2xl overflow-hidden animate-fade-in"
+        <Portal>
+        <div className="fixed top-20 right-5 z-[99999] w-72 rounded-2xl shadow-2xl overflow-hidden animate-fade-in"
              style={{ background: toast.action === 'approved' ? '#059669' : '#dc2626' }}>
           <div className="flex items-start gap-3 px-4 py-3.5">
             <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center flex-shrink-0 text-white font-bold text-sm">
@@ -610,7 +688,7 @@ function QcActionInner() {
               <p className="text-white font-semibold text-sm">
                 {toast.action === 'approved' ? 'Approved Successfully' : 'Marked as Invalid'}
               </p>
-              <p className="text-white/80 text-xs mt-0.5 truncate">{toast.platform}</p>
+              <p className="text-white/80 text-xs mt-0.5 truncate">{platformLabel(toast.platform)}</p>
             </div>
             <button onClick={() => setToast(null)} className="text-white/60 hover:text-white text-lg leading-none flex-shrink-0">×</button>
           </div>
@@ -623,6 +701,7 @@ function QcActionInner() {
                  style={{ animation: 'shrink 6s linear forwards' }} />
           </div>
         </div>
+        </Portal>
       )}
     </div>
   )

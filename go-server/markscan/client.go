@@ -332,7 +332,12 @@ func QCUrls(token string, payload any) (int, any, error) {
 	return postRaw(token, base+"/QcUrls", payload)
 }
 
-// QCEnforce posts to QcEnforce endpoint.
+// QCEnforce posts to a QcEnforce endpoint that Markscan does not expose — every
+// call returns 4xx. Approvals go through SendToEnforcementQc and rejections
+// through MarkAsInvalid; handlers.QCEnforce does that routing. Kept only so an
+// external caller does not break at build time.
+//
+// Deprecated: use SendToEnforcementQc or MarkAsInvalid.
 func QCEnforce(token string, payload any) (int, any, error) {
 	base := config.C.MarkscanBase
 	return postRaw(token, base+"/QcEnforce", payload)

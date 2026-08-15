@@ -20,8 +20,23 @@ const LILAC   = '#60325f'
 const BROWN   = '#4c2e05'
 const SEA     = '#9fc2cc'
 
-const PALETTE      = [ORANGE, NAVY, YELLOW, NAVY_50, TEAL, LILAC, BROWN, SEA, GREEN, RED]
-const DONUT_PALETTE = [ORANGE, YELLOW, NAVY, GREEN, SEA, TEAL, LILAC, RED]
+/* Dark-theme counterparts. The brand palette is built for ink on white: NAVY,
+   TEAL, LILAC, BROWN and RED are all darker than the dark-mode page (#0f1f3d)
+   and card (#1a2d4e), so used as bars, donut arcs, headers or panels they
+   disappear into the surface behind them. Each one below is the same hue lifted
+   above the surface; ORANGE, YELLOW and SEA are already light enough to keep. */
+const NAVY_DK   = '#6C9BEF'
+const NAVY_50_DK = '#A8B8D0'
+const TEAL_DK   = '#3FA6B8'
+const LILAC_DK  = '#C08BBE'
+const BROWN_DK  = '#D0A05A'
+const GREEN_DK  = '#5BC46B'
+const RED_DK    = '#F2637A'
+
+const PALETTE_LIGHT = [ORANGE, NAVY,    YELLOW, NAVY_50,    TEAL,    LILAC,    BROWN,    SEA, GREEN,    RED]
+const PALETTE_DARK  = [ORANGE, NAVY_DK, YELLOW, NAVY_50_DK, TEAL_DK, LILAC_DK, BROWN_DK, SEA, GREEN_DK, RED_DK]
+
+const paletteFor = (dark: boolean) => (dark ? PALETTE_DARK : PALETTE_LIGHT)
 
 const BODY_FONT = { fontFamily: "'Inter', sans-serif" }
 
@@ -44,6 +59,14 @@ function dk(dark: boolean) {
     divider:    dark ? '#2a3f66' : NAVY_25,
     skeleton:   dark ? '#2a3f66' : NAVY_10,
     quickBg:    dark ? '#162038' : NAVY_5,
+    /* Navy is a surface in light mode and has to become a RAISED surface in
+       dark mode — the page is already navy, so painting navy on navy erases
+       the element. `series` is the same colour used as a data mark. */
+    series:     dark ? NAVY_DK   : NAVY,
+    panel:      dark ? '#1f3563' : NAVY,   // hero / footer banners
+    panelSub:   dark ? 'rgba(226,232,245,0.7)' : NAVY_50,
+    thead:      dark ? '#24406e' : NAVY,   // table header rows
+    tooltip:    dark ? '#24406e' : NAVY,
   }
 }
 
@@ -92,7 +115,7 @@ function BarH({ items, colorFn }: { items: { label: string; value: number }[]; c
           </span>
           <div className="flex-1 rounded-sm overflow-hidden" style={{ height: 22, background: d.track }}>
             <div className="h-full flex items-center px-2 transition-all"
-              style={{ width: `${Math.max((item.value / max) * 100, 3)}%`, background: colorFn ? colorFn(i) : PALETTE[i % PALETTE.length] }}>
+              style={{ width: `${Math.max((item.value / max) * 100, 3)}%`, background: colorFn ? colorFn(i) : paletteFor(isDark)[i % PALETTE_LIGHT.length] }}>
               <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 9, color: '#fff', fontWeight: 700 }}>{item.value}</span>
             </div>
           </div>
@@ -102,8 +125,9 @@ function BarH({ items, colorFn }: { items: { label: string; value: number }[]; c
   )
 }
 
-function BarV({ items, color = NAVY, height = 140 }: { items: { label: string; value: number }[]; color?: string; height?: number }) {
+function BarV({ items, color, height = 140 }: { items: { label: string; value: number }[]; color?: string; height?: number }) {
   const d = dk(useDark())
+  const bar = color ?? d.series
   if (!items.length) return <EmptyState />
   const max = Math.max(...items.map(i => i.value), 1)
   return (
@@ -114,10 +138,10 @@ function BarV({ items, color = NAVY, height = 140 }: { items: { label: string; v
           <div key={i} className="flex flex-col items-center flex-1 min-w-0 group" style={{ height }}>
             <div className="relative w-full flex-1 flex items-end">
               <div className="absolute -top-5 left-1/2 -translate-x-1/2 text-white text-[9px] px-1 py-0.5 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap z-10 pointer-events-none"
-                style={{ background: NAVY }}>
+                style={{ background: d.tooltip }}>
                 {item.value}
               </div>
-              <div className="w-full rounded-t-sm" style={{ height: `${pct}%`, background: color, minHeight: 2 }} />
+              <div className="w-full rounded-t-sm" style={{ height: `${pct}%`, background: bar, minHeight: 2 }} />
             </div>
             <span style={{ ...BODY_FONT, color: d.sub, fontSize: 9 }} className="mt-1 truncate w-full text-center">{item.label}</span>
           </div>
@@ -143,7 +167,7 @@ function DonutChart({ segments, centerLabel = 'total' }: { segments: { label: st
             strokeDasharray={`${dash} ${gap}`} transform={`rotate(${rot} ${cx} ${cy})`} />
         })}
         <text x={cx} y={cy - 7} textAnchor="middle" fontSize={22} fontWeight="700" fill={ORANGE} fontFamily="'Inter', sans-serif">{total}</text>
-        <text x={cx} y={cy + 10} textAnchor="middle" fontSize={9} fill={NAVY_50} fontFamily="'Inter', sans-serif">{centerLabel}</text>
+        <text x={cx} y={cy + 10} textAnchor="middle" fontSize={9} fill={d.sub} fontFamily="'Inter', sans-serif">{centerLabel}</text>
       </svg>
       <div className="space-y-2">
         {segments.map((seg, i) => (
@@ -219,7 +243,11 @@ function Card({ children, className = '' }: { children: React.ReactNode; classNa
 }
 
 /* ─── Main component ────────────────────────────────────────────────────── */
-const LOGIN_TYPE_COLOR: Record<string, string> = { 'Email OTP': NAVY, 'Authenticator': TEAL, 'Password': ORANGE }
+const loginTypeColors = (dark: boolean): Record<string, string> => ({
+  'Email OTP':     dark ? NAVY_DK : NAVY,
+  'Authenticator': dark ? TEAL_DK : TEAL,
+  'Password':      ORANGE,
+})
 
 export default function AdminHomeClient({ name, today, role }: { name: string; today: string; role: number }) {
   const { theme } = useTheme()
@@ -259,22 +287,23 @@ export default function AdminHomeClient({ name, today, role }: { name: string; t
   const regItems       = (data?.registrationTrend     ?? []).map((d2: any) => ({ label: String(d2.date ?? d2.month ?? '').slice(5, 10), value: d2.count }))
   const mostUsersItems = (data?.clientsWithMostUsers  ?? []).map(d2 => ({ label: d2.name, value: d2.count }))
 
-  const userDistSegments     = [{ label: 'Client Accounts', value: counts.clientAccounts ?? 0, color: ORANGE }, { label: 'Admins', value: counts.admins ?? 0, color: NAVY }, { label: 'Super Admins', value: counts.superAdmins ?? 0, color: YELLOW }]
-  const loginTypeSegments    = (data?.loginTypeBreakdown ?? []).map(l => ({ label: l.label, value: l.count, color: LOGIN_TYPE_COLOR[l.label] ?? NAVY_50 }))
-  const activeVsInactiveSegs = (data?.activeVsInactive   ?? []).map(l => ({ label: l.status, value: l.count, color: l.status === 'Active' ? GREEN : RED }))
+  const typeColors = loginTypeColors(isDark)
+  const userDistSegments     = [{ label: 'Client Accounts', value: counts.clientAccounts ?? 0, color: ORANGE }, { label: 'Admins', value: counts.admins ?? 0, color: d.series }, { label: 'Super Admins', value: counts.superAdmins ?? 0, color: YELLOW }]
+  const loginTypeSegments    = (data?.loginTypeBreakdown ?? []).map(l => ({ label: l.label, value: l.count, color: typeColors[l.label] ?? (isDark ? NAVY_50_DK : NAVY_50) }))
+  const activeVsInactiveSegs = (data?.activeVsInactive   ?? []).map(l => ({ label: l.status, value: l.count, color: l.status === 'Active' ? (isDark ? GREEN_DK : GREEN) : (isDark ? RED_DK : RED) }))
 
   return (
     <DarkCtx.Provider value={isDark}>
       <div className="p-6 fade-in space-y-6" style={BODY_FONT}>
 
         {/* Hero */}
-        <div className="rounded-xl p-6" style={{ background: NAVY }}>
+        <div className="rounded-xl p-6" style={{ background: d.panel }}>
           <div className="flex items-start justify-between">
             <div>
               <h1 style={{ fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 22, color: '#fff' }}>
                 Welcome back, <span style={{ color: ORANGE }}>{name}</span>
               </h1>
-              <p style={{ color: NAVY_50, fontSize: 12, marginTop: 4, fontFamily: "'Inter', sans-serif" }}>
+              <p style={{ color: d.panelSub, fontSize: 12, marginTop: 4, fontFamily: "'Inter', sans-serif" }}>
                 {today} · IP House Admin Portal
               </p>
             </div>
@@ -328,7 +357,7 @@ export default function AdminHomeClient({ name, today, role }: { name: string; t
           <Card className="p-5">
             <ChartTitle>Monthly Visitor Trend</ChartTitle>
             <ChartSub>Total logins per month (12 months)</ChartSub>
-            {loading ? <Skeleton h={140} /> : <BarV items={monthlyData} color={NAVY} height={140} />}
+            {loading ? <Skeleton h={140} /> : <BarV items={monthlyData} height={140} />}
           </Card>
         </div>
 
@@ -399,7 +428,7 @@ export default function AdminHomeClient({ name, today, role }: { name: string; t
             <div className="overflow-x-auto overflow-y-auto" style={{ maxHeight: 360 }}>
               <table className="w-full text-sm" style={BODY_FONT}>
                 <thead>
-                  <tr style={{ background: NAVY }}>
+                  <tr style={{ background: d.thead }}>
                     {['#', 'Name', 'Username', 'Total Activity', 'Last Active', 'Status', 'Usage'].map(h => (
                       <th key={h} className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wide whitespace-nowrap"
                         style={{ color: 'rgba(255,255,255,0.85)' }}>{h}</th>
@@ -422,7 +451,7 @@ export default function AdminHomeClient({ name, today, role }: { name: string; t
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             <div className="w-7 h-7 rounded flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
-                              style={{ background: PALETTE[i % PALETTE.length] }}>
+                              style={{ background: paletteFor(isDark)[i % PALETTE_LIGHT.length] }}>
                               {(c.name || 'U').charAt(0).toUpperCase()}
                             </div>
                             <p className="text-xs font-medium" style={{ color: d.text }}>{c.name?.trim() || '—'}</p>
@@ -459,7 +488,7 @@ export default function AdminHomeClient({ name, today, role }: { name: string; t
             <div className="overflow-x-auto overflow-y-auto" style={{ maxHeight: 360 }}>
               <table className="w-full text-sm" style={BODY_FONT}>
                 <thead>
-                  <tr style={{ background: NAVY }}>
+                  <tr style={{ background: d.thead }}>
                     {['#', 'Name', 'Username', 'Client', 'Login Type', 'Total Logins', 'Last Login', 'Status'].map(h => (
                       <th key={h} className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wide whitespace-nowrap"
                         style={{ color: 'rgba(255,255,255,0.85)' }}>{h}</th>
@@ -475,7 +504,7 @@ export default function AdminHomeClient({ name, today, role }: { name: string; t
                     <tr><td colSpan={8} className="text-center py-8 text-xs" style={{ color: d.sub }}>No login user data yet</td></tr>
                   ) : (data?.topLoginUsers ?? []).map((u, i) => {
                     const typeLabel = { 0: 'Email OTP', 1: 'Authenticator', 2: 'Password' }[u.login_type] ?? `Type ${u.login_type}`
-                    const typeColor = LOGIN_TYPE_COLOR[typeLabel] ?? NAVY_50
+                    const typeColor = typeColors[typeLabel] ?? (isDark ? NAVY_50_DK : NAVY_50)
                     const maxLogins = data!.topLoginUsers[0]?.logins || 1
                     const pct = Math.round((u.logins / maxLogins) * 100)
                     return (
@@ -484,7 +513,7 @@ export default function AdminHomeClient({ name, today, role }: { name: string; t
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             <div className="w-7 h-7 rounded flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
-                              style={{ background: PALETTE[i % PALETTE.length] }}>
+                              style={{ background: paletteFor(isDark)[i % PALETTE_LIGHT.length] }}>
                               {(u.name || u.username || 'U').charAt(0).toUpperCase()}
                             </div>
                             <span className="text-xs font-medium" style={{ color: d.text }}>{u.name || '—'}</span>
@@ -560,7 +589,7 @@ export default function AdminHomeClient({ name, today, role }: { name: string; t
 
         {/* AI Insight */}
         {!loading && data && (
-          <div className="rounded-xl p-6" style={{ background: NAVY }}>
+          <div className="rounded-xl p-6" style={{ background: d.panel }}>
             <div className="flex items-start gap-4">
               <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 text-xl" style={{ background: `${ORANGE}25` }}>📊</div>
               <div>
@@ -582,7 +611,7 @@ export default function AdminHomeClient({ name, today, role }: { name: string; t
                 </div>
               </div>
             </div>
-            <p className="mt-4 pt-3" style={{ borderTop: `1px solid rgba(255,255,255,0.1)`, fontFamily: "'DM Sans', sans-serif", fontStyle: 'italic', fontSize: 9, color: NAVY_50 }}>
+            <p className="mt-4 pt-3" style={{ borderTop: `1px solid rgba(255,255,255,0.1)`, fontFamily: "'DM Sans', sans-serif", fontStyle: 'italic', fontSize: 9, color: d.panelSub }}>
               Confidential &amp; Proprietary
             </p>
           </div>

@@ -1,9 +1,8 @@
-﻿'use client'
+'use client'
 
 import { useState } from 'react'
 import Breadcrumb from '@/components/ui/Breadcrumb'
-import SearchableSelect from '@/components/ui/SearchableSelect'
-import { useMasterData } from '@/lib/masterDataContext'
+import { platformLabel } from '@/lib/platformCategories'
 
 const WIDE_LABELS = new Set([
   'source url', 'infringing url', 'video url', 'profile url',
@@ -11,10 +10,10 @@ const WIDE_LABELS = new Set([
 
 const INTERNET_FIELDS: [string, string[]][] = [
   ['Asset Name',        ['assetName',           'AssetName']],
-  ['Source URL',        ['sourceURL',            'SourceURL',         'sourceUrl']],
-  ['Source Domain',     ['sourceDomain',         'SourceDomain']],
-  ['Infringing URL',    ['infringingURL',        'InfringingURL',     'infringingUrl']],
-  ['Infringing Domain', ['infringingDomain',     'InfringingDomain']],
+  ['Host URL',          ['sourceURL',            'SourceURL',         'sourceUrl']],
+  ['Host Domain',       ['sourceDomain',         'SourceDomain']],
+  ['Linking URL',       ['infringingURL',        'InfringingURL',     'infringingUrl']],
+  ['Linking Domain',    ['infringingDomain',     'InfringingDomain']],
   ['Infringement Type', ['infringementType',     'InfringementType']],
   ['Quality of Print',  ['qualityOfPrint',       'QualityOfPrint']],
   ['Country',           ['country',              'Country']],
@@ -27,15 +26,15 @@ const INTERNET_FIELDS: [string, string[]][] = [
   ['DMCA Removal Time', ['dmcaRemovalTime']],
   ['Search Engine',     ['searchEngine']],
   ['Language',          ['audioLanguage',        'AudioLanguage']],
-  ['Video URL',         ['videoURL',             'VideoURL']],
+  ['Media File',        ['videoURL',             'VideoURL']],
 ]
 
 const SOCIAL_FIELDS: [string, string[]][] = [
   ['Asset Name',        ['assetName',       'AssetName']],
   ['Platform',          ['platform',        'Platform']],
-  ['Video URL',         ['videoURL',        'VideoURL']],
+  ['Media File',        ['videoURL',        'VideoURL']],
   ['Profile URL',       ['profileURL',      'ProfileURL']],
-  ['Video Title',       ['videoTitle',      'VideoTitle']],
+  ['Media File Title',  ['videoTitle',      'VideoTitle']],
   ['Like Count',        ['likeCount',       'LikeCount',       'like_count']],
   ['Subscriber Count',  ['subscriberCount', 'SubscriberCount', 'subscrbers']],
   ['Views Count',       ['viewCount',       'ViewCount',       'views']],
@@ -58,28 +57,43 @@ function pick(obj: any, keys: string[]): string {
   return ''
 }
 
-export default function SearchPage() {
-  const [url,      setUrl]      = useState('')
-  const [platform, setPlatform] = useState('')
-  const [isSrcUrl, setIsSrcUrl] = useState(false)
-  const [loading,  setLoading]  = useState(false)
-  const [result,   setResult]   = useState<any>(null)
-  const [error,    setError]    = useState('')
-  const [searched, setSearched] = useState('')
+/* The search is by URL alone — no platform is chosen, so the shape of the answer
+   has to be read off the record that comes back. Open Web rows are the ones that
+   carry a host/linking pair or the delisting columns; everything else is a
+   social/UGC row. */
+function looksOpenWeb(result: any): boolean {
+  if (!result) return false
+  if (/internet|open web/i.test(pick(result, ['platform', 'Platform']))) return true
+  const openWebOnly = [
+    ['sourceURL', 'SourceURL', 'sourceUrl'],
+    ['sourceDomain', 'SourceDomain'],
+    ['infringingURL', 'InfringingURL', 'infringingUrl'],
+    ['infringingDomain', 'InfringingDomain'],
+    ['delistingremovalstatus'],
+    ['dmcaremovalstatus'],
+    ['searchEngine'],
+  ]
+  return openWebOnly.some(keys => pick(result, keys) !== '')
+}
 
-  const { platforms } = useMasterData()
-  const isInternet = platform.toLowerCase() === 'internet'
+export default function SearchPage() {
+  const [url,     setUrl]     = useState('')
+  const [loading, setLoading] = useState(false)
+  const [result,  setResult]  = useState<any>(null)
+  const [error,   setError]   = useState('')
 
   async function handleSearch(e: React.FormEvent) {
     e.preventDefault()
-    if (!platform) { setError('Please select a platform.'); return }
-    setError(''); setResult(null); setLoading(true); setSearched(platform)
+    if (!url.trim()) { setError('Please enter a URL.'); return }
+    setError(''); setResult(null); setLoading(true)
     try {
+      // URL only. The platform and host/linking flags the endpoint also accepts
+      // are left unset, so it resolves the record from the URL itself.
       const res  = await fetch('/api/search', {
         credentials: 'include',
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ url, platform, isSrcUrl }),
+        body:    JSON.stringify({ url: url.trim() }),
       })
       const data = await res.json()
       if (data.success) setResult(data.data)
@@ -91,18 +105,24 @@ export default function SearchPage() {
     }
   }
 
-  const fields = (searched.toLowerCase() === 'internet' ? INTERNET_FIELDS : SOCIAL_FIELDS)
+  const fields = looksOpenWeb(result) ? INTERNET_FIELDS : SOCIAL_FIELDS
   const rows = result
-    ? fields.map(([label, keys]) => ({ label, value: pick(result, keys) }))
+    ? fields.map(([label, keys]) => {
+        const value = pick(result, keys)
+        // The platform the record names is shown by its display name too.
+        return { label, value: label === 'Platform' ? platformLabel(value) : value }
+      })
     : []
+  // Label the result with whatever the record says it is.
+  const foundPlatform = result ? platformLabel(pick(result, ['platform', 'Platform'])) : ''
 
   return (
     <div className="fade-in">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4 sm:mb-6">
         <Breadcrumb items={[{ label: 'Find Infringements', href: '/infringement' }, { label: 'Search & Retrieve' }]} />
         <div className="sm:text-right">
-          <h1 className="text-xl font-bold text-[#14254A]">Search & Retrieve</h1>
-          <p className="text-brand-muted text-sm">Search for infringement records across platforms.</p>
+          <h1 className="text-xl font-bold text-[#14254A]">Search &amp; Retrieve</h1>
+          <p className="text-brand-muted text-sm">Look up an infringement record by its URL.</p>
         </div>
       </div>
 
@@ -122,7 +142,7 @@ export default function SearchPage() {
                 </svg>
               </div>
               <div>
-                <div className="font-bold text-[#14254A] text-sm">Search & Retrieve</div>
+                <div className="font-bold text-[#14254A] text-sm">Search &amp; Retrieve</div>
                 <div className="text-[10px] text-gray-400">Query platform metadata</div>
               </div>
             </div>
@@ -130,44 +150,6 @@ export default function SearchPage() {
             <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Query Parameters</div>
 
             <form onSubmit={handleSearch} className="flex flex-col gap-4">
-              {/* Platform */}
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
-                  Platform <span className="text-red-400">*</span>
-                </label>
-                <SearchableSelect
-                  options={platforms}
-                  value={platform}
-                  onChange={val => { setPlatform(val); setIsSrcUrl(false) }}
-                  placeholder="Select a platform…"
-                  emptyLabel="— Select platform —"
-                />
-              </div>
-
-              {/* URL Type — internet only */}
-              {isInternet && (
-                <div>
-                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
-                    URL Type
-                  </label>
-                  <div className="flex p-1 gap-1 rounded-xl bg-gray-100">
-                    {[['linking', 'Infringing URL'], ['source', 'Source URL']].map(([val, lbl]) => (
-                      <button key={val} type="button"
-                        onClick={() => setIsSrcUrl(val === 'source')}
-                        className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                          (val === 'source') === isSrcUrl
-                            ? 'bg-white text-[#14254A] shadow-sm'
-                            : 'text-gray-400 hover:text-gray-600'
-                        }`}>
-                        {lbl}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="border-t border-gray-100" />
-
               {/* Target URL */}
               <div>
                 <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
@@ -181,6 +163,9 @@ export default function SearchPage() {
                   placeholder="https://example.com/content/…"
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14254A]/20 focus:border-[#14254A] resize-none"
                 />
+                <p className="text-[10px] text-gray-400 mt-1.5 leading-relaxed">
+                  The platform is resolved from the URL — nothing else to pick.
+                </p>
               </div>
 
               <button type="submit" disabled={loading}
@@ -204,7 +189,7 @@ export default function SearchPage() {
               </div>
               <p className="font-bold text-gray-800 text-base">Awaiting Input</p>
               <p className="text-sm text-gray-400 max-w-[240px] leading-relaxed">
-                Configure your parameters and run an analysis to extract platform metadata.
+                Paste a URL and run an analysis to extract its platform metadata.
               </p>
             </div>
           )}
@@ -231,10 +216,12 @@ export default function SearchPage() {
                   <p className="text-sm font-bold text-white">Analysis Results</p>
                   <p className="text-[11px] text-white/40 mt-0.5">{rows.length} metadata fields extracted</p>
                 </div>
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-400 text-white text-[11px] font-bold uppercase tracking-wide">
-                  <span className="w-1.5 h-1.5 rounded-full bg-white/60 inline-block" />
-                  {searched}
-                </span>
+                {foundPlatform && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-400 text-white text-[11px] font-bold uppercase tracking-wide">
+                    <span className="w-1.5 h-1.5 rounded-full bg-white/60 inline-block" />
+                    {foundPlatform}
+                  </span>
+                )}
               </div>
 
               <div className="p-5">

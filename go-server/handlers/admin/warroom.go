@@ -40,7 +40,8 @@ func WarRoomSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.UserID == 0 {
-			fail(w, 422, "userId is required"); return
+			fail(w, 422, "userId is required")
+			return
 		}
 		v := 0
 		if body.ComparisonEnabled {

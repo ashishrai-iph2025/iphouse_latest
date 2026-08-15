@@ -209,6 +209,7 @@ INSERT IGNORE INTO `dcp_email_event_types` (`key`, label, description, has_notif
 ('account_created',                 'Account Created',                      'Sent when an admin creates an account for a user.',                   0, '{{user_name}},{{email}},{{login_url}}',                                                      7,  1),
 ('infringement_client_confirmation','Takedown – Client Confirmation',       'Confirms a takedown batch submission to the client email.',           0, '{{name}},{{platform}},{{asset_name}},{{remarks}},{{url_count}},{{urls_list}},{{date}}',      8,  1),
 ('infringement_user_notification',  'Takedown – User Notification',         'Notifies the logged-in dashboard user of their submission.',          0, '{{user_name}},{{platform}},{{asset_name}},{{url_count}},{{urls_list}},{{date}}',             9,  1),
+('download_ready',                  'Download Request Ready',               'Sent when a requested data extraction finishes and can be downloaded.', 0, '{{user_name}},{{platform}},{{asset_name}},{{start_date}},{{end_date}},{{date_range}},{{date}}', 10, 1),
 ('custom',                          'Custom / Other',                       'Use for any custom or ad-hoc email template.',                        0, '{{custom_var_1}},{{custom_var_2}}',                                                          99, 1);
 
 -- ── Download requests ────────────────────────────────────────────────
@@ -224,6 +225,32 @@ CREATE TABLE IF NOT EXISTS `dcp_download_requests` (
   `download_url` TEXT DEFAULT NULL,
   `created_at`   DATETIME     DEFAULT CURRENT_TIMESTAMP,
   KEY `idx_dl_user` (`userId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ── URL upload attribution ───────────────────────────────────────────
+-- One MarkScan API token serves every login of a company, so the takedown
+-- history upstream comes back company-wide with no submitter on it. One row per
+-- submitted URL is written here so a plain client user's history can be filtered
+-- to their own work, while Client Admins and IP House staff still see all of it.
+-- Created at runtime too (handlers/requestledger.go) so existing deployments
+-- pick it up without a migration step. The download side of the same problem
+-- lives in download_request_watch / download_request_claim, created by
+-- handlers/download_watch.go.
+CREATE TABLE IF NOT EXISTS `url_upload_claim` (
+  `id`             BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `client_user_id` INT UNSIGNED  NOT NULL,
+  `login_id`       INT UNSIGNED  NOT NULL DEFAULT 0,
+  `email`          VARCHAR(191)  NOT NULL DEFAULT '',
+  `name`           VARCHAR(191)  NOT NULL DEFAULT '',
+  `platform`       VARCHAR(128)  NOT NULL DEFAULT '',
+  `asset_name`     VARCHAR(191)  NOT NULL DEFAULT '',
+  `url`            VARCHAR(2048) NOT NULL,
+  -- Indexable prefix of the normalised URL; matching is done in Go on the full
+  -- value, so a shared prefix never merges two distinct URLs.
+  `url_key`        VARCHAR(191)  NOT NULL DEFAULT '',
+  `created_at`     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY `idx_upload_claim_mine` (`client_user_id`, `login_id`, `created_at`),
+  KEY `idx_upload_claim_url` (`client_user_id`, `url_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ── Super Admins (isolated table, separate credentials) ─────────────

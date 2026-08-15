@@ -6,14 +6,14 @@ import { usePathname } from '@/lib/router'
 import { useSession, signOut } from '@/lib/auth-client'
 import { useTheme } from '@/lib/ThemeContext'
 import { useCustomizer, NAVBAR_HEX } from '@/lib/ThemeCustomizerContext'
-import { NAV_ITEMS, isNavItemActive, isSidebarLayout, isApiIndependentItem, isItemAllowed, navLabel, navOrderOf, dropdownFor, type NavItem, type NavDropdownItem } from '@/lib/navItems'
+import { NAV_ITEMS, CLIENT_ADMIN_NAV_ITEM, isNavItemActive, isSidebarLayout, isApiIndependentItem, isItemAllowed, navLabel, navOrderOf, dropdownFor, type NavItem, type NavDropdownItem } from '@/lib/navItems'
 import { useModuleAccess } from '@/lib/moduleAccess'
+import NotificationBell from '@/components/shared/NotificationBell'
+import CountryPicker from '@/components/shared/CountryPicker'
 
 function isActive(item: NavItem, pathname: string): boolean {
   return isNavItemActive(item, pathname)
 }
-
-interface Notification { notificationId: number; message: string; is_read: number }
 
 export default function ClientNavbar() {
   const pathname = usePathname()
@@ -22,10 +22,8 @@ export default function ClientNavbar() {
 
   const [mobileOpen,   setMobileOpen]   = useState(false)
   const [profileOpen,  setProfileOpen]  = useState(false)
-  const [notifOpen,    setNotifOpen]    = useState(false)
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
 
-  const [notifications, setNotifications] = useState<Notification[]>([])
 
   // Nav permissions + account count — shared, sessionStorage-cached (see
   // lib/moduleAccess) so a refresh paints the granted nav on the first frame.
@@ -47,10 +45,7 @@ export default function ClientNavbar() {
   const iconsOnly    = !sidebarMode && (sidebarSize === 'compact' || navLayout === 'mini')
   const hoverLabels  = !sidebarMode && sidebarSize === 'hover'
   const profileRef  = useRef<HTMLDivElement>(null)
-  const notifRef    = useRef<HTMLDivElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
-
-  const unread = notifications.filter(n => !n.is_read).length
 
   // Live token availability from /api/user/nav wins; the session's apiAccess
   // claim (frozen at select-login) is only the fallback.
@@ -84,17 +79,17 @@ export default function ClientNavbar() {
     })
     .sort((a, b) => navOrderOf(a, allowedModules) - navOrderOf(b, allowedModules))
 
-  useEffect(() => {
-    fetch('/api/notifications', { credentials: 'include' })
-      .then(r => r.json())
-      .then(d => { if (d.success) setNotifications(d.notifications || []) })
-      .catch(() => {})
-  }, [])
+  const visibleItems: NavItem[] = navItems.filter(isNavAllowed)
+
+  // Client Admin's entry lives in the profile dropdown below Switch Account,
+  // not in the nav tabs: its grant is per person (a session claim), not per
+  // company, so it can't come from allowedModules — and the dropdown is the one
+  // piece of chrome shared by the horizontal and sidebar layouts.
+  const showAccessDetails = !!user?.clientAdmin
 
   useEffect(() => {
     function handle(e: MouseEvent) {
       if (profileRef.current  && !profileRef.current.contains(e.target as Node))  setProfileOpen(false)
-      if (notifRef.current    && !notifRef.current.contains(e.target as Node))     setNotifOpen(false)
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node))  setOpenDropdown(null)
     }
     document.addEventListener('mousedown', handle)
@@ -103,11 +98,6 @@ export default function ClientNavbar() {
 
   // close mobile menu on route change
   useEffect(() => { setMobileOpen(false) }, [pathname])
-
-  async function markAllRead() {
-    await fetch('/api/notifications', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
-    setNotifications(n => n.map(x => ({ ...x, is_read: 1 })))
-  }
 
   return (
     <header className="sticky top-0 z-40 shadow-sm" style={{ background: navBg || undefined }}
@@ -127,6 +117,13 @@ export default function ClientNavbar() {
 
           {/* Right: notifications + profile + mobile hamburger */}
           <div className="flex items-center gap-1">
+
+            {/* Notifications — the server scopes the feed: a Client Admin
+                sees their whole company, everyone else sees their own actions. */}
+            <NotificationBell variant="client" tone={navIsColored ? 'light' : 'dark'} />
+
+            {/* Which clock the portal reads UTC data in — see lib/timezone.tsx */}
+            <CountryPicker tone={navIsColored ? 'light' : 'dark'} />
 
             {/* Dark/Light toggle */}
             <button onClick={toggle} className={`p-2 rounded-lg transition-colors ${navIsColored ? 'text-white hover:bg-white/10' : 'text-[#14254A] dark:text-white hover:bg-gray-100 dark:hover:bg-white/10'}`} title={theme === 'dark' ? 'Switch to light' : 'Switch to dark'}>
@@ -188,6 +185,13 @@ export default function ClientNavbar() {
                       Switch Account
                     </Link>
                   )}
+                  {showAccessDetails && (
+                    <Link to={CLIENT_ADMIN_NAV_ITEM.href} onClick={() => setProfileOpen(false)}
+                      className="flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
+                      {CLIENT_ADMIN_NAV_ITEM.icon}
+                      {CLIENT_ADMIN_NAV_ITEM.label}
+                    </Link>
+                  )}
                   <button onClick={() => signOut({ callbackUrl: '/login' })}
                     className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors">
                     <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -223,7 +227,7 @@ export default function ClientNavbar() {
         <div className={!navBg ? 'bg-white dark:bg-[#14254A]' : ''}>
         <div className="w-full px-6">
           <nav className="flex items-center gap-0" ref={dropdownRef}>
-            {navItems.filter(isNavAllowed).map(item => {
+            {visibleItems.map(item => {
               const active = isActive(item, pathname)
               const iconCls = active ? (navIsColored ? 'text-white' : 'text-[#FC934C]') : (navIsColored ? 'text-white/60' : 'text-gray-400')
 
@@ -293,7 +297,7 @@ export default function ClientNavbar() {
       {/* Mobile menu */}
       {mobileOpen && (
         <div className="md:hidden border-t border-gray-100 dark:border-white/10 bg-white dark:bg-[#14254A] px-4 py-3 space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto">
-          {navItems.filter(isNavAllowed).map(item => {
+          {visibleItems.map(item => {
             const active = isActive(item, pathname)
             if (item.dropdown) {
               const subItems = allowedDropdownItems(item)

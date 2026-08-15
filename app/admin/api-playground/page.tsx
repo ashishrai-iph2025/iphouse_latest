@@ -119,9 +119,6 @@ const IPHOUSE_GROUPS: Group[] = [
       { method: 'DELETE', path: '/api/admin/module-permissions', desc: 'Revoke a module grant.', auth: 'admin' },
       { method: 'GET',    path: '/api/admin/user-module-permissions', desc: 'Per-user module permission map.', auth: 'admin' },
       { method: 'POST',   path: '/api/admin/user-module-permissions', desc: 'Set per-user module permissions.', auth: 'admin' },
-      { method: 'GET',    path: '/api/admin/master-api', desc: 'List master API methods/URLs.', auth: 'admin' },
-      { method: 'POST',   path: '/api/admin/master-api', desc: 'Create a master API method.', auth: 'admin' },
-      { method: 'PUT',    path: '/api/admin/master-api', desc: 'Update a master API method.', auth: 'admin' },
     ],
   },
   {

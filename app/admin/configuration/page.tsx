@@ -48,29 +48,44 @@ export default function ConfigurationPage() {
         description="Manage system settings, API access, credentials, and permissions."
       />
 
-      {/* Cards grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
+      {/* Cards grid — capped at 4 across. items-stretch + h-full keeps every
+          card in a row the same height regardless of description length, so the
+          "Open →" affordance sits on a consistent baseline. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 items-stretch">
         {cards.map(card => (
           <Link
             key={card.href}
             to={card.href}
-            className="group bg-white rounded-2xl border border-gray-100 shadow-card hover:shadow-md hover:-translate-y-1 transition-all duration-200 p-5 flex flex-col gap-3 no-underline"
+            className="group relative h-full bg-white rounded-2xl border border-gray-100 shadow-card hover:shadow-lg hover:-translate-y-1 transition-all duration-200 p-5 flex flex-col gap-3.5 no-underline overflow-hidden"
           >
-            <div
-              className="w-11 h-11 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
-              style={{ background: `${card.color}15` }}
-            >
-              {card.icon}
-            </div>
-            <div className="min-w-0">
-              <h3 className="font-semibold text-sm text-[#14254A] leading-snug group-hover:text-[#0078D4] transition-colors">
+            {/* Accent rail — picks up the module's colour on hover */}
+            <span
+              className="absolute left-0 top-0 bottom-0 w-1 opacity-0 group-hover:opacity-100 transition-opacity"
+              style={{ background: card.color }}
+              aria-hidden
+            />
+            <div className="flex items-start gap-3">
+              <div
+                className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl flex-shrink-0"
+                style={{ background: `${card.color}15` }}
+              >
+                {card.icon}
+              </div>
+              <h3 className="font-semibold text-sm text-[#14254A] leading-snug pt-1 group-hover:text-[#0078D4] transition-colors">
                 {card.title}
               </h3>
-              <p className="text-xs text-gray-500 mt-1 leading-relaxed">{card.desc}</p>
             </div>
-            <div className="mt-auto pt-1">
+            <p className="text-xs text-gray-500 leading-relaxed">{card.desc}</p>
+            <div className="mt-auto pt-1 flex items-center gap-1">
               <span className="text-xs font-semibold transition-colors" style={{ color: card.color }}>
-                Open →
+                Open
+              </span>
+              <span
+                className="text-xs font-semibold transition-transform group-hover:translate-x-0.5"
+                style={{ color: card.color }}
+                aria-hidden
+              >
+                →
               </span>
             </div>
           </Link>

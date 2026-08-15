@@ -3,11 +3,39 @@ package admin
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	ipauth "github.com/ip-house/iphouse-api/auth"
 	"github.com/ip-house/iphouse-api/db"
 	"github.com/ip-house/iphouse-api/middleware"
 )
+
+/*
+isUUID36 checks the canonical 36-character form, 8-4-4-4-12.
+
+Duplicated from handlers.validClientID rather than imported: this package is
+imported BY handlers' caller, and reaching back into handlers for one predicate
+would couple the two for no gain. The rule is a fixed shape, not a policy that
+can drift.
+*/
+func isUUID36(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 // GET /api/admin/clients
 // POST /api/admin/clients
@@ -34,11 +62,17 @@ func clientsList(w http.ResponseWriter, r *http.Request) {
 		ok(w, map[string]any{"success": true, "items": rows})
 		return
 	}
-	rows, _ := db.Query("SELECT userId, name, email, role, deleted, createdOn, userLogo, companyLogo FROM dcp_user WHERE (role IS NULL OR role != 1) ORDER BY userId DESC")
-	if rows == nil { rows = []map[string]any{} }
+	// ClientID_MS3 is the analytics client this company reads in Reports. Listed
+	// here because the edit form is populated from this response.
+	rows, _ := db.Query("SELECT userId, name, email, role, deleted, createdOn, userLogo, companyLogo, ClientID_MS3 FROM dcp_user WHERE (role IS NULL OR role != 1) ORDER BY userId DESC")
+	if rows == nil {
+		rows = []map[string]any{}
+	}
 	activeCount := 0
 	for _, r := range rows {
-		if intVal(r["deleted"]) == 0 { activeCount++ }
+		if intVal(r["deleted"]) == 0 {
+			activeCount++
+		}
 	}
 	ok(w, map[string]any{"success": true, "clients": rows, "totalActive": activeCount})
 }
@@ -47,11 +81,13 @@ func clientsList(w http.ResponseWriter, r *http.Request) {
 func ClientDashboard(w http.ResponseWriter, r *http.Request) {
 	uid := r.URL.Query().Get("userId")
 	if uid == "" {
-		fail(w, 400, "userId is required"); return
+		fail(w, 400, "userId is required")
+		return
 	}
 	user, err := db.QueryOne("SELECT name, userLogo, companyLogo FROM dcp_user WHERE userId = ? AND deleted = 0 LIMIT 1", uid)
 	if err != nil || user == nil {
-		fail(w, 404, "Client not found"); return
+		fail(w, 404, "Client not found")
+		return
 	}
 	modules, _ := db.Query(`
 		SELECT md.moduleId, md.moduleName, md.moduleIcon, mp.link, mp.noLinkMsg, mp.active, mp.`+"`default`"+`
@@ -77,17 +113,20 @@ func clientsCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.Name == "" || body.Email == "" || body.Username == "" || body.Password == "" {
-		fail(w, 422, "Required: name, email, username, password"); return
+		fail(w, 422, "Required: name, email, username, password")
+		return
 	}
 
 	existing, _ := db.QueryOne("SELECT userId FROM dcp_user WHERE email = ? LIMIT 1", body.Email)
 	if existing != nil {
-		ok(w, map[string]any{"success": false, "error": "Email already exists"}); return
+		ok(w, map[string]any{"success": false, "error": "Email already exists"})
+		return
 	}
 
 	hashed, err := ipauth.HashPassword(body.Password)
 	if err != nil {
-		fail(w, 500, "Hash error"); return
+		fail(w, 500, "Hash error")
+		return
 	}
 
 	// SECURITY: New client accounts MUST be created with role=0 (lowest privilege).
@@ -99,7 +138,8 @@ func clientsCreate(w http.ResponseWriter, r *http.Request) {
 		body.Name, body.Email, body.APIUserName, body.APIPassword,
 	)
 	if err != nil {
-		fail(w, 500, err.Error()); return
+		fail(w, 500, err.Error())
+		return
 	}
 	db.Exec(
 		"INSERT INTO dcp_user_login (userId, first_name, login_username, login_password, login_type, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 1, UTC_TIMESTAMP(), UTC_TIMESTAMP())",
@@ -116,14 +156,30 @@ func clientsUpdate(w http.ResponseWriter, r *http.Request) {
 		APIUserName string `json:"apiUserName"`
 		APIPassword string `json:"apiPassword"`
 		Deleted     int    `json:"deleted"`
+		// The analytics client this company's Reports read. See
+		// handlers.ClientIDColumn — a wrong value here shows one company another
+		// company's data, which is why it is validated rather than trusted.
+		ClientIDMS3 string `json:"clientIdMs3"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.UserID == 0 {
-		fail(w, 422, "userId required"); return
+		fail(w, 422, "userId required")
+		return
+	}
+	cid := strings.Trim(strings.TrimSpace(body.ClientIDMS3), "{}\"'")
+	if cid != "" && !isUUID36(cid) {
+		fail(w, 422, "Reporting Client ID must be a 36-character UUID")
+		return
+	}
+	// NULL rather than '' when cleared, so "never set" and "deliberately blank"
+	// are not two different empty values to test for later.
+	var stored any
+	if cid != "" {
+		stored = cid
 	}
 	db.Exec(
-		"UPDATE dcp_user SET name=?, email=?, api_user_name=?, api_password=?, deleted=?, updated_at=UTC_TIMESTAMP() WHERE userId=?",
-		body.Name, body.Email, body.APIUserName, body.APIPassword, body.Deleted, body.UserID,
+		"UPDATE dcp_user SET name=?, email=?, api_user_name=?, api_password=?, deleted=?, ClientID_MS3=?, updated_at=UTC_TIMESTAMP() WHERE userId=?",
+		body.Name, body.Email, body.APIUserName, body.APIPassword, body.Deleted, stored, body.UserID,
 	)
 	ok(w, map[string]any{"success": true})
 }
@@ -134,7 +190,8 @@ func clientsDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.UserID == 0 {
-		fail(w, 422, "userId required"); return
+		fail(w, 422, "userId required")
+		return
 	}
 	db.Exec("UPDATE dcp_user SET deleted = 1, updated_at = UTC_TIMESTAMP() WHERE userId = ?", body.UserID)
 	ok(w, map[string]any{"success": true})

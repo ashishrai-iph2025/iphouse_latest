@@ -29,6 +29,12 @@ type Claims struct {
 	// who could read the cookie value. The token is now held server-side (in-memory
 	// cache) and re-derived from the client's stored credentials on a cache miss.
 	APIAccess bool `json:"apiAccess"` // true when a Markscan token was obtained → full data access
+	// ClientAdmin marks this login as an administrator of ITS OWN client company
+	// (dcp_user_login.is_client_admin) — it may list and enable/disable the other
+	// logins attached to the same userId. It grants nothing outside that company
+	// and is independent of Role, which stays 0 for these users so none of the
+	// role >= 1 staff gates open.
+	ClientAdmin bool `json:"clientAdmin,omitempty"`
 	// Impersonation: when an Admin/Super Admin is viewing the platform AS a
 	// client, these carry the original staff identity so the session can be
 	// restored on exit. Zero/empty on a normal session.

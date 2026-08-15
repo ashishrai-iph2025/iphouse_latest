@@ -1,6 +1,7 @@
 'use client'
 
 import { createContext, useContext, useEffect, useState } from 'react'
+import { platformLabel } from '@/lib/platformCategories'
 
 export interface MasterOption { key: string; label: string }
 
@@ -28,7 +29,10 @@ export function MasterDataProvider({ children }: { children: React.ReactNode }) 
           setPlatforms(d.platforms.map((p: any) => {
             const name = typeof p === 'string' ? p
               : (p.platformName ?? p.platform_name ?? p.name ?? p.platform ?? p.PlatformName ?? '')
-            return { key: String(name), label: String(name) }
+            // key stays the upstream name — it is what every API call sends.
+            // label is what the user reads, so "Internet" shows as "Open Web"
+            // in every picker without each page having to remember to map it.
+            return { key: String(name), label: platformLabel(String(name)) }
           }).filter((p: any) => p.key))
         }
         if (d.assets?.length) {

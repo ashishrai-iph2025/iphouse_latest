@@ -7,7 +7,13 @@ import { Link } from 'react-router-dom'
 interface Client {
   userId: number; name: string; email: string
   deleted: number; api_user_name: string; api_password: string
+  /** The analytics client this company's Reports read. */
+  ClientID_MS3?: string | null
 }
+
+/** Canonical 36-character UUID, 8-4-4-4-12. Mirrors the server's check so a
+    mistyped id is caught before a round trip, not instead of one. */
+const UUID36 = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
 export default function EditClientForm({ client }: { client: Client }) {
   const router = useRouter()
@@ -17,6 +23,7 @@ export default function EditClientForm({ client }: { client: Client }) {
     apiUserName: client.api_user_name || '',
     apiPassword: '',
     deleted:     client.deleted,
+    clientIdMs3: client.ClientID_MS3 || '',
   })
   const [error,   setError]   = useState('')
   const [saving,  setSaving]  = useState(false)
@@ -27,9 +34,17 @@ export default function EditClientForm({ client }: { client: Client }) {
   }
 
   async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault(); setError(''); setSaving(true)
+    e.preventDefault(); setError('')
+    // Caught here as well as on the server: a wrong id does not fail loudly, it
+    // quietly points this company's report at nothing — or at somebody else.
+    const cid = form.clientIdMs3.trim().replace(/^[{"']|[}"']$/g, '')
+    if (cid && !UUID36.test(cid)) {
+      setError('Reporting Client ID must be a 36-character UUID, e.g. 3fa85f64-5717-4562-b3fc-2c963f66afa6')
+      return
+    }
+    setSaving(true)
     try {
-      const payload: any = { userId: client.userId, ...form }
+      const payload: any = { userId: client.userId, ...form, clientIdMs3: cid }
       if (!form.apiPassword) delete payload.apiPassword
       const res  = await fetch('/api/admin/clients', {
         credentials: 'include',
@@ -78,6 +93,28 @@ export default function EditClientForm({ client }: { client: Client }) {
                 className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
           </div>
+        </div>
+
+        {/* Reporting. Separate from the API credentials above because it answers
+            a different question: those say how we fetch this client's data from
+            MarkScan, this says which client the analytics warehouse knows them
+            as — and it is what the Reports page is scoped by. */}
+        <div>
+          <h3 className="font-semibold text-gray-700 mb-3 text-sm">Reporting</h3>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Reporting Client ID
+            <span className="ml-1 text-xs font-normal text-brand-muted">(ClientID_MS3)</span>
+          </label>
+          <input autoComplete="off" name="clientIdMs3" type="text" value={form.clientIdMs3}
+            onChange={handle} spellCheck={false}
+            placeholder="3fa85f64-5717-4562-b3fc-2c963f66afa6"
+            className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm font-mono
+              focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <p className="text-xs text-brand-muted mt-1.5 leading-relaxed">
+            The 36-character analytics client id this company&apos;s Reports read. Leave blank and
+            its logins are told the report is not set up yet — they are never shown an empty one,
+            which would read as “no infringements found”.
+          </p>
         </div>
 
         <div>

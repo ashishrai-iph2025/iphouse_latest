@@ -13,15 +13,30 @@ interface Props {
   disabled?:    boolean
   dark?:        boolean
   invalid?:     boolean
+  /** What the options ARE, for the "3 selected" summary. Defaults to "assets"
+      because that is what this control was written for, but it is used for
+      warehouse tables and anything else now — and "2 assets selected" under a
+      list of table names is simply wrong. */
+  noun?:        [singular: string, plural: string]
 }
 
 export default function MultiSearchableSelect({
   options, values, onChange,
   placeholder = 'Select…', disabled = false, dark: darkProp, invalid = false,
+  noun = ['asset', 'assets'],
 }: Props) {
   const [open,  setOpen]  = useState(false)
   const [query, setQuery] = useState('')
   const [rect,  setRect]  = useState<DOMRect | null>(null)
+  /* Which row the cursor is on. Held in state rather than mutated onto the
+     element, so the row under the cursor and the rows already ticked are drawn
+     by one rule instead of a hover handler racing an inline style. */
+  const [hot, setHot] = useState('')
+
+  /* Matches the single-select: the fill says "under the cursor", the tick says
+     "chosen". Two facts, two channels. */
+  const HOT = '#FC934C'
+  const HOT_INK = '#ffffff'
 
   const [autoDark, setAutoDark] = useState(false)
   useEffect(() => {
@@ -87,7 +102,7 @@ export default function MultiSearchableSelect({
   const triggerLabel =
     values.length === 0 ? null
     : values.length === 1 ? (options.find(o => o.key === values[0])?.label ?? values[0])
-    : `${values.length} assets selected`
+    : `${values.length} ${values.length === 1 ? noun[0] : noun[1]} selected`
 
   const borderColor = (focused: boolean) =>
     invalid   ? '#ef4444'
@@ -162,36 +177,44 @@ export default function MultiSearchableSelect({
       </div>
 
       {/* Option list */}
-      <ul style={{ maxHeight: 240, overflowY: 'auto', padding: '4px 0', margin: 0, listStyle: 'none' }}>
+      <ul style={{ maxHeight: 260, overflowY: 'auto', padding: 6, margin: 0, listStyle: 'none' }}>
         {filtered.length === 0 ? (
-          <li style={{ padding: '16px 12px', textAlign: 'center', fontSize: 14, color: dark ? 'rgba(255,255,255,0.3)' : '#9ca3af' }}>
-            No results
+          <li style={{ padding: '18px 12px', textAlign: 'center', fontSize: 13, color: dark ? 'rgba(255,255,255,0.3)' : '#9ca3af' }}>
+            Nothing matches “{query}”
           </li>
         ) : filtered.map(o => {
           const checked = valSet.has(o.key)
+          const on = hot === o.key
           return (
             <li key={o.key}>
               <button
                 type="button"
                 onClick={() => toggleItem(o.key)}
+                onMouseEnter={() => setHot(o.key)}
+                onMouseLeave={() => setHot(cur => cur === o.key ? '' : cur)}
+                title={o.label}
                 style={{
-                  width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 14,
-                  border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
-                  background: checked ? (dark ? 'rgba(20,37,74,0.3)' : '#eff6ff') : 'transparent',
-                  color: checked ? (dark ? '#fff' : '#14254A') : (dark ? 'rgba(255,255,255,0.78)' : '#374151'),
+                  width: '100%', textAlign: 'left', padding: '9px 12px', fontSize: 14,
+                  border: 'none', cursor: 'pointer', borderRadius: 8,
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  background: on ? HOT : 'transparent',
+                  color: on ? HOT_INK : (dark ? 'rgba(255,255,255,0.86)' : '#14254A'),
                   fontWeight: checked ? 600 : 400,
+                  transition: 'background 0.12s',
                 }}
-                onMouseEnter={e => { if (!checked) (e.currentTarget as HTMLElement).style.background = dark ? 'rgba(255,255,255,0.06)' : '#f9fafb' }}
-                onMouseLeave={e => { if (!checked) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
               >
                 <span style={{
                   width: 16, height: 16, flexShrink: 0, borderRadius: 4,
-                  border: checked ? 'none' : `2px solid ${dark ? 'rgba(255,255,255,0.3)' : '#d1d5db'}`,
-                  background: checked ? '#14254A' : 'transparent',
+                  border: checked ? 'none' : `2px solid ${
+                    on ? 'rgba(255,255,255,0.75)' : dark ? 'rgba(255,255,255,0.3)' : '#d1d5db'}`,
+                  // On an orange row the tick inverts, so a ticked row stays
+                  // legible as ticked when the cursor is over it.
+                  background: checked ? (on ? '#fff' : '#14254A') : 'transparent',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.1s',
                 }}>
                   {checked && (
-                    <svg style={{ width: 10, height: 10, color: '#fff' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                    <svg style={{ width: 10, height: 10, color: on ? HOT : '#fff' }}
+                      fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                     </svg>
                   )}

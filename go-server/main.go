@@ -13,6 +13,7 @@ import (
 	"github.com/ip-house/iphouse-api/handlers"
 	"github.com/ip-house/iphouse-api/handlers/admin"
 	"github.com/ip-house/iphouse-api/middleware"
+	"github.com/ip-house/iphouse-api/notify"
 	"github.com/ip-house/iphouse-api/store"
 )
 
@@ -30,6 +31,13 @@ func main() {
 		log.Fatalf("[main] DB connect failed: %v", err)
 	}
 	db.Migrate()
+	// Admin notification tables — created up front so the first bell read
+	// never races the first event write.
+	notify.EnsureSchema()
+	// The client-facing Reports module and its portal→warehouse client mapping.
+	// Created up front so an admin can grant the module and map a client without
+	// having to open the report first to bring the tables into existence.
+	handlers.EnsureReportsAccess()
 
 	// ── Startup assertions: security hardening ────────────────────────────────
 	// Assert: new client accounts are always created with role=0 (lowest privilege)
@@ -42,6 +50,9 @@ func main() {
 
 	// Background scheduler for automatic database backups.
 	handlers.StartBackupScheduler()
+	// Watches each client's MarkScan download queue and notifies when an
+	// extraction flips from pending to ready.
+	handlers.StartDownloadWatcher()
 
 	mux := http.NewServeMux()
 
@@ -60,6 +71,11 @@ func main() {
 	mux.Handle("POST /api/auth/send-otp", rl(handlers.SendOTP))
 	mux.Handle("POST /api/auth/verify-otp", rl(handlers.VerifyOTP))
 	mux.Handle("POST /api/auth/select-login", rl(handlers.SelectLogin))
+	// Does an account exist for this address? Asked by the forgot-password form
+	// while the reader is still in the field. Rate limited like the rest of the
+	// auth routes — it answers the same question the reset endpoint already
+	// does, so it must be no cheaper to ask repeatedly.
+	mux.Handle("POST /api/auth/check-email", rl(handlers.CheckEmail))
 	mux.Handle("POST /api/auth/forgot-password", rl(handlers.ForgotPassword))
 	mux.Handle("POST /api/auth/reset-password", rl(handlers.ResetPassword))
 	mux.Handle("POST /api/auth/verify-reset-otp", rl(handlers.VerifyResetOTP))
@@ -73,12 +89,20 @@ func main() {
 		return middleware.JWT(http.HandlerFunc(h))
 	}
 
+	// Which country the caller appears to be in, for rendering UTC timestamps in
+	// their own clock. Behind auth like everything else — it reveals nothing a
+	// caller does not already know about itself, but there is no reason to
+	// answer it for anyone who is not signed in.
+	mux.Handle("GET /api/geo/country", auth(handlers.GeoCountry))
+
 	mux.Handle("GET /api/auth/session", auth(handlers.Session))
 	mux.Handle("GET /api/auth/switch-account", auth(handlers.SwitchAccount))
 	mux.Handle("POST /api/auth/switch-account", auth(handlers.SwitchAccount))
 
 	// Client routes
 	mux.Handle("POST /api/infringement", auth(handlers.Infringement))
+	// One search across every platform in a category, results kept per platform.
+	mux.Handle("POST /api/infringement/category", auth(handlers.InfringementByCategory))
 	mux.Handle("POST /api/warroom", auth(handlers.WarRoom))
 	mux.Handle("POST /api/warroom/stream", auth(handlers.WarRoomStream))
 	mux.Handle("GET /api/warroom/assets", auth(handlers.WarRoomAssets))
@@ -108,6 +132,20 @@ func main() {
 	mux.Handle("POST /api/data-sharing/upload", auth(handlers.DataSharingUpload))
 	mux.Handle("GET /api/data-sharing/history", auth(handlers.DataSharingHistory))
 
+	// Client Admin: company-scoped user administration for a client login that
+	// holds the grant. Authorization is inside the handler (claims.ClientAdmin,
+	// or staff), because this is NOT a role >= 1 route.
+	mux.Handle("GET /api/client-admin/users", auth(handlers.ClientAdminUsers))
+	mux.Handle("PUT /api/client-admin/users", auth(handlers.ClientAdminUsers))
+	mux.Handle("GET /api/client-admin/activity", auth(handlers.ClientAdminActivity))
+
+	// Notification bell — available to every authenticated user. The handler
+	// scopes the feed by role (staff: all clients / Client Admin: own company /
+	// client user: own actions), so it is plain `auth`, not an admin route.
+	mux.Handle("GET /api/notifications/feed", auth(handlers.NotificationFeed))
+	mux.Handle("POST /api/notifications/feed/read", auth(handlers.NotificationFeedRead))
+	mux.Handle("GET /api/notifications/feed/{id}", auth(handlers.NotificationDetail))
+
 	// ── Admin routes: requires JWT + role >= 1 ────────────────────────────────
 	adminAuth := func(h http.HandlerFunc) http.Handler {
 		return middleware.JWT(middleware.RequireAdmin(http.HandlerFunc(h)))
@@ -132,6 +170,9 @@ func main() {
 	mux.Handle("GET /api/admin/users", adminAuth(admin.Users))
 	mux.Handle("POST /api/admin/users", adminAuth(admin.Users))
 	mux.Handle("PUT /api/admin/users", adminAuth(admin.Users))
+
+	mux.Handle("GET /api/admin/client-admins", cfg("client-admins", admin.ClientAdmins))
+	mux.Handle("PUT /api/admin/client-admins", cfg("client-admins", admin.ClientAdmins))
 
 	mux.Handle("GET /api/admin/modules", cfg("modules", admin.Modules))
 	mux.Handle("POST /api/admin/modules", cfg("modules", admin.Modules))
@@ -215,10 +256,6 @@ func main() {
 	mux.Handle("GET /api/admin/warroom-settings", cfg("war-room-assets", admin.WarRoomSettings))
 	mux.Handle("POST /api/admin/warroom-settings", cfg("war-room-assets", admin.WarRoomSettings))
 
-	mux.Handle("GET /api/admin/master-api", cfg("master-api", admin.MasterAPI))
-	mux.Handle("POST /api/admin/master-api", cfg("master-api", admin.MasterAPI))
-	mux.Handle("PUT /api/admin/master-api", cfg("master-api", admin.MasterAPI))
-
 	mux.Handle("GET /api/admin/activity-stats", adminAuth(admin.ActivityStats))
 	mux.Handle("GET /api/admin/tracking", cfg("tracking", admin.Tracking))
 	mux.Handle("POST /api/admin/tracking", cfg("tracking", admin.Tracking))
@@ -236,6 +273,52 @@ func main() {
 
 	// War Room: admin generates a selected client's MarkScan token + asset list.
 	mux.Handle("POST /api/warroom/client-token", adminAuth(handlers.WarRoomClientToken))
+
+	// Reports — reads the analytics warehouse (db/reports.go), a separate DB.
+	// adminAuth, not auth: the report is keyed on an analytics ClientId supplied
+	// by the caller, and until a portal-login → warehouse-client mapping exists,
+	// a client login could ask for another company's numbers. See reports.go.
+	// Diagnostics stay staff-only: they describe the warehouse, not a client's
+	// data, and nothing a client login could act on is in them.
+	mux.Handle("GET /api/reports/health", adminAuth(handlers.ReportsHealth))
+	// The report itself is open to a client login that holds the Reports module.
+	// The handlers force the warehouse client from the session for anyone who is
+	// not staff — see reportScope in reportclientmap.go — so the clientId in the
+	// query string is only ever honoured for staff.
+	mux.Handle("GET /api/reports/scope", auth(handlers.ReportsScope))
+	mux.Handle("GET /api/reports/sections", auth(handlers.ReportsSections))
+	// Diagnostic: which columns in a report spec do not exist upstream.
+	mux.Handle("GET /api/reports/spec-check", adminAuth(handlers.ReportsSpecCheck))
+	mux.Handle("GET /api/reports/options", auth(handlers.ReportsOptions))
+	mux.Handle("GET /api/reports/data", auth(handlers.ReportsData))
+	// The chart shapes this login has kept for itself. A reading preference, so
+	// it is scoped to the caller's own login and needs no admin grant beyond the
+	// Reports module the handlers already check.
+	mux.Handle("GET /api/reports/viz-prefs", auth(handlers.ReportVizPrefsGet))
+	mux.Handle("PUT /api/reports/viz-prefs", auth(handlers.ReportVizPrefsSave))
+	// Which warehouse client a portal client reads. Staff-only, and the reason
+	// the two above can be opened at all.
+	mux.Handle("GET /api/admin/report-client-map", cfg("report-config", handlers.ReportClientMapList))
+	mux.Handle("PUT /api/admin/report-client-map", cfg("report-config", handlers.ReportClientMapSave))
+
+	// Report data-source configuration and per-login platform access. Behind the
+	// `report-config` Configuration module grant, like the other admin config
+	// endpoints — these decide what every report reads and who may read it.
+	mux.Handle("GET /api/admin/report-config", cfg("report-config", handlers.ReportConfigList))
+	mux.Handle("PUT /api/admin/report-config", cfg("report-config", handlers.ReportConfigSave))
+	mux.Handle("GET /api/admin/report-config/tables", cfg("report-config", handlers.ReportConfigTables))
+	mux.Handle("GET /api/admin/report-config/inventory", cfg("report-config", handlers.ReportConfigInventory))
+	mux.Handle("GET /api/admin/report-platforms", cfg("report-config", handlers.ReportPlatformsList))
+	mux.Handle("PUT /api/admin/report-platforms", cfg("report-config", handlers.ReportPlatformSave))
+	mux.Handle("DELETE /api/admin/report-platforms", cfg("report-config", handlers.ReportPlatformDelete))
+	mux.Handle("PUT /api/admin/report-platforms/reorder", cfg("report-config", handlers.ReportPlatformReorder))
+	// Panel layout — where each visual sits on a report and how wide it is.
+	mux.Handle("GET /api/admin/report-layout", cfg("report-config", handlers.ReportLayoutGet))
+	mux.Handle("PUT /api/admin/report-layout", cfg("report-config", handlers.ReportLayoutSave))
+	mux.Handle("DELETE /api/admin/report-layout", cfg("report-config", handlers.ReportLayoutReset))
+	mux.Handle("GET /api/admin/report-layout/clients", cfg("report-config", handlers.ReportLayoutClients))
+	mux.Handle("GET /api/admin/report-access", cfg("report-config", handlers.ReportAccessList))
+	mux.Handle("PUT /api/admin/report-access", cfg("report-config", handlers.ReportAccessSave))
 
 	mux.Handle("GET /api/admin/registrations", adminAuth(admin.Registrations))
 	mux.Handle("PUT /api/admin/registrations", adminAuth(admin.Registrations))
@@ -298,9 +381,9 @@ func main() {
 // allowedOrigins lists the only origins permitted to send credentialed requests.
 var allowedOrigins = func() map[string]bool {
 	m := map[string]bool{
-		"http://localhost:8080":  true,
-		"http://localhost:5173":  true, // Vite dev
-		"http://localhost:3000":  true, // Next.js dev
+		"http://localhost:8080": true,
+		"http://localhost:5173": true, // Vite dev
+		"http://localhost:3000": true, // Next.js dev
 	}
 	if extra := os.Getenv("ALLOWED_ORIGINS"); extra != "" {
 		for _, o := range strings.Split(extra, ",") {

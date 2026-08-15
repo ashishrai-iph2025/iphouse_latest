@@ -1,6 +1,22 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+// Searchable single-select.
+//
+// The list is PORTALLED to <body> and positioned with fixed coordinates, so it
+// escapes the `overflow` of whatever card it sits in. Three things follow from
+// that and are the reason this is not a <select>:
+//
+//   · it can be WIDER than its trigger. A slicer in a 244px filter rail cannot
+//     show "Alianza Contra la Piratería" — but the list it opens can, and a name
+//     you have to guess at from its first twenty characters is not a choice,
+//   · it can open UPWARDS when the trigger is near the bottom of the window,
+//     instead of running off the screen,
+//   · its height is whatever the viewport has room for, rather than a constant
+//     that cuts the last row in half and looks broken.
+//
+// Keyboard: ↑ ↓ to move, Home/End to jump, Enter to choose, Escape to close.
+
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 
 interface Option {
@@ -18,12 +34,29 @@ interface Props {
   dark?:        boolean
 }
 
+/** Room a dropdown wants below the trigger before it decides to open upwards. */
+const PREFERRED_HEIGHT = 260
+const MIN_HEIGHT = 176
+const MAX_HEIGHT = 440
+/** A trigger narrower than this gets a wider list — see the note above. */
+const MIN_WIDTH = 288
+const MAX_WIDTH = 460
+const EDGE = 12
+/** Options above which the list is worth searching rather than scanning. */
+const SEARCH_FROM = 7
+
+interface Pos {
+  left: number; width: number; maxHeight: number
+  top?: number; bottom?: number
+}
+
 export default function SearchableSelect({
   options, value, onChange, placeholder = 'Select…', emptyLabel = '— All —', disabled = false, dark: darkProp,
 }: Props) {
-  const [open,  setOpen]  = useState(false)
-  const [query, setQuery] = useState('')
-  const [rect,  setRect]  = useState<DOMRect | null>(null)
+  const [open,   setOpen]   = useState(false)
+  const [query,  setQuery]  = useState('')
+  const [pos,    setPos]    = useState<Pos | null>(null)
+  const [active, setActive] = useState(0)
 
   // Auto-detect the global dark theme (`.dark` on <html>) so every consumer gets
   // themed dropdowns without passing a prop. An explicit `dark` prop still wins.
@@ -40,16 +73,49 @@ export default function SearchableSelect({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const dropRef    = useRef<HTMLDivElement>(null)
   const inputRef   = useRef<HTMLInputElement>(null)
+  const listRef    = useRef<HTMLUListElement>(null)
 
   const selected = options.find(o => o.key === value)
-  const normalizedQuery = query.trim().toLowerCase()
-  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean)
-  const filtered = queryTokens.length
-    ? options.filter(o => {
-        const haystack = `${String(o.label ?? '').toLowerCase()} ${String(o.key ?? '').toLowerCase()}`
-        return queryTokens.every(token => haystack.includes(token))
-      })
-    : options
+
+  /* Every token has to match somewhere in the label or the key, so "star plus"
+     finds "Star Plus HD" and a partial id still finds its row. */
+  const filtered = useMemo(() => {
+    const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    if (tokens.length === 0) return options
+    return options.filter(o => {
+      const hay = `${String(o.label ?? '').toLowerCase()} ${String(o.key ?? '').toLowerCase()}`
+      return tokens.every(t => hay.includes(t))
+    })
+  }, [options, query])
+
+  /* The clear row is part of the list, not a thing beside it — so ↑ from the
+     first option lands on "All" like any other row. */
+  const rows = useMemo(
+    () => [{ key: '', label: emptyLabel, clear: true }, ...filtered.map(o => ({ ...o, clear: false }))],
+    [filtered, emptyLabel])
+
+  const measure = useCallback(() => {
+    const el = triggerRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    const below = window.innerHeight - r.bottom - EDGE
+    const above = r.top - EDGE
+    // Upwards only when below genuinely cannot hold the list AND above is
+    // roomier — flipping for a few pixels' gain just makes the list jump about.
+    const up = below < PREFERRED_HEIGHT && above > below
+    const space = up ? above : below
+    const maxHeight = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, space))
+
+    const width = Math.min(
+      Math.max(r.width, MIN_WIDTH),
+      Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, window.innerWidth - EDGE * 2)))
+    // Aligned to the trigger, pulled back when that would hang off the edge.
+    const left = Math.max(EDGE, Math.min(r.left, window.innerWidth - EDGE - width))
+
+    setPos(up
+      ? { left, width, maxHeight, bottom: window.innerHeight - r.top + 4 }
+      : { left, width, maxHeight, top: r.bottom + 4 })
+  }, [])
 
   // Close on outside click
   useEffect(() => {
@@ -67,60 +133,99 @@ export default function SearchableSelect({
   // Reposition on scroll/resize while open
   useEffect(() => {
     if (!open) return
-    function update() {
-      if (triggerRef.current) setRect(triggerRef.current.getBoundingClientRect())
-    }
-    window.addEventListener('scroll', update, true)
-    window.addEventListener('resize', update)
+    window.addEventListener('scroll', measure, true)
+    window.addEventListener('resize', measure)
     return () => {
-      window.removeEventListener('scroll', update, true)
-      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', measure, true)
+      window.removeEventListener('resize', measure)
     }
-  }, [open])
+  }, [open, measure])
+
+  // A new search is a new list, so the highlight goes back to the top of it.
+  useEffect(() => { setActive(query ? 1 : 0) }, [query])
+
+  // Keep the highlighted row on screen when it is moved by the keyboard.
+  useEffect(() => {
+    if (!open) return
+    const el = listRef.current?.children[active] as HTMLElement | undefined
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [active, open])
 
   function toggle() {
     if (disabled) return
-    if (!open) {
-      setRect(triggerRef.current?.getBoundingClientRect() ?? null)
-      setOpen(true)
-      setTimeout(() => inputRef.current?.focus(), 50)
-    } else {
-      setOpen(false)
-      setQuery('')
-    }
+    if (open) { setOpen(false); setQuery(''); return }
+    measure()
+    setOpen(true)
+    // The highlight opens on the current value, so Enter re-picks it and ↓ moves
+    // on from where the reader already is.
+    const at = rows.findIndex(r => r.key === value)
+    setActive(at >= 0 ? at : 0)
+    setTimeout(() => inputRef.current?.focus(), 30)
   }
 
   function select(key: string) { onChange(key); setOpen(false); setQuery('') }
 
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Escape') { setOpen(false); setQuery(''); triggerRef.current?.focus(); return }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      if (rows[active]) select(rows[active].key)
+      return
+    }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(a => Math.min(rows.length - 1, a + 1)); return }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); setActive(a => Math.max(0, a - 1)); return }
+    if (e.key === 'Home')      { e.preventDefault(); setActive(0); return }
+    if (e.key === 'End')       { e.preventDefault(); setActive(rows.length - 1) }
+  }
+
+  /* One highlight, and it is solid.
+     The row under the cursor — or under the keyboard — fills with brand orange
+     and its text goes white. A tinted background plus a coloured label plus a
+     bold weight, which is what this used to do, gives three weak signals where
+     one strong one reads instantly and never leaves you wondering which row
+     Enter will take. Selection is stated separately, by the check. */
+  const ink = {
+    text:   dark ? 'rgba(255,255,255,0.86)' : '#14254A',
+    muted:  dark ? 'rgba(255,255,255,0.38)' : '#9ca3af',
+    check:  dark ? 'rgba(255,255,255,0.55)' : '#14254A',
+    hot:    '#FC934C',
+    hotInk: '#ffffff',
+    line:   dark ? 'rgba(255,255,255,0.08)' : '#f1f2f4',
+  }
+
+  /* A search box over seven options is furniture. It appears once the list is
+     long enough that scanning it stops being the faster way to find a row. */
+  const showSearch = options.length > SEARCH_FROM
+
   // ── Dropdown (portal — escapes overflow:hidden ancestors) ──────────────────
-  const dropdown = open && rect ? createPortal(
+  const dropdown = open && pos ? createPortal(
     <div
       ref={dropRef}
+      role="listbox"
       style={{
         position: 'fixed',
-        top:      rect.bottom + 4,
-        left:     rect.left,
-        width:    rect.width,
-        zIndex:   9999,
+        top: pos.top, bottom: pos.bottom, left: pos.left, width: pos.width,
+        maxHeight: pos.maxHeight,
+        zIndex: 9999,
+        display: 'flex', flexDirection: 'column',
         background: dark ? '#1b2d42' : '#fff',
-        border:   dark ? '1px solid rgba(255,255,255,0.1)' : '1px solid #e5e7eb',
+        border: dark ? '1px solid rgba(255,255,255,0.1)' : '1px solid #e5e7eb',
         borderRadius: '0.75rem',
-        boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
+        boxShadow: '0 12px 44px rgba(20,37,74,0.18)',
         overflow: 'hidden',
       }}
+      onKeyDown={onKeyDown}
     >
       {/* Search box */}
-      <div style={{
-        padding: '8px',
-        borderBottom: dark ? '1px solid rgba(255,255,255,0.07)' : '1px solid #f3f4f6',
-      }}>
+      {showSearch && (
+      <div style={{ padding: 8, borderBottom: `1px solid ${ink.line}`, flexShrink: 0 }}>
         <div style={{
-          display: 'flex', alignItems: 'center', gap: '8px',
+          display: 'flex', alignItems: 'center', gap: 8,
           background: dark ? 'rgba(255,255,255,0.08)' : '#f9fafb',
-          border: dark ? '1px solid rgba(255,255,255,0.1)' : 'none',
-          borderRadius: '8px', padding: '6px 12px',
+          border: dark ? '1px solid rgba(255,255,255,0.1)' : '1px solid #eef0f3',
+          borderRadius: 8, padding: '6px 10px',
         }}>
-          <svg style={{ width: 14, height: 14, flexShrink: 0, color: dark ? 'rgba(255,255,255,0.4)' : '#9ca3af' }}
+          <svg style={{ width: 14, height: 14, flexShrink: 0, color: ink.muted }}
             fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
           </svg>
@@ -130,15 +235,15 @@ export default function SearchableSelect({
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Search…"
+            placeholder={`Search ${options.length.toLocaleString()}…`}
             style={{
-              flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 14,
-              color: dark ? '#fff' : '#374151',
+              flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none',
+              fontSize: 13.5, color: dark ? '#fff' : '#374151',
             }}
           />
           {query && (
-            <button type="button" onClick={() => setQuery('')}
-              style={{ color: dark ? 'rgba(255,255,255,0.4)' : '#9ca3af', lineHeight: 1 }}>
+            <button type="button" onClick={() => { setQuery(''); inputRef.current?.focus() }}
+              title="Clear the search" style={{ color: ink.muted, lineHeight: 1 }}>
               <svg style={{ width: 12, height: 12 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
@@ -146,47 +251,63 @@ export default function SearchableSelect({
           )}
         </div>
       </div>
+      )}
 
-      {/* Options */}
-      <ul style={{ maxHeight: 208, overflowY: 'auto', padding: '4px 0', margin: 0, listStyle: 'none' }}>
-        {/* Clear option */}
-        <li>
-          <button type="button" onClick={() => select('')} style={{
-            width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 14, border: 'none', cursor: 'pointer',
-            background: !value ? (dark ? 'rgba(249,115,22,0.18)' : '#eff6ff') : 'transparent',
-            color: !value ? (dark ? '#F97316' : '#1d4ed8') : (dark ? 'rgba(255,255,255,0.4)' : '#9ca3af'),
-            fontWeight: !value ? 600 : 400,
-          }}>
-            {emptyLabel}
-          </button>
-        </li>
-        {filtered.length === 0 ? (
-          <li style={{ padding: '16px 12px', textAlign: 'center', fontSize: 14, color: dark ? 'rgba(255,255,255,0.3)' : '#9ca3af' }}>
-            No results
+      {/* Options. The list takes the slack, so the search box and the footer
+          stay put while only this scrolls. */}
+      <ul ref={listRef}
+        style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 6, margin: 0, listStyle: 'none' }}>
+        {rows.map((o, i) => {
+          const on = o.key === value
+          const hot = i === active
+          return (
+            <li key={o.key || '__clear'} role="option" aria-selected={on}>
+              <button type="button" onClick={() => select(o.key)}
+                onMouseEnter={() => setActive(i)}
+                title={o.clear ? undefined : o.label}
+                style={{
+                  width: '100%', textAlign: 'left', padding: '9px 12px', fontSize: 14,
+                  border: 'none', cursor: 'pointer', borderRadius: 8,
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                  background: hot ? ink.hot : 'transparent',
+                  color: hot ? ink.hotInk : ink.text,
+                  fontWeight: on ? 600 : 400,
+                  transition: 'background 0.12s',
+                }}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {o.label}
+                </span>
+                {/* The check says what is CHOSEN. The fill says what is under the
+                    cursor. They are different questions and answering both with
+                    colour is what made the old list hard to read. */}
+                {on && (
+                  <svg style={{ width: 15, height: 15, flexShrink: 0, color: hot ? ink.hotInk : ink.check }}
+                    fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.6}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                )}
+              </button>
+            </li>
+          )
+        })}
+        {filtered.length === 0 && (
+          <li style={{ padding: '18px 12px', textAlign: 'center', fontSize: 13, color: ink.muted }}>
+            Nothing matches “{query}”
           </li>
-        ) : filtered.map(o => (
-          <li key={o.key}>
-            <button type="button" onClick={() => select(o.key)} style={{
-              width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 14, border: 'none', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-              background: value === o.key ? (dark ? 'rgba(249,115,22,0.18)' : '#eff6ff') : 'transparent',
-              color: value === o.key ? (dark ? '#fff' : '#1d4ed8') : (dark ? 'rgba(255,255,255,0.78)' : '#374151'),
-              fontWeight: value === o.key ? 600 : 400,
-            }}
-            onMouseEnter={e => { if (value !== o.key) (e.currentTarget as HTMLElement).style.background = dark ? 'rgba(249,115,22,0.12)' : '#f9fafb' }}
-            onMouseLeave={e => { if (value !== o.key) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-            >
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.label}</span>
-              {value === o.key && (
-                <svg style={{ width: 14, height: 14, flexShrink: 0, color: dark ? '#F97316' : '#1d4ed8' }}
-                  fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
-              )}
-            </button>
-          </li>
-        ))}
+        )}
       </ul>
+
+      {/* How much of the list is being shown — a filter that silently hides 400
+          of 420 options reads as a short list rather than a narrow search. */}
+      {query && filtered.length > 0 && (
+        <div style={{
+          flexShrink: 0, padding: '5px 12px', borderTop: `1px solid ${ink.line}`,
+          fontSize: 10.5, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
+          color: ink.muted,
+        }}>
+          {filtered.length.toLocaleString()} of {options.length.toLocaleString()}
+        </div>
+      )}
     </div>,
     document.body
   ) : null
@@ -198,7 +319,15 @@ export default function SearchableSelect({
         ref={triggerRef}
         type="button"
         onClick={toggle}
+        onKeyDown={e => {
+          // Opening straight onto the list, without a trip through the mouse.
+          if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) { e.preventDefault(); toggle() }
+        }}
         disabled={disabled}
+        role="combobox"
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        title={selected ? selected.label : undefined}
         style={dark ? {
           width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           borderRadius: '0.75rem', padding: '10px 12px', fontSize: 14, height: 44, cursor: disabled ? 'not-allowed' : 'pointer',

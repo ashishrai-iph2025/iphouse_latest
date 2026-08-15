@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, createContext, useContext } from 'react'
+import { useSearchParams } from '@/lib/router'
 import AdminPageHeader from '@/components/admin/AdminPageHeader'
 import DatePicker from '@/components/ui/DatePicker'
 import { useTheme } from '@/lib/ThemeContext'
@@ -28,6 +29,38 @@ const ACTION_COLORS: Record<string, string> = {
   update:  ORANGE,
   login:   TEAL,
   logout:  NAVY_50,
+  // Client Admin audit trail
+  client_admin_view:          NAVY_50,
+  client_admin_user_enabled:  GREEN,
+  client_admin_user_disabled: ORANGE,
+  client_admin_denied:        RED,
+  client_admin_list_view:     NAVY_50,
+  client_admin_granted:       GREEN,
+  client_admin_revoked:       ORANGE,
+  client_admin_grant_denied:  RED,
+}
+
+// Human labels for the raw action keys. Anything unmapped falls back to the
+// key itself, so a newly recorded action still shows up rather than vanishing.
+const ACTION_LABELS: Record<string, string> = {
+  view:                       'View',
+  login:                      'Login',
+  logout:                     'Logout',
+  approve:                    'Approve',
+  reject:                     'Reject',
+  update:                     'Update',
+  password_reset:             'Password reset',
+  credential_reveal:          'Credential reveal',
+  impersonate_start:          'Impersonation started',
+  impersonate_exit:           'Impersonation ended',
+  client_admin_view:          'Client Admin — viewed users',
+  client_admin_user_enabled:  'Client Admin — activated user',
+  client_admin_user_disabled: 'Client Admin — deactivated user',
+  client_admin_denied:        'Client Admin — refused',
+  client_admin_list_view:     'Client Admins — viewed list',
+  client_admin_granted:       'Client Admin — granted',
+  client_admin_revoked:       'Client Admin — revoked',
+  client_admin_grant_denied:  'Client Admin — grant refused',
 }
 
 interface ActivityLog {
@@ -76,7 +109,13 @@ function mkTC(isDark: boolean): TC {
 export default function TrackingPage() {
   const { theme } = useTheme()
   const tc = mkTC(theme === 'dark')
-  const [tab, setTab] = useState<'analytics' | 'logs'>('analytics')
+  const params = useSearchParams()
+  // Deep links (e.g. "View in Tracking Report" on a notification) arrive with
+  // filters in the query string and expect to land on the log they name, not on
+  // the analytics summary.
+  const deepLinked = !!(params.get('userId') || params.get('search') || params.get('action'))
+  const [tab, setTab] = useState<'analytics' | 'logs'>(
+    params.get('tab') === 'logs' || deepLinked ? 'logs' : 'analytics')
 
   return (
     <ThemeCtx.Provider value={tc}>
@@ -443,17 +482,38 @@ function AnalyticsTab() {
 /* ── Logs Tab ──────────────────────────────────────────────────────────── */
 function LogsTab() {
   const { isDark, card, bord, t1, t2, t3, track, rowEven, rowOdd, inputBg } = useTC()
+  // Filters seed from the query string so another page can link straight to one
+  // person's trail: ?userId= pins l.user_id (the acting login), which is the id
+  // a notification carries as actor_login_id.
+  const params = useSearchParams()
   const [logs,         setLogs]         = useState<ActivityLog[]>([])
   const [total,        setTotal]        = useState(0)
   const [page,         setPage]         = useState(1)
   const [loading,      setLoading]      = useState(true)
-  const [search,       setSearch]       = useState('')
-  const [filterAction, setFilterAction] = useState('')
-  const [dateFrom,     setDateFrom]     = useState('')
-  const [dateTo,       setDateTo]       = useState('')
-  const [userId,       setUserId]       = useState('')
+  const [search,       setSearch]       = useState(params.get('search') ?? '')
+  const [filterAction, setFilterAction] = useState(params.get('action') ?? '')
+  const [dateFrom,     setDateFrom]     = useState(params.get('from') ?? '')
+  const [dateTo,       setDateTo]       = useState(params.get('to') ?? '')
+  const [userId,       setUserId]       = useState(params.get('userId') ?? '')
+  // Label for the pinned person — the id alone tells a reader nothing.
+  const pinnedUser = params.get('userLabel') ?? ''
 
-  const ALL_ACTIONS = ['view','approve','reject','update','login','logout']
+  // Action list is discovered from the data (GET /api/admin/activity-stats
+  // groups by action) rather than hardcoded — a hardcoded list silently hid
+  // every action added since it was written (credential_reveal,
+  // impersonate_start, password_reset, the client_admin_* events), leaving
+  // those events unfilterable even though they were being recorded.
+  const [allActions, setAllActions] = useState<string[]>([])
+  useEffect(() => {
+    fetch('/api/admin/tracking/analytics', { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => {
+        const names = (d?.actionCounts ?? []).map((a: any) => String(a.action)).filter(Boolean)
+        if (names.length) setAllActions(names)
+      })
+      .catch(() => {})
+  }, [])
+
   const totalPages  = Math.max(1, Math.ceil(total / PER_PAGE))
 
   const load = useCallback(async (p: number) => {
@@ -494,11 +554,29 @@ function LogsTab() {
             className="w-full text-xs rounded-lg px-3 focus:outline-none"
             style={{ border: `1px solid ${bord}`, color: t1, height: 38, boxSizing: 'border-box', background: inputBg }}>
             <option value="">All Actions</option>
-            {ALL_ACTIONS.map(a => <option key={a} value={a} className="capitalize">{a}</option>)}
+            {allActions.map(a => <option key={a} value={a}>{ACTION_LABELS[a] ?? a}</option>)}
           </select>
           <DatePicker value={dateFrom} onChange={setDateFrom} placeholder="From date" accentColor={NAVY} />
           <DatePicker value={dateTo} onChange={setDateTo} placeholder="To date" min={dateFrom} accentColor={NAVY} />
         </div>
+
+        {/* A user pin has no field of its own — show it as a removable chip so
+            the reader can see the list is scoped and get back out of it. */}
+        {userId && (
+          <div className="mt-3 flex items-center gap-2 flex-wrap">
+            <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold text-white"
+              style={{ background: NAVY }}>
+              <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+              </svg>
+              {pinnedUser || `Login #${userId}`}
+              <button onClick={() => setUserId('')} aria-label="Remove user filter"
+                className="text-white/70 hover:text-white text-sm leading-none">×</button>
+            </span>
+            <span className="text-xs" style={{ color: t2 }}>Showing this person&apos;s activity only</span>
+          </div>
+        )}
+
         {hasFilters && (
           <div className="flex items-center justify-between mt-3 pt-3" style={{ borderTop: `1px solid ${track}` }}>
             <span className="text-xs" style={{ color: t2 }}>{total} result{total !== 1 ? 's' : ''}</span>
@@ -548,7 +626,7 @@ function LogsTab() {
                   <td className="px-4 py-3">
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium capitalize"
                       style={{ background: `${ACTION_COLORS[l.action]??NAVY_50}18`, color: ACTION_COLORS[l.action]??NAVY_50 }}>
-                      {l.action}
+                      {ACTION_LABELS[l.action] ?? l.action}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-xs font-mono whitespace-nowrap" style={{ color: t2 }}>{l.ip_address}</td>

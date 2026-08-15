@@ -11,8 +11,52 @@ export default function RegisterPage() {
   const [success, setSuccess] = useState(false)
   const [loading, setLoading] = useState(false)
 
+  /* What the server says about the address typed so far.
+     'unknown' also covers the case where it declines to distinguish — see
+     AUTH_HIDE_UNKNOWN_EMAIL — and the form then submits and lets the server
+     answer, exactly as it did before this check existed. */
+  type MailState = 'idle' | 'checking' | 'available' | 'account' | 'pending' | 'unknown'
+  const [mailState, setMailState] = useState<MailState>('idle')
+
+  // Only a plausible address is worth a round trip; the auth routes allow ten
+  // a minute and a check per keystroke would spend that before the domain is
+  // finished.
+  const looksLikeEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim())
+
   function handleChange(e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) {
     setForm(f => ({ ...f, [e.target.name]: e.target.value }))
+    if (e.target.name === 'email') {
+      // A verdict about the previous address must not linger over a new one.
+      setMailState('idle')
+      if (error) setError('')
+    }
+  }
+
+  /* Checked when the field is left, so someone learns they already have an
+     account while they are still looking at the address — rather than after
+     filling in the rest of the form, submitting, and being turned away. */
+  async function checkEmail(value: string): Promise<boolean> {
+    const v = value.trim()
+    if (!looksLikeEmail(v)) { setMailState('idle'); return true }
+    setMailState('checking')
+    try {
+      const res  = await fetch('/api/auth/check-email', {
+        credentials: 'include',
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ email: v }),
+      })
+      const data = await res.json()
+      if (!data.success || data.checked === false) { setMailState('unknown'); return true }
+      const st = data.status as MailState
+      setMailState(st)
+      return st === 'available'
+    } catch {
+      // A failed check must not block a legitimate sign-up: fall through and
+      // let the server have the final say, which it does regardless.
+      setMailState('unknown')
+      return true
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -20,6 +64,12 @@ export default function RegisterPage() {
     setError('')
     setLoading(true)
     try {
+      /* Re-checked on submit rather than trusting the field state: an autofill
+         followed by Enter never blurs the input, and the answer can change
+         between typing and submitting. The server checks again either way —
+         this only saves filling in a form that cannot be accepted. */
+      if (!(await checkEmail(form.email))) return
+
       const res  = await fetch('/api/auth/register', {
         credentials: 'include',
         method:  'POST',
@@ -30,6 +80,9 @@ export default function RegisterPage() {
       if (data.success) {
         setSuccess(true)
       } else {
+        // The server names which of the two it was, so the field can show the
+        // same guidance the inline check would have.
+        if (data.reason === 'account' || data.reason === 'pending') setMailState(data.reason)
         setError(data.error || 'Registration failed. Please try again.')
       }
     } catch {
@@ -151,12 +204,35 @@ export default function RegisterPage() {
                     placeholder="you@example.com"
                     value={form.email}
                     onChange={handleChange}
+                    onBlur={e => { void checkEmail(e.target.value) }}
                     required
                     className="w-full px-4 py-2.5 text-sm rounded-xl border focus:outline-none"
-                    style={{ borderColor: '#dce3ee' }}
-                    onFocus={e => (e.target.style.borderColor = '#14254A')}
-                    onBlur={e  => (e.target.style.borderColor = '#dce3ee')}
+                    style={{ borderColor:
+                      mailState === 'account' || mailState === 'pending' ? '#ef4444'
+                      : mailState === 'available' ? '#16A34A' : '#dce3ee' }}
                   />
+
+                  {/* The answer under the field, where the reader is looking,
+                      and each state gets the action that resolves it — a
+                      message saying only "cannot register" leaves someone with
+                      an account no idea what to do instead. */}
+                  <div className="text-[11px] mt-1 leading-snug" style={{ minHeight: 15 }}>
+                    {mailState === 'checking' && <span style={{ color: '#6b7c93' }}>Checking…</span>}
+                    {mailState === 'available' && <span style={{ color: '#16A34A' }}>✓ Available</span>}
+                    {mailState === 'account' && (
+                      <span style={{ color: '#b91c1c' }}>
+                        You already have an account.{' '}
+                        <Link to="/login" style={{ color: '#14254A', fontWeight: 600 }}>Sign in</Link>
+                        {' · '}
+                        <Link to="/forgot-password" style={{ color: '#14254A', fontWeight: 600 }}>Forgot password</Link>
+                      </span>
+                    )}
+                    {mailState === 'pending' && (
+                      <span style={{ color: '#b45309' }}>
+                        A request for this email is already awaiting review — you will be emailed once it is approved.
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-medium mb-1" style={{ color: '#374151' }}>Designation</label>
@@ -191,18 +267,23 @@ export default function RegisterPage() {
                 />
               </div>
 
+              {/* Blocked only on the two answers that cannot succeed. 'unknown'
+                  and 'idle' stay submittable, so a failed check never stops
+                  someone registering. */}
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || mailState === 'checking' || mailState === 'account' || mailState === 'pending'}
                 className="w-full py-3 rounded-xl font-semibold text-sm transition-all disabled:opacity-60"
                 style={{
                   background: 'linear-gradient(135deg,#FFC82B,#FC934C)',
                   border: 'none',
                   color: '#14254A',
-                  cursor: loading ? 'not-allowed' : 'pointer',
+                  cursor: loading || mailState === 'account' || mailState === 'pending' ? 'not-allowed' : 'pointer',
                 }}
               >
-                {loading ? 'Submitting…' : 'Submit Registration'}
+                {loading ? 'Submitting…'
+                  : mailState === 'checking' ? 'Checking…'
+                  : 'Submit Registration'}
               </button>
 
             </form>

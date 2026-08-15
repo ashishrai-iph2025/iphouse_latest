@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useSession } from '@/lib/auth-client'
 import { useTheme } from '@/lib/ThemeContext'
 
@@ -189,16 +190,24 @@ export default function SwitchAccountPage() {
         </div>
       )}
 
-      {/* ── Full-screen switching overlay ── */}
-      {switching !== null && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(4px)' }}>
+      {/* ── Full-screen switching overlay ──
+          Portalled to <body>, and it has to be. `position: fixed` is measured
+          against the viewport only while no ancestor has a transform — and this
+          page's root carries `.fade-in`, whose keyframes end on translateY(0)
+          with fill-mode `both`, so that transform is still applied long after
+          the animation has finished. That makes the page root the containing
+          block, and the overlay covered the content column while the header and
+          the nav sat above it, untouched. Out here it cannot be captured. */}
+      {switching !== null && typeof document !== 'undefined' && createPortal(
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', background: isDark ? 'rgba(10,22,45,0.92)' : 'rgba(255,255,255,0.9)', backdropFilter: 'blur(4px)' }}>
           <div style={{ background: '#fff', borderRadius: 18, boxShadow: '0 12px 40px rgba(13,36,75,0.18)', padding: '40px 48px', textAlign: 'center', maxWidth: 360 }}>
             <div style={{ width: 56, height: 56, borderRadius: 14, background: `linear-gradient(135deg,${YELLOW},${ORANGE})`, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px', fontSize: 24, color: '#fff' }}>⇄</div>
             <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: NAVY }}>Switching account</h3>
             <p style={{ margin: '6px 0 18px', fontSize: 13, color: SLATE }}>Setting up your new session…</p>
             <span style={{ width: 32, height: 32, border: `3px solid ${BORD}`, borderTopColor: NAVY, borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

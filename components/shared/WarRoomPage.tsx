@@ -1,9 +1,9 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import SearchableSelect from '@/components/ui/SearchableSelect'
 import MultiSearchableSelect from '@/components/ui/MultiSearchableSelect'
-import DatePicker from '@/components/ui/DatePicker'
+import DateRangePicker from '@/components/ui/DateRangePicker'
 import Breadcrumb from '@/components/ui/Breadcrumb'
 import WarRoomReport from '@/components/shared/WarRoomReport'
 import WarRoomComparison from '@/components/shared/WarRoomComparison'
@@ -41,11 +41,37 @@ const NAVY_TEXT = 'var(--wr-navy-text)'
 const ORANGE_TEXT = 'var(--wr-orange-text)'
 const ORANGE_GRADIENT = 'linear-gradient(135deg,#FFC82B,#FC934C)'
 
-interface Opt { key: string; label: string; warRoomEndDate?: string }
+// warRoomStartDate is unused on the dashboard but carried through to Asset
+// Comparison, which anchors its "first N days" windows on it.
+interface Opt { key: string; label: string; warRoomStartDate?: string; warRoomEndDate?: string }
 
 function isoDaysAgo(n: number) {
   const d = new Date(); d.setUTCDate(d.getUTCDate() - n); return d.toISOString().slice(0, 10)
 }
+
+// Quick date filters. Each preset means "the last N days of available data",
+// anchored on the newest URL upload date the selected assets have (see
+// rangeAnchor below) rather than on today — the MarkScan feed can lag, and a
+// today-anchored window would silently come back empty.
+const DATE_PRESETS = [
+  { days: 1,  label: '1 Day' },
+  { days: 7,  label: '7 Days' },
+  { days: 15, label: '15 Days' },
+  { days: 30, label: '30 Days' },
+] as const
+
+const DEFAULT_PRESET_DAYS = 30
+
+// n-th day before `iso` (inclusive window: shiftIso('2026-08-10', 6) starts a
+// 7-day window ending on the 10th).
+function shiftIso(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`)
+  if (!isFinite(d.getTime())) return iso
+  d.setUTCDate(d.getUTCDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+
+const todayIso = () => new Date().toISOString().slice(0, 10)
 
 // Default asset when landing on the page: the only asset if there is just one,
 // otherwise the asset with the latest warRoomEndDate (assets without an end
@@ -69,8 +95,11 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
   const [assets, setAssets] = useState<Opt[]>([])
   const [assetNames, setAssetNames] = useState<string[]>([])
   const [assetTouched, setAssetTouched] = useState(false)
-  const [startDate, setStartDate] = useState(isoDaysAgo(30))
+  // Default view is the last 30 days of available data (disclaimed in the UI).
+  const [startDate, setStartDate] = useState(isoDaysAgo(DEFAULT_PRESET_DAYS - 1))
   const [endDate, setEndDate] = useState('')
+  // Which quick filter is active, or null once the dates are hand-edited.
+  const [presetDays, setPresetDays] = useState<number | null>(DEFAULT_PRESET_DAYS)
 
   // Admin-only client selection + token state.
   const [clients, setClients] = useState<ClientOption[]>([])
@@ -167,18 +196,71 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
     }
   }
 
+  // Newest URL upload date available for the current asset selection. Filters
+  // may not reach past it — MarkScan has nothing beyond the last upload — so it
+  // both caps the date-range picker and anchors every quick-filter preset.
+  // warRoomEndDate is the only ceiling known before a pull; once a report is on
+  // screen its newest dated row refines it.
+  const rangeAnchor = useMemo(() => {
+    const pool = assetNames.length > 0 ? assets.filter(a => assetNames.includes(a.key)) : assets
+    const ends = pool
+      .map(a => String(a.warRoomEndDate ?? '').slice(0, 10))
+      .filter(s => s.length === 10)
+    const dated = report?.breakdowns?.byDate ?? []
+    if (dated.length > 0) ends.push(dated[dated.length - 1].date)
+    if (ends.length === 0) return todayIso()
+    const latest = ends.sort()[ends.length - 1]
+    return latest > todayIso() ? todayIso() : latest
+  }, [assets, assetNames, report])
+
+  // The window a preset resolves to right now. Kept as a function (not state)
+  // so run() can never fire with a stale range while the pickers catch up.
+  const presetRange = (days: number) => ({
+    startDate: shiftIso(rangeAnchor, days - 1),
+    endDate:   rangeAnchor,
+  })
+
+  /* A range chosen in the calendar. `presetDays` is kept — not to light a pill
+     any more, but because it is what tells the rest of the page this window is
+     "the last N days" rather than two fixed dates: the disclaimer says which,
+     run() re-resolves it at submit time, and the effect below re-anchors it as
+     the newest upload date firms up. A window that matches none of them is a
+     custom one and stops tracking the anchor, which is the correct reading of
+     two dates someone typed. */
+  function applyRange(from: string, to: string) {
+    setStartDate(from)
+    setEndDate(to)
+    const hit = DATE_PRESETS.find(p => {
+      const r = presetRange(p.days)
+      return r.startDate === from && r.endDate === to
+    })
+    setPresetDays(hit ? hit.days : null)
+  }
+
+  // Keep the pickers showing the active preset as the anchor firms up (assets
+  // arriving, a report refining the newest upload date).
+  useEffect(() => {
+    if (presetDays === null) return
+    const r = presetRange(presetDays)
+    setStartDate(r.startDate); setEndDate(r.endDate)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangeAnchor, presetDays])
+
   async function run(mode: 'auto' | 'full' | 'incremental', opts?: { silent?: boolean }) {
     if (admin && !tokenReady) { if (!opts?.silent) setError('Generate the client token first'); return }
     if (!opts?.silent) setAssetTouched(true)
     if (assetNames.length === 0) { if (!opts?.silent) setError('Please select at least one asset'); return }
-    if (mode !== 'incremental' && !startDate) { setError('Please pick a start date'); return }
+    // A preset always wins over whatever the pickers currently show, so the
+    // request can't race the effect above.
+    const range = presetDays !== null ? presetRange(presetDays) : { startDate, endDate }
+    if (mode !== 'incremental' && !range.startDate) { setError('Please pick a start date'); return }
     setError('')
     setPlatformProgress(Object.fromEntries(WAR_ROOM_PLATFORMS.map(p => [p.key, { phase: 'pending', count: 0 }])))
     mode === 'incremental' ? setRefreshing(true) : setLoading(true)
     try {
       let res
       try {
-        res = await streamWarRoom({ assetNames, startDate, endDate, mode, clientUserId }, (evt: WarRoomProgressEvent) => {
+        res = await streamWarRoom({ assetNames, ...range, mode, clientUserId }, (evt: WarRoomProgressEvent) => {
           setPlatformProgress(prev => ({
             ...prev,
             [evt.platform]: { phase: evt.error ? 'error' : evt.phase, count: evt.count, error: evt.error },
@@ -190,7 +272,7 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
         // everything in Redis. One plain (non-stream) retry then serves the
         // report straight from the accumulated store instead of surfacing a
         // bare "network error".
-        res = await fetchWarRoom({ assetNames, startDate, endDate, mode: 'incremental', clientUserId })
+        res = await fetchWarRoom({ assetNames, ...range, mode: 'incremental', clientUserId })
       }
       setReport(res.data); setRows(res.rows); setMeta(res.meta)
       setFiltersOpen(false)
@@ -298,6 +380,12 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
               <span className="font-bold text-[#14254A] truncate max-w-[260px]">
                 {assetNames.length === 1 ? assetNames[0] : `${assetNames[0]} +${assetNames.length - 1} more`}
               </span>
+              {presetDays !== null && (
+                <><span className="text-gray-300">·</span>
+                <span className="text-xs font-bold" style={{ color: ORANGE_TEXT }}>
+                  Last {presetDays} day{presetDays === 1 ? '' : 's'}
+                </span></>
+              )}
               {startDate && (
                 <><span className="text-gray-300">·</span>
                 <span className="text-gray-500 text-xs">{startDate}{endDate ? ` → ${endDate}` : ''}</span></>
@@ -364,8 +452,21 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
               </div>
             )}
 
+            {/* The 1 / 7 / 15 / 30 day pills that used to sit here are gone. The
+                date range picker's Quick Ranges rail offers the same windows —
+                and four more — from inside the control that shows the result, so
+                the pills were a second copy of a filter already on screen.
+                DATE_PRESETS survives as the list applyRange matches against, to
+                decide whether a chosen window is still "the last N days". */}
+
             {/* Asset + dates + generate */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end gap-3 lg:gap-4">
+            {/* Aligned to the TOP, not the bottom. The asset column carries help
+                and validation text under its select, so bottom-aligning made
+                that column taller and pushed the two date fields — labels and
+                all — down by however many lines it happened to be showing. From
+                the top, every label sits on one line and every input under it,
+                and the extra text just hangs below where it belongs. */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-start gap-3 lg:gap-4">
               <div className={`sm:col-span-1 lg:flex-[2] lg:min-w-[220px] ${assetDisabled ? 'opacity-50 pointer-events-none' : ''}`}>
                 <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
                   Asset <span className="text-red-500">*</span>
@@ -388,21 +489,52 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
                   <p className="text-red-500 text-[11px] mt-1">At least one asset is required</p>
                 )}
               </div>
-              <div className="lg:flex-1 lg:min-w-[150px]">
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Start Date *</label>
-                <DatePicker value={startDate} onChange={setStartDate} placeholder="Start date" />
+              {/* One control for both ends, the same one the reports page uses.
+                  Two separate pickers let a backwards window be set and only
+                  said so afterwards; this one cannot express one. Its quick
+                  ranges are anchored on the newest upload date, not on today,
+                  so "last 7 days" here means the same thing the pills above
+                  mean. */}
+              <div className="lg:flex-1 lg:min-w-[260px]">
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                  Date Range <span className="text-red-500">*</span>
+                </label>
+                <DateRangePicker
+                  value={{ from: startDate, to: endDate }}
+                  onChange={r => applyRange(r.from, r.to)}
+                  max={rangeAnchor}
+                  anchor={rangeAnchor} />
               </div>
-              <div className="lg:flex-1 lg:min-w-[150px]">
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">End Date</label>
-                <DatePicker value={endDate} onChange={setEndDate} placeholder="Optional" min={startDate} />
+              <div className="sm:col-span-2 lg:flex-shrink-0">
+                {/* The button has no label of its own, and top-aligning would
+                    otherwise float it up level with the labels. An empty one
+                    keeps it on the input line without hard-coding a height that
+                    would drift the moment the label type changes. */}
+                <span aria-hidden className="hidden lg:block text-[10px] font-bold uppercase tracking-widest mb-1.5 invisible">&nbsp;</span>
+                <div className="flex gap-2">
+                  <button onClick={() => run('auto')} disabled={loading || refreshing || assetDisabled}
+                    className="flex-1 lg:flex-none px-6 py-2.5 rounded-xl font-bold text-white text-sm disabled:opacity-60 transition-all hover:opacity-90 flex items-center justify-center gap-2 whitespace-nowrap shadow-sm"
+                    style={{ background: 'linear-gradient(135deg,#14254A,#1e3a6e)' }}>
+                    {loading ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Generating…</> : <>Generate</>}
+                  </button>
+                </div>
               </div>
-              <div className="sm:col-span-2 lg:flex-shrink-0 flex gap-2">
-                <button onClick={() => run('auto')} disabled={loading || refreshing || assetDisabled}
-                  className="flex-1 lg:flex-none px-6 py-2.5 rounded-xl font-bold text-white text-sm disabled:opacity-60 transition-all hover:opacity-90 flex items-center justify-center gap-2 whitespace-nowrap shadow-sm"
-                  style={{ background: 'linear-gradient(135deg,#14254A,#1e3a6e)' }}>
-                  {loading ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Generating…</> : <>Generate</>}
-                </button>
-              </div>
+            </div>
+
+            {/* Default-range disclaimer — the report opens on the last 30 days
+                of available data, and no filter may reach past the newest URL
+                upload date the selected assets have. */}
+            <div className="flex items-start gap-2 mt-4 px-3 py-2 rounded-xl bg-blue-50/70 border border-blue-100 text-[11px] text-blue-800">
+              <svg className="w-3.5 h-3.5 flex-shrink-0 mt-px" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>
+                {presetDays !== null
+                  ? <>Showing the last <b>{presetDays} day{presetDays === 1 ? '' : 's'}</b> of available data by default.</>
+                  : <>Showing a custom date range.</>}
+                {' '}Dates are limited to the latest URL upload date for the selected asset
+                {assetNames.length === 1 ? '' : 's'} (<b>{rangeAnchor}</b>) — data beyond that has not been uploaded yet.
+              </span>
             </div>
 
             {meta && (

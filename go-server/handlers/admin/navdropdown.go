@@ -38,7 +38,8 @@ func NavDropdown(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		parent := strings.TrimSpace(r.URL.Query().Get("parentPageName"))
 		if parent == "" {
-			fail(w, 422, "parentPageName is required"); return
+			fail(w, 422, "parentPageName is required")
+			return
 		}
 		rows, _ := db.Query(
 			"SELECT id, label, href, sort_order FROM nav_dropdown_items WHERE parent_page_name = ? ORDER BY sort_order ASC, id ASC",
@@ -59,10 +60,12 @@ func NavDropdown(w http.ResponseWriter, r *http.Request) {
 		body.Label = strings.TrimSpace(body.Label)
 		body.Href = strings.TrimSpace(body.Href)
 		if body.ParentPageName == "" || body.Label == "" || body.Href == "" {
-			fail(w, 422, "parentPageName, label and href are required"); return
+			fail(w, 422, "parentPageName, label and href are required")
+			return
 		}
 		if !allowedNavRoutes[body.Href] {
-			fail(w, 422, "Link must be an existing page"); return
+			fail(w, 422, "Link must be an existing page")
+			return
 		}
 		// Append after the current last child.
 		next, _ := db.QueryOne("SELECT COALESCE(MAX(sort_order),0)+1 AS n FROM nav_dropdown_items WHERE parent_page_name = ?", body.ParentPageName)
@@ -72,7 +75,8 @@ func NavDropdown(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := db.MustExec("INSERT INTO nav_dropdown_items (parent_page_name, label, href, sort_order) VALUES (?, ?, ?, ?)",
 			body.ParentPageName, body.Label, body.Href, order); err != nil {
-			fail(w, 500, "Could not add dropdown item"); return
+			fail(w, 500, "Could not add dropdown item")
+			return
 		}
 		ok(w, map[string]any{"success": true})
 
@@ -86,14 +90,17 @@ func NavDropdown(w http.ResponseWriter, r *http.Request) {
 		body.Label = strings.TrimSpace(body.Label)
 		body.Href = strings.TrimSpace(body.Href)
 		if body.ID == 0 || body.Label == "" || body.Href == "" {
-			fail(w, 422, "id, label and href are required"); return
+			fail(w, 422, "id, label and href are required")
+			return
 		}
 		if !allowedNavRoutes[body.Href] {
-			fail(w, 422, "Link must be an existing page"); return
+			fail(w, 422, "Link must be an existing page")
+			return
 		}
 		if err := db.MustExec("UPDATE nav_dropdown_items SET label = ?, href = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?",
 			body.Label, body.Href, body.ID); err != nil {
-			fail(w, 500, "Could not update dropdown item"); return
+			fail(w, 500, "Could not update dropdown item")
+			return
 		}
 		ok(w, map[string]any{"success": true})
 
@@ -103,7 +110,8 @@ func NavDropdown(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.ID == 0 {
-			fail(w, 422, "id required"); return
+			fail(w, 422, "id required")
+			return
 		}
 		db.Exec("DELETE FROM nav_dropdown_items WHERE id = ?", body.ID)
 		ok(w, map[string]any{"success": true})
@@ -120,7 +128,8 @@ func NavDropdownReorder(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if len(body.OrderedIds) == 0 {
-		fail(w, 422, "orderedIds required"); return
+		fail(w, 422, "orderedIds required")
+		return
 	}
 	for i, id := range body.OrderedIds {
 		db.Exec("UPDATE nav_dropdown_items SET sort_order = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?", i+1, id)

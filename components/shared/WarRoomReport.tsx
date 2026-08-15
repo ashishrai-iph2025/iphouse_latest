@@ -6,10 +6,12 @@ import {
   BarChart, Bar, Cell, LabelList, ComposedChart, Line,
 } from 'recharts'
 import {
-  aggregate, TAT_BUCKETS, rowSubPlatform, rowChannelKey,
-  type WarRoomReport as Report, type WarRoomRow, type WarRoomFilters,
+  aggregate, buildTatBuckets, inTatBucket, rowSubPlatform, rowChannelKey,
+  tatUrlToEnforcementMins, tatEnforcementToRemovalMins, MIN_TAT_SHARE,
+  type WarRoomReport as Report, type WarRoomRow, type WarRoomFilters, type TatBucket,
   type Totals, type Funnel, type Removal, type Segment, type Breakdowns, type PlatformResult,
 } from '@/lib/warroom'
+import { downloadCsv, type CsvColumn } from '@/lib/exportCsv'
 
 const NAVY   = '#14254A'
 const ORANGE = '#FC934C'
@@ -66,35 +68,74 @@ function InfoTip({ text }: { text: string }) {
   )
 }
 
+/* ── Raw-data export ──────────────────────────────────────────────────────
+   Every visual carries one of these. It downloads the exact series the visual
+   is drawing (already narrowed by any active cross-filter), so a chart can
+   always be traced back to its numbers. */
+function ExportButton<T>({ label, columns, rows, title }: {
+  label: string; columns: CsvColumn<T>[]; rows: T[]; title?: string
+}) {
+  const disabled = rows.length === 0
+  return (
+    <button type="button" disabled={disabled}
+      title={disabled ? 'Nothing to export' : (title ?? `Export "${label}" data as CSV`)}
+      onClick={e => { e.stopPropagation(); downloadCsv(`war_room_${label}`, columns, rows) }}
+      className={`flex-shrink-0 w-4 h-4 grid place-items-center rounded transition-colors ${
+        disabled ? 'text-gray-200 cursor-not-allowed' : 'text-gray-300 hover:text-[#FC934C] hover:bg-[#FC934C]/10'
+      }`}>
+      <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+      </svg>
+    </button>
+  )
+}
+
+/* Column sets shared by more than one visual. */
+const SEGMENT_EXPORT_COLS: CsvColumn<Segment>[] = [
+  { key: 'label', label: 'Value' },
+  { key: 'identified', label: 'Identified' },
+  { key: 'removed', label: 'Removed' },
+  { key: 'rate', label: 'Removal %', get: s => (s.identified > 0 ? Math.round((s.removed / s.identified) * 100) : 0) },
+]
+const TAT_EXPORT_COLS: CsvColumn<{ label: string; count: number }>[] = [
+  { key: 'label', label: 'TAT bucket' },
+  { key: 'count', label: 'URLs' },
+]
+const KPI_EXPORT_COLS: CsvColumn<{ metric: string; value: number }>[] = [
+  { key: 'metric', label: 'Metric' },
+  { key: 'value', label: 'Value' },
+]
+
 /* Explanation text for every visual, admin/super-admin only. Keep these in
    sync with the actual aggregation logic in go-server/markscan/warroom.go —
    this is meant to describe reality, not aspiration. */
 const LOGIC = {
-  platformPicker: 'Each platform card totals rows fetched for that MarkScan endpoint (facebook/youtube/instagram/twitter/telegram/internet/UGC/etc). "Identified" = row count (Open Web counts distinct source+infringing URLs instead, since the same URL can repeat across rows). "Removed" = rows where removalStatus is Dead/Removed, or (Open Web infringing URLs) delistingStatus is Approved.',
+  platformPicker: 'Each platform card totals rows fetched for that MarkScan endpoint (facebook/youtube/instagram/twitter/telegram/internet/UGC/etc). "Identified" = row count (Open Web counts distinct host+linking URLs instead, since the same URL can repeat across rows). "Removed" = rows where removalStatus is Dead/Removed, or (Open Web linking URLs) delistingStatus is Approved.',
   trend: 'Groups rows by day using ReportDay: urlUploadDate, falling back to discoveryDoneAt, then uploadDate, enforcementTime, removalTime, createdAt — whichever is populated first. Each day plots identified (row count that day) vs removed (same rows where isRemoved() is true).',
-  openWebStats: 'Open Web identification is distinct URLs, not raw rows, since one URL can appear on many rows: "Distinct host URLs"/"domains" = unique sourceURL/domain values; "Distinct infringing URLs"/"domains" = unique infringingURL/domain values (rows with no sourceURL are infringing-URL rows).',
-  newDomains: 'For each infringing domain, takes the earliest ReportDay across all its rows and buckets that domain under that first-seen date — so a domain only counts once, on the day it was first discovered.',
+  openWebStats: 'Open Web identification is distinct URLs, not raw rows, since one URL can appear on many rows: "Distinct host URLs"/"domains" = unique sourceURL/domain values; "Distinct linking URLs"/"domains" = unique infringingURL/domain values (rows with no sourceURL are linking-URL rows).',
+  newDomains: 'For each linking domain, takes the earliest ReportDay across all its rows and buckets that domain under that first-seen date — so a domain only counts once, on the day it was first discovered.',
   searchEngine: 'Groups Open Web rows by the searchEngine field. Identified = row count per engine; Removed = rows where the same isRemoved() logic (Dead / delisting Approved) is true.',
   funnel: 'Identification = total identified rows. Enforced = rows with a non-empty enforcementTime. Removed = rows where isRemoved() is true (Dead/Removed status, or Open Web delisting Approved). Each stage % is stage ÷ identification; the small % next to each row is stage ÷ previous stage (conversion rate).',
   currentStatus: 'Buckets rows by removalStatus, title-cased (DEAD/Dead/dead all merge into one bucket, displayed as "Removed"); blank status becomes "Pending". Bars show identified (count in that status) vs removed (rows in that status that also satisfy isRemoved()) — for most buckets these are equal since the status IS the removal signal.',
   hostVideo: 'removed = same Removed count as the funnel above. active = identified − removed (clamped at 0). The ring % = removed ÷ (removed + active).',
   channelsProfiles: 'Distinct channel/profile per platform: YouTube = channelId; Facebook/Instagram/Twitter = profileUrl; Telegram = channelUrl; UGC = channelOrProfileUrl. Removed = profileRemovalStatus is "Dead" (the Active/Dead column every paged endpoint returns); Active = everything else. YouTube additionally counts isChannelSuspended as removed (fallback for older cached rows). "Subscribers impacted" sums the MAX subscriberCount seen per distinct removed profile (not summed across every row, to avoid double-counting the same profile appearing on many URLs).',
-  headlineKpi: 'Identification/Enforced/Removal/Views mirror the same totals as the Enforcement funnel and At-a-glance cards for the currently selected platform (or all platforms combined). Views sums viewCount across all identified rows.',
-  kpiIdentification: 'Total identified row count for the current platform/filter selection (Open Web: distinct source+infringing URLs instead of raw rows).',
+  headlineKpi: 'The single home for the top-line numbers (the old duplicate "At a glance" grid was retired into this column). Identification/Enforced/Removal mirror the Enforcement funnel for the currently selected platform, or all platforms combined. Views sums viewCount across all identified rows.',
+  kpiIdentification: 'Total identified row count for the current platform/filter selection (Open Web: distinct host+linking URLs instead of raw rows).',
   kpiEnforced: 'Count of rows with a non-empty enforcementTime — a notice has gone out, regardless of whether it has been actioned yet.',
   kpiRemoval: 'Count of rows where isRemoved() is true (Dead/Removed status, or Open Web delisting Approved). The % shown is removed ÷ identified.',
   kpiViews: 'Sum of viewCount across every identified row for the current selection. Not shown for Open Web, which has no view-count concept.',
+  kpiPending: 'Identified − removed, clamped at 0 — URLs that have been found but are not yet down. Same figure as the funnel’s pending stage.',
+  kpiEngagement: 'Σ likeCount + Σ commentCount across every identified row for the current selection. Not shown for Open Web, which carries no engagement metrics.',
   removalRate: 'removed ÷ identified × 100, rounded to the nearest whole percent, for the current platform/filter selection.',
-  atAGlance: 'Restates Identification, Enforced, Removed, Pending Removal (identified − removed), Total Views (Σ viewCount) and Engagement (Σ likeCount + Σ commentCount) for the current platform/filter selection — same underlying totals as the Headline KPIs, just laid out as a quick-reference grid.',
-  tatUrlEnf: 'For each row, minutes between (urlUploadDate ?? discoveryDoneAt) and enforcementTime, bucketed into 0-15/15-30/31-45/46-60/1hr+ (TAT_BUCKETS). Rows missing either timestamp, or with a negative gap, are excluded — the row count shown is only rows where both timestamps exist.',
-  tatEnfRem: 'For each row, minutes between enforcementTime and the effective removal timestamp, bucketed the same way. Effective removal time = removalTime for most platforms; for Open Web, host URLs use removalTime only once Dead, infringing URLs use delistingTime only once delistingStatus is Approved.',
+  tatUrlEnf: 'For each row, minutes between (urlUploadDate ?? discoveryDoneAt) and enforcementTime. Rows missing either timestamp, or with a negative gap, are excluded. Buckets start from the 0-15/16-30/31-45/46-60/1hr+ grid and then AUTO-ADJUST to the data: empty buckets at either end are dropped, and any bucket holding less than 20% of the rows is merged into its lighter neighbour, widening that range — so a bucket is never shown with no data behind it.',
+  tatEnfRem: 'For each row, minutes between enforcementTime and the effective removal timestamp, bucketed with the same auto-adjusting rules. Effective removal time = removalTime for most platforms; for Open Web, host URLs use removalTime only once Dead, linking URLs use delistingTime only once delistingStatus is Approved.',
   breakdownReason: 'Groups rows by infringementType (blank → "Unknown"). Identified = row count per type; Removed = rows of that type where isRemoved() is true.',
   breakdownQuality: 'Groups rows by qualityOfPrint (blank → "Unknown"). Same identified/removed split as Infringement type.',
   breakdownLanguage: 'Groups rows by the "language" field. Facebook/Instagram/Twitter rows populate this from audioLanguage instead (copied over once at ingestion since those endpoints don’t use a generic "language" field). Blank → "Unknown".',
   breakdownCountry: 'Groups rows by the "country" field (blank → "Unknown"). Hidden entirely when Telegram is the selected platform — Telegram rows carry no meaningful country data.',
-  ugcPlatforms: 'Only shown when UGC & Other is the selected platform. The UGC endpoint is queried once per platform value — TikTok, Chomikuj, ShareChat, VK, OK, Bilibili, Dailymotion, plus the residual "UGC And Other Social Media" bucket — and named fetches tag their rows directly. Residual rows carry no platform field, so theirs is derived from the videoURL domain (tiktok.com → TikTok, vk.com → VK, ok.ru → OK, dai.ly → Dailymotion, …; an unmapped domain shows as itself; no usable URL → "UGC & Other"). Bars: Identified = row count per platform; Removed = rows where isRemoved() is true. Line (right axis): removal % = removed ÷ identified × 100. Clicking a bar cross-filters every card by that platform; clicking it again clears the filter.',
+  ugcPlatforms: 'Only shown when UGC & Other is the selected platform. The UGC endpoint is queried once per platform value — TikTok, Chomikuj, ShareChat, VK, OK, Bilibili, Dailymotion, plus the residual "UGC And Other Social Media" bucket — and named fetches tag their rows directly. Residual rows carry no platform field, so theirs is derived from the media-file URL domain (tiktok.com → TikTok, vk.com → VK, ok.ru → OK, dai.ly → Dailymotion, …; an unmapped domain shows as itself; no usable URL → "UGC & Other"). Bars: Identified = row count per platform; Removed = rows where isRemoved() is true. Line (right axis): removal % = removed ÷ identified × 100. Clicking a bar cross-filters every card by that platform; clicking it again clears the filter.',
   repeatOffenders: 'A profile/channel (channelOrProfileUrl; YouTube: channelId) is a repeat offender when at least one of its URLs was removed (marked Dead, with a removalTime) and another of its URLs was discovered AFTER that first removal — i.e. it re-uploaded post-takedown. Identified / Removed = that profile’s total URL counts under the current filters; re-uploads = its URLs discovered after its first removal. Sorted by re-uploads. Profiles with no timestamped removal, or nothing discovered afterwards, don’t qualify. Clicking a row cross-filters every card to that profile’s URLs; clicking it again clears the filter.',
-  assetCompare: 'Only shown when multiple assets are selected. Per asset: identified = row count (Open Web: distinct source+infringing URLs, same as the platform cards); removed = rows where isRemoved() is true; rate = removed ÷ identified.',
+  assetCompare: 'Only shown when multiple assets are selected. Per asset: identified = row count (Open Web: distinct host+linking URLs, same as the platform cards); removed = rows where isRemoved() is true; rate = removed ÷ identified.',
 } as const
 
 /* Friendly display names for the concrete platforms behind the UGC umbrella.
@@ -121,17 +162,6 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
   const [showPlatforms, setShowPlatforms] = useState(false)
 
   const hasFilter = Object.values(filters).some(Boolean)
-  const view = useMemo<Report>(
-    () => (hasFilter && rows.length ? aggregate(rows, filters) : report),
-    [hasFilter, rows, filters, report]
-  )
-
-  const activePlatform = filters.platform || ''
-  const ap  = activePlatform ? view.platforms.find(p => p.platform === activePlatform) : undefined
-  const s: Totals     = ap?.totals    ?? view.summary
-  const f: Funnel     = ap?.funnel    ?? view.funnel
-  const rem: Removal  = ap?.removal   ?? view.removal
-  const b: Breakdowns = ap?.breakdowns ?? view.breakdowns
 
   const rowStatus = (r: WarRoomRow): string => {
     const s = String(r.removalStatus ?? '').trim()
@@ -150,23 +180,9 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
     const d = new Date(iso)
     return Number.isFinite(d.getTime()) ? d : null
   }
-  const diffMinutes = (from?: string | null, to?: string | null) => {
-    const dtA = parseTime(from)
-    const dtB = parseTime(to)
-    if (!dtA || !dtB) return null
-    return (dtB.getTime() - dtA.getTime()) / 60000
-  }
-
-  // Effective removal timestamp for TAT: Open Web infringing URLs (no host URL)
-  // use delistingTime once Approved; Open Web host URLs must be Dead; every
-  // other platform uses removalTime directly.
-  const removalStamp = (r: WarRoomRow): string | null | undefined => {
-    if (normalized(r.platform) === 'internet') {
-      if (r.isSource) return normalized(r.removalStatus) === 'dead' ? r.removalTime : null
-      return normalized(r.delistingStatus) === 'approved' ? r.delistingTime : null
-    }
-    return r.removalTime
-  }
+  // TAT measurement (including Open Web's delisting-vs-removal rules) lives in
+  // lib/warroom.ts so the charts, the cross-filter and the server-side
+  // aggregation can never drift apart.
 
   const matchesFilters = (r: WarRoomRow, f: WarRoomFilters = filters): boolean => {
     if (f.platform && normalized(r.platform) !== f.platform.toLowerCase()) return false
@@ -178,40 +194,85 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
     if (f.country  && normalized(r.country)          !== f.country.toLowerCase())  return false
     if (f.status   && rowStatus(r).toLowerCase()     !== f.status.toLowerCase())   return false
     if (f.tatUrlEnf) {
-      const bkt = TAT_BUCKETS.find(bk => bk.label === f.tatUrlEnf)
-      const mins = diffMinutes(r.urlUploadDate ?? r.discoveryDoneAt, r.enforcementTime)
-      if (!bkt || mins === null || !bkt.test(mins)) return false
+      const bkt = tatUrlEnfBuckets.find(bk => bk.label === f.tatUrlEnf)
+      const mins = tatUrlToEnforcementMins(r)
+      if (!bkt || mins === null || !inTatBucket(bkt, mins)) return false
     }
     if (f.tatEnfRem) {
-      const bkt = TAT_BUCKETS.find(bk => bk.label === f.tatEnfRem)
-      const mins = diffMinutes(r.enforcementTime, removalStamp(r))
-      if (!bkt || mins === null || !bkt.test(mins)) return false
+      const bkt = tatEnfRemBuckets.find(bk => bk.label === f.tatEnfRem)
+      const mins = tatEnforcementToRemovalMins(r)
+      if (!bkt || mins === null || !inTatBucket(bkt, mins)) return false
     }
     if (f.searchEngine && normalized(r.searchEngine) !== f.searchEngine.toLowerCase()) return false
     return true
   }
 
-  const activeRows = useMemo(() => hasFilter ? rows.filter(r => matchesFilters(r)) : rows, [hasFilter, rows, filters])
+  /* ── Auto-adjusting TAT buckets ───────────────────────────────────────────
+     The bucket RANGES are derived once from the rows that pass every
+     non-TAT filter. Deriving them there (rather than from the fully filtered
+     set) keeps the axis stable when a bucket is clicked, and keeps the two TAT
+     charts from depending on each other's filter — which would be circular.
+     buildTatBuckets drops empty buckets and widens any bucket holding less
+     than MIN_TAT_SHARE of the rows. */
+  const noTatFilters: WarRoomFilters = { ...filters, tatUrlEnf: '', tatEnfRem: '' }
+  const tatBaseRows = useMemo(
+    () => rows.filter(r => matchesFilters(r, noTatFilters)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, filters]
+  )
+  const minutesOf = (src: WarRoomRow[], get: (r: WarRoomRow) => number | null) =>
+    src.map(get).filter((m): m is number => m !== null && m >= 0)
 
-  // TAT_BUCKETS imported from warroom.ts
+  const tatUrlEnfBuckets = useMemo(
+    () => buildTatBuckets(minutesOf(tatBaseRows, tatUrlToEnforcementMins)), [tatBaseRows])
+  const tatEnfRemBuckets = useMemo(
+    () => buildTatBuckets(minutesOf(tatBaseRows, tatEnforcementToRemovalMins)), [tatBaseRows])
 
-  const bucketCounts = (rows: WarRoomRow[], getMinutes: (r: WarRoomRow) => number | null) =>
-    TAT_BUCKETS.map(bucket => ({
+  const activeRows = useMemo(() => hasFilter ? rows.filter(r => matchesFilters(r)) : rows,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hasFilter, rows, filters, tatUrlEnfBuckets, tatEnfRemBuckets])
+
+  // Each TAT chart counts rows that ignore its OWN filter, so selecting a
+  // bucket highlights it instead of collapsing every other bar to zero.
+  const bucketCounts = (
+    src: WarRoomRow[], getMinutes: (r: WarRoomRow) => number | null, buckets: TatBucket[]
+  ) =>
+    buckets.map(bucket => ({
       label: bucket.label,
-      count: rows.reduce((sum, r) => {
+      count: src.reduce((sum, r) => {
         const mins = getMinutes(r)
-        return sum + (mins !== null && mins >= 0 && bucket.test(mins) ? 1 : 0)
+        return sum + (mins !== null && mins >= 0 && inTatBucket(bucket, mins) ? 1 : 0)
       }, 0),
     }))
 
   const tatUrlToEnforcement = useMemo(
-    () => bucketCounts(activeRows, r => diffMinutes(r.urlUploadDate ?? r.discoveryDoneAt, r.enforcementTime)),
-    [activeRows]
+    () => bucketCounts(
+      rows.filter(r => matchesFilters(r, { ...filters, tatUrlEnf: '' })),
+      tatUrlToEnforcementMins, tatUrlEnfBuckets),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, filters, tatUrlEnfBuckets, tatEnfRemBuckets]
   )
   const tatEnforcementToRemoval = useMemo(
-    () => bucketCounts(activeRows, r => diffMinutes(r.enforcementTime, removalStamp(r))),
-    [activeRows]
+    () => bucketCounts(
+      rows.filter(r => matchesFilters(r, { ...filters, tatEnfRem: '' })),
+      tatEnforcementToRemovalMins, tatEnfRemBuckets),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, filters, tatUrlEnfBuckets, tatEnfRemBuckets]
   )
+
+  const view = useMemo<Report>(
+    () => (hasFilter && rows.length
+      ? aggregate(rows, filters, { tatUrlEnfBuckets, tatEnfRemBuckets })
+      : report),
+    [hasFilter, rows, filters, report, tatUrlEnfBuckets, tatEnfRemBuckets]
+  )
+
+  const activePlatform = filters.platform || ''
+  const ap  = activePlatform ? view.platforms.find(p => p.platform === activePlatform) : undefined
+  const s: Totals     = ap?.totals    ?? view.summary
+  const f: Funnel     = ap?.funnel    ?? view.funnel
+  const rem: Removal  = ap?.removal   ?? view.removal
+  const b: Breakdowns = ap?.breakdowns ?? view.breakdowns
 
   // ── Per-asset comparison (only when multiple assets were selected) ────────
   const multiAsset = useMemo(
@@ -461,6 +522,61 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
      'searchEngine'] as const
   ).filter(k => filters[k])
 
+  /* ── Export payloads ──────────────────────────────────────────────────────
+     One per visual, built from exactly what that visual renders so a download
+     always matches the screen under the current cross-filters. */
+  const kpiExportRows = [
+    { metric: 'Identification', value: s.identified },
+    { metric: 'Enforced',       value: s.enforced },
+    { metric: 'Removed',        value: s.removed },
+    { metric: 'Pending removal', value: f.pending },
+    { metric: 'Removal rate %', value: s.identified > 0 ? Math.round((s.removed / s.identified) * 100) : 0 },
+    { metric: 'Views',          value: s.views },
+    { metric: 'Engagement',     value: s.engagement },
+  ]
+  const platformExportRows = view.platforms.filter(p => p.available).map(p => ({
+    platform: p.label,
+    identified: p.totals.identified,
+    enforced: p.totals.enforced,
+    removed: p.totals.removed,
+    rate: p.totals.identified > 0 ? Math.round((p.totals.removed / p.totals.identified) * 100) : 0,
+    views: p.totals.views,
+    engagement: p.totals.engagement,
+  }))
+  const funnelExportRows = [
+    { stage: 'Identification', value: f.discovered },
+    { stage: 'Enforced',       value: f.enforced },
+    { stage: 'Removed',        value: f.removed },
+    { stage: 'Pending',        value: f.pending },
+  ]
+  const urlDonutExportRows = [
+    { state: 'Removed', value: rem.urlRemoved },
+    { state: 'Pending', value: rem.urlPending },
+  ]
+  const channelDonutExportRows = [
+    { state: 'Dead',                 value: rem.channelsRemoved },
+    { state: 'Active',               value: rem.channelsActive },
+    { state: 'Distinct channels',    value: rem.channelsTotal },
+    { state: 'Subscribers impacted', value: rem.subscribersImpacted },
+  ]
+  // Every trimmed row behind the current view — the fully raw export.
+  const rawRowExportCols: CsvColumn<WarRoomRow>[] = [
+    { key: 'id', label: 'ID' }, { key: 'platform', label: 'Platform' },
+    { key: 'subPlatform', label: 'Sub-platform' }, { key: 'assetName', label: 'Asset' },
+    { key: 'infringementType', label: 'Infringement type' }, { key: 'qualityOfPrint', label: 'Quality of print' },
+    { key: 'language', label: 'Language' }, { key: 'country', label: 'Country' },
+    { key: 'removalStatus', label: 'Removal status' }, { key: 'urlUploadDate', label: 'URL upload date' },
+    { key: 'discoveryDoneAt', label: 'Discovery done at' }, { key: 'enforcementTime', label: 'Enforcement time' },
+    { key: 'removalTime', label: 'Removal time' }, { key: 'delistingStatus', label: 'Delisting status' },
+    { key: 'delistingTime', label: 'Delisting time' }, { key: 'searchEngine', label: 'Search engine' },
+    { key: 'sourceURL', label: 'Host URL' }, { key: 'sourceDomain', label: 'Host domain' },
+    { key: 'infringingURL', label: 'Linking URL' }, { key: 'infringingDomain', label: 'Linking domain' },
+    { key: 'channelOrProfileUrl', label: 'Channel / profile URL' }, { key: 'channelId', label: 'Channel ID' },
+    { key: 'profileRemovalStatus', label: 'Profile removal status' },
+    { key: 'viewCount', label: 'Views' }, { key: 'likeCount', label: 'Likes' },
+    { key: 'commentCount', label: 'Comments' }, { key: 'subscriberCount', label: 'Subscribers' },
+  ]
+
   const isUgcSelected = activePlatform === 'ugc and other social media'
   const isOpenWeb     = activePlatform === 'internet'
   // Platforms whose extra sections (UGC breakdown / Open Web intelligence)
@@ -473,7 +589,14 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
      column for everything else. */
   const trendBlock = (
     <div className={isOpenWeb ? 'mt-3' : ''}>
-      <Label info={admin && <InfoTip text={LOGIC.trend} />}>Date-wise trend — identified vs removed</Label>
+      <Label info={admin && <InfoTip text={LOGIC.trend} />}
+        action={<ExportButton label="Date-wise trend" rows={b.byDate ?? []} columns={[
+          { key: 'date', label: 'Date' },
+          { key: 'identified', label: 'Identified' },
+          { key: 'removed', label: 'Removed' },
+        ]} />}>
+        Date-wise trend — identified vs removed
+      </Label>
       <Card className="p-4 mt-1">
         <TrendChart data={b.byDate ?? []} />
       </Card>
@@ -488,25 +611,40 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
       activePlatform === 'internet' ? 'xl:grid-cols-3' : 'xl:grid-cols-4'} ${fullWidthBlocks ? 'mt-3' : ''}`}>
 
       <div className="flex flex-col">
-        <Label info={admin && <InfoTip text={LOGIC.funnel} />}>Enforcement funnel</Label>
+        <Label info={admin && <InfoTip text={LOGIC.funnel} />}
+          action={<ExportButton label="Enforcement funnel" rows={funnelExportRows} columns={[
+            { key: 'stage', label: 'Stage' }, { key: 'value', label: 'URLs' },
+          ]} />}>
+          Enforcement funnel
+        </Label>
         <Card className="mt-1 overflow-hidden flex-1 flex flex-col">
           <FunnelView f={f} />
         </Card>
       </div>
       <div className="flex flex-col">
         <Label>Current status</Label>
-        <SegmentBars className="flex-1 mt-1" title="Current status" data={b.byStatus} dim="status" active={filters.status} onSelect={toggle} info={admin && <InfoTip text={LOGIC.currentStatus} />} />
+        <SegmentBars className="flex-1 mt-1" title="Current status" data={b.byStatus} dim="status" active={filters.status} onSelect={toggle} info={admin && <InfoTip text={LOGIC.currentStatus} />} exportLabel="Current status" />
       </div>
       <div className="flex flex-col">
-        <Label info={admin && <InfoTip text={LOGIC.hostVideo} />}>Host / video URLs</Label>
+        <Label info={admin && <InfoTip text={LOGIC.hostVideo} />}
+          action={<ExportButton label="Host URLs and Media Files" rows={urlDonutExportRows} columns={[
+            { key: 'state', label: 'State' }, { key: 'value', label: 'URLs' },
+          ]} />}>
+          Host URLs / Media Files
+        </Label>
         <DonutCard className="flex-1"
-          title="Host / video URLs" icon={<IconLink />}
+          title="Host URLs / Media Files" icon={<IconLink />}
           removed={rem.urlRemoved} pending={rem.urlPending} tone="navy"
         />
       </div>
       {activePlatform !== 'internet' && (
         <div className="flex flex-col">
-          <Label info={admin && <InfoTip text={LOGIC.channelsProfiles} />}>Channels / profiles</Label>
+          <Label info={admin && <InfoTip text={LOGIC.channelsProfiles} />}
+            action={<ExportButton label="Channels and profiles" rows={channelDonutExportRows} columns={[
+              { key: 'state', label: 'Metric' }, { key: 'value', label: 'Value' },
+            ]} />}>
+            Channels / profiles
+          </Label>
           <DonutCard className="flex-1"
             title="Channels / profiles" icon={<IconUser />}
             removed={rem.channelsRemoved} pending={rem.channelsActive} tone="orange"
@@ -553,7 +691,30 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
               scrollable row, so nothing is hidden behind a click and the
               cards below still get the full page width. */}
           <div>
-            <Label info={admin && <InfoTip text={LOGIC.platformPicker} />}>Platform</Label>
+            <Label info={admin && <InfoTip text={LOGIC.platformPicker} />}
+              action={
+                <span className="flex items-center gap-2">
+                  <ExportButton label="Platform totals" rows={platformExportRows} columns={[
+                    { key: 'platform', label: 'Platform' }, { key: 'identified', label: 'Identified' },
+                    { key: 'enforced', label: 'Enforced' }, { key: 'removed', label: 'Removed' },
+                    { key: 'rate', label: 'Removal %' }, { key: 'views', label: 'Views' },
+                    { key: 'engagement', label: 'Engagement' },
+                  ]} />
+                  {/* Whole filtered dataset, not just this visual's series. */}
+                  <button type="button" disabled={activeRows.length === 0}
+                    title={activeRows.length === 0 ? 'Nothing to export' : 'Export every row behind the current view as CSV'}
+                    onClick={() => downloadCsv('war_room_raw_rows', rawRowExportCols, activeRows)}
+                    className={`px-2 py-0.5 rounded-md border text-[9px] font-bold uppercase tracking-wide transition-colors ${
+                      activeRows.length === 0
+                        ? 'border-gray-100 text-gray-200 cursor-not-allowed'
+                        : 'border-gray-200 text-gray-400 hover:border-[#FC934C] hover:text-[#FC934C]'
+                    }`}>
+                    Export raw rows
+                  </button>
+                </span>
+              }>
+              Platform
+            </Label>
             <div className="flex gap-2 overflow-x-auto pb-1">
               <button
                 onClick={() => selectPlatform(activePlatform)}
@@ -623,26 +784,42 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
           {/* Open Web intelligence — only when the Open Web platform is selected */}
           {activePlatform === 'internet' && openWeb && (
             <div>
-              <Label info={admin && <InfoTip text={LOGIC.openWebStats} />}>Open Web — hosts &amp; infringing URLs</Label>
+              <Label info={admin && <InfoTip text={LOGIC.openWebStats} />}
+                action={<ExportButton label="Open Web hosts and linking URLs" rows={[
+                  { metric: 'Distinct host URLs',     value: openWeb.distinctSourceUrls },
+                  { metric: 'Distinct linking URLs',  value: openWeb.distinctInfringingUrls },
+                  { metric: 'Distinct host domains',  value: openWeb.distinctSourceDomains },
+                  { metric: 'Distinct linking domains', value: openWeb.distinctInfringingDomains },
+                  { metric: 'Identification',         value: openWeb.identification },
+                  { metric: 'Total rows',             value: openWeb.total },
+                ]} columns={KPI_EXPORT_COLS} />}>
+                Open Web — hosts &amp; linking URLs
+              </Label>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mt-3">
-                <OwStat label="Distinct host URLs"          value={nf(openWeb.distinctSourceUrls)}        foot={`identification: ${nf(openWeb.identification)}`} tone="navy" />
-                <OwStat label="Distinct infringing URLs"    value={nf(openWeb.distinctInfringingUrls)}    foot={`${nf(openWeb.total)} total rows`} tone="orange" />
-                <OwStat label="Distinct host domains"       value={nf(openWeb.distinctSourceDomains)}     foot="unique host domains" tone="navy" />
-                <OwStat label="Distinct infringing domains" value={nf(openWeb.distinctInfringingDomains)} foot="unique linking domains" tone="orange" />
+                <OwStat label="Distinct host URLs"       value={nf(openWeb.distinctSourceUrls)}        foot={`identification: ${nf(openWeb.identification)}`} tone="navy" />
+                <OwStat label="Distinct linking URLs"    value={nf(openWeb.distinctInfringingUrls)}    foot={`${nf(openWeb.total)} total rows`} tone="orange" />
+                <OwStat label="Distinct host domains"    value={nf(openWeb.distinctSourceDomains)}     foot="unique host domains" tone="navy" />
+                <OwStat label="Distinct linking domains" value={nf(openWeb.distinctInfringingDomains)} foot="unique linking domains" tone="orange" />
               </div>
 
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 mt-3">
                 <div className="flex flex-col">
-                  <Label info={admin && <InfoTip text={LOGIC.newDomains} />}>Date-wise newly identified domains</Label>
+                  <Label info={admin && <InfoTip text={LOGIC.newDomains} />}
+                    action={<ExportButton label="Newly identified domains" rows={openWeb.newDomainsByDate} columns={[
+                      { key: 'date', label: 'Date' }, { key: 'count', label: 'New domains' },
+                    ]} />}>
+                    Date-wise newly identified domains
+                  </Label>
                   <Card className="p-4 flex-1 mt-1">
                     <NewDomainsChart data={openWeb.newDomainsByDate} />
                   </Card>
                 </div>
                 <div className="flex flex-col">
-                  <Label info={admin && <InfoTip text={LOGIC.searchEngine} />}>Infringing URLs by search engine</Label>
+                  <Label info={admin && <InfoTip text={LOGIC.searchEngine} />}>Linking URLs by search engine</Label>
                   <div className="mt-1 flex-1 flex flex-col">
                     <SegmentBars className="flex-1" title="Search engine" data={openWeb.bySearchEngine}
-                      dim="searchEngine" active={filters.searchEngine} onSelect={toggle} />
+                      dim="searchEngine" active={filters.searchEngine} onSelect={toggle}
+                      exportLabel="Linking URLs by search engine" />
                   </div>
                 </div>
               </div>
@@ -652,7 +829,11 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
           {/* UGC platform breakdown — only when UGC & Other is selected */}
           {activePlatform === 'ugc and other social media' && ugcBreakdown.length > 0 && (
             <div>
-              <Label info={admin && <InfoTip text={LOGIC.ugcPlatforms} />}>
+              <Label info={admin && <InfoTip text={LOGIC.ugcPlatforms} />}
+                action={<ExportButton label="UGC platforms" rows={ugcBreakdown} columns={[
+                  { key: 'label', label: 'Platform' }, { key: 'identified', label: 'Identified' },
+                  { key: 'removed', label: 'Removed' }, { key: 'rate', label: 'Removal %' },
+                ]} />}>
                 UGC platforms — identification, removal &amp; removal % · click a bar to filter
               </Label>
               <Card className="p-4 mt-1">
@@ -668,7 +849,13 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
           {/* Asset comparison — only when multiple assets are selected */}
           {multiAsset && assetCompare.length > 0 && (
             <div>
-              <Label info={admin && <InfoTip text={LOGIC.assetCompare} />}>Asset comparison — identification vs removal</Label>
+              <Label info={admin && <InfoTip text={LOGIC.assetCompare} />}
+                action={<ExportButton label="Asset comparison" rows={assetCompare} columns={[
+                  { key: 'asset', label: 'Asset' }, { key: 'identified', label: 'Identified' },
+                  { key: 'removed', label: 'Removed' }, { key: 'rate', label: 'Removal %' },
+                ]} />}>
+                Asset comparison — identification vs removal
+              </Label>
               <Card className="p-4 mt-1">
                 <AssetCompareChart data={assetCompare} />
               </Card>
@@ -682,12 +869,23 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
 
         {/* ── RIGHT: Headline KPIs ──────────────────────────────────────────── */}
         <div className="w-full flex flex-col gap-3 xl:sticky xl:top-4 xl:self-start">
-          <Label info={admin && <InfoTip text={LOGIC.headlineKpi} />}>Headline KPIs{ap ? ` — ${ap.label}` : ''}</Label>
+          {/* Single home for the top-line numbers. The old "At a glance" grid
+              repeated Identification/Enforced/Removed/Views verbatim, so its
+              two unique metrics (pending removal, engagement) were folded in
+              here and the duplicate card retired. */}
+          <Label info={admin && <InfoTip text={LOGIC.headlineKpi} />}
+            action={<ExportButton label="Headline KPIs" columns={KPI_EXPORT_COLS} rows={kpiExportRows} />}>
+            Headline KPIs{ap ? ` — ${ap.label}` : ''}
+          </Label>
           <Kpi label="Identification" value={nf(s.identified)}      foot="URLs identified"      tone="navy"   icon={<IconShield />} info={admin && <InfoTip text={LOGIC.kpiIdentification} />} />
           <Kpi label="Enforced"       value={nf(s.enforced)}        foot="notices sent"         icon={<IconSend />} info={admin && <InfoTip text={LOGIC.kpiEnforced} />} />
           <Kpi label="Removal"        value={nf(s.removed)}         foot={`${removalRate}% removal rate`} tone="orange" icon={<IconTrash />} info={admin && <InfoTip text={LOGIC.kpiRemoval} />} />
+          <Kpi label="Pending removal" value={nf(f.pending)}        foot="identified, not yet removed" icon={<IconClock />} info={admin && <InfoTip text={LOGIC.kpiPending} />} />
           {activePlatform !== 'internet' && (
-            <Kpi label="Views" value={compact(s.views)} foot="total views reached" icon={<IconEye />} info={admin && <InfoTip text={LOGIC.kpiViews} />} />
+            <>
+              <Kpi label="Views" value={compact(s.views)} foot="total views reached" icon={<IconEye />} info={admin && <InfoTip text={LOGIC.kpiViews} />} />
+              <Kpi label="Engagement" value={compact(s.engagement)} foot="likes + comments" icon={<IconHeart />} info={admin && <InfoTip text={LOGIC.kpiEngagement} />} />
+            </>
           )}
 
           {/* Removal rate ring */}
@@ -712,21 +910,23 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
       {isOpenWeb && trendBlock}
       {fullWidthBlocks && funnelStatusRow}
 
-      {/* ── FULL WIDTH: at-a-glance + TAT buckets — spans the whole page width,
-             not just the center column between the sidebars. ─────────────────── */}
-      <div className="mt-3 grid grid-cols-1 xl:grid-cols-3 gap-3 items-stretch">
+      {/* ── FULL WIDTH: TAT buckets — spans the whole page width, not just the
+             center column between the sidebars. ─────────────────────────────── */}
+      <div className="mt-3 grid grid-cols-1 xl:grid-cols-2 gap-3 items-stretch">
         <div className="flex flex-col">
-          <Label info={admin && <InfoTip text={LOGIC.atAGlance} />}>At a glance</Label>
-          <SummaryCard className="flex-1" totals={s} funnel={f} />
-        </div>
-        <div className="flex flex-col">
-          <Label info={admin && <InfoTip text={LOGIC.tatUrlEnf} />}>TAT: URL → Enforcement</Label>
+          <Label info={admin && <InfoTip text={LOGIC.tatUrlEnf} />}
+            action={<ExportButton label="TAT URL to Enforcement" columns={TAT_EXPORT_COLS} rows={tatUrlToEnforcement} />}>
+            TAT: URL → Enforcement
+          </Label>
           <TatBucketCard buckets={tatUrlToEnforcement}
             active={filters.tatUrlEnf}
             onSelect={l => toggle('tatUrlEnf', l)} />
         </div>
         <div className="flex flex-col">
-          <Label info={admin && <InfoTip text={LOGIC.tatEnfRem} />}>TAT: Enforcement → Removal</Label>
+          <Label info={admin && <InfoTip text={LOGIC.tatEnfRem} />}
+            action={<ExportButton label="TAT Enforcement to Removal" columns={TAT_EXPORT_COLS} rows={tatEnforcementToRemoval} />}>
+            TAT: Enforcement → Removal
+          </Label>
           <TatBucketCard buckets={tatEnforcementToRemoval}
             active={filters.tatEnfRem}
             onSelect={l => toggle('tatEnfRem', l)} />
@@ -738,7 +938,11 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
              no profile concept). ───────────────────────────────────────────── */}
       {repeatOffenders.length > 0 && (
         <div className="mt-3">
-          <Label info={admin && <InfoTip text={LOGIC.repeatOffenders} />}>
+          <Label info={admin && <InfoTip text={LOGIC.repeatOffenders} />}
+            action={<ExportButton label="Repeat offenders" rows={repeatOffenders} columns={[
+              { key: 'url', label: 'Channel / profile' }, { key: 'identified', label: 'Identified' },
+              { key: 'removed', label: 'Removed' }, { key: 'reuploads', label: 'Re-uploads after takedown' },
+            ]} />}>
             Repeat offenders — profiles re-uploading after removal · click a row to filter
           </Label>
           <RepeatOffendersCard data={repeatOffenders} active={filters.offender}
@@ -1143,40 +1347,17 @@ function DonutCard({ title, icon, removed, pending, tone, extras, className = ''
   )
 }
 
-/* ── Summary "at a glance" card ───────────────────────────────────────── */
-function SummaryCard({ totals, funnel, className = '' }: { totals: Totals; funnel: Funnel; className?: string }) {
-  const items = [
-    { label: 'Identification',  value: nf(totals.identified),  color: NAVY_TEXT },
-    { label: 'Enforced',        value: nf(totals.enforced),    color: '#64748b' },
-    { label: 'Removed',         value: nf(totals.removed),     color: ORANGE },
-    { label: 'Pending removal', value: nf(funnel.pending),     color: '#64748b' },
-    { label: 'Total views',     value: nf(totals.views),       color: '#64748b' },
-    { label: 'Engagement',      value: nf(totals.engagement),  color: '#64748b' },
-  ]
-  return (
-    <Card className={`p-4 flex flex-col ${className}`}>
-      <div className="flex items-center gap-2 text-[11px] font-bold text-gray-600 mb-3"><IconChart /> At a glance</div>
-      {/* auto-rows-fr + flex-1 so the tiles stretch to fill the card height and
-          the card doesn't show a large empty area when its row is tall */}
-      <div className="flex-1 grid grid-cols-2 auto-rows-fr gap-x-4 gap-y-2">
-        {items.map(r => (
-          <div key={r.label} className="flex flex-col justify-center px-2.5 py-2 rounded-lg bg-gray-50 border border-gray-100">
-            <span className="text-[9px] uppercase tracking-widest text-gray-400 font-bold">{r.label}</span>
-            <b className="text-sm mt-0.5" style={{ color: r.color }}>{r.value}</b>
-          </div>
-        ))}
-      </div>
-    </Card>
-  )
-}
-
 /* ── TAT bucket card (clickable, cross-filterable) ───────────────────── */
 function TatBucketCard({ buckets, active, onSelect }: {
   buckets: { label: string; count: number }[]
   active?: string
   onSelect: (label: string) => void
 }) {
-  if (!buckets.length) {
+  // Ranges already auto-widen upstream (buildTatBuckets); this is the last
+  // guard so an empty bucket can never reach the screen — including one that
+  // only emptied because another filter narrowed the rows.
+  const shown = buckets.filter(b => b.count > 0 || b.label === active)
+  if (!shown.length) {
     return (
       <Card className="p-4 flex flex-col gap-3 flex-1">
         <div className="text-sm font-bold text-[#14254A]">TAT bucket distribution</div>
@@ -1184,14 +1365,16 @@ function TatBucketCard({ buckets, active, onSelect }: {
       </Card>
     )
   }
-  const total    = buckets.reduce((sum, b) => sum + b.count, 0)
+  const total    = shown.reduce((sum, b) => sum + b.count, 0)
   const hasActive = !!active
   return (
     <Card className="p-4 flex flex-col gap-3 flex-1">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-sm font-bold text-[#14254A]">TAT bucket distribution</div>
-          <div className="text-[11px] text-gray-500">{total.toLocaleString()} rows · click a bar to filter</div>
+          <div className="text-[11px] text-gray-500">
+            {total.toLocaleString()} rows · {shown.length} auto-fitted bucket{shown.length === 1 ? '' : 's'} · click a bar to filter
+          </div>
         </div>
         {hasActive && (
           <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full self-center"
@@ -1200,7 +1383,7 @@ function TatBucketCard({ buckets, active, onSelect }: {
       </div>
       <div className="h-[180px]">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={buckets} layout="vertical" margin={{ top: 8, right: 10, bottom: 8, left: 0 }}
+          <BarChart data={shown} layout="vertical" margin={{ top: 8, right: 10, bottom: 8, left: 0 }}
             style={{ cursor: 'pointer' }}>
             <XAxis type="number" hide />
             <YAxis dataKey="label" type="category" axisLine={false} tickLine={false}
@@ -1208,7 +1391,7 @@ function TatBucketCard({ buckets, active, onSelect }: {
             <Tooltip cursor={{ fill: '#f8fafc' }} contentStyle={{ borderRadius: 10, border: '1px solid #e4e8f0', fontSize: 13 }} />
             <Bar dataKey="count" barSize={14} radius={[8, 8, 8, 8]}
               onClick={(data: any) => onSelect(data.label)}>
-              {buckets.map((bucket, index) => {
+              {shown.map((bucket, index) => {
                 const isActive = bucket.label === active
                 return (
                   <Cell key={bucket.label}
@@ -1223,7 +1406,7 @@ function TatBucketCard({ buckets, active, onSelect }: {
         </ResponsiveContainer>
       </div>
       <div className="grid grid-cols-2 gap-2 text-[11px] text-gray-600">
-        {buckets.map(bucket => {
+        {shown.map(bucket => {
           const isActive = bucket.label === active
           return (
             <button key={bucket.label} onClick={() => onSelect(bucket.label)}
@@ -1242,10 +1425,11 @@ function TatBucketCard({ buckets, active, onSelect }: {
   )
 }
 
-function SegmentBars({ title, data, dim, active, onSelect, onInspect, info, className = '' }: {
+function SegmentBars({ title, data, dim, active, onSelect, onInspect, info, className = '', exportLabel }: {
   title: string; data: Segment[] | null; dim: FilterDim
   active?: string; onSelect: (dim: FilterDim, key: string) => void
   onInspect?: (dim: FilterDim, title: string) => void; info?: ReactNode; className?: string
+  exportLabel?: string
 }) {
   const segs     = data ?? []
   const max      = Math.max(1, ...segs.map(s => s.identified))
@@ -1259,6 +1443,9 @@ function SegmentBars({ title, data, dim, active, onSelect, onInspect, info, clas
           <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full"
             style={{ background: '#FC934C22', color: ORANGE_TEXT }}>filtered</span>
         )}
+        <span className="ml-auto flex items-center">
+          <ExportButton label={exportLabel ?? title} columns={SEGMENT_EXPORT_COLS} rows={segs} />
+        </span>
       </div>
       {segs.length === 0 ? (
         <div className="text-sm text-gray-400 py-3">No data.</div>
@@ -1311,10 +1498,11 @@ function SegmentBars({ title, data, dim, active, onSelect, onInspect, info, clas
 function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return <div className={`bg-white rounded-2xl shadow-card border border-gray-100 ${className}`}>{children}</div>
 }
-function Label({ children, info }: { children: ReactNode; info?: ReactNode }) {
+function Label({ children, info, action }: { children: ReactNode; info?: ReactNode; action?: ReactNode }) {
   return (
     <div className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-2 flex items-center gap-1.5">
       {children}{info}
+      {action && <span className="ml-auto flex items-center">{action}</span>}
     </div>
   )
 }
@@ -1328,5 +1516,5 @@ const IconEye    = () => <svg {...sv}><path strokeLinecap="round" strokeLinejoin
 const IconHeart  = () => <svg {...sv}><path strokeLinecap="round" strokeLinejoin="round" d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 1 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z" /></svg>
 const IconLink   = () => <svg {...sv}><path strokeLinecap="round" strokeLinejoin="round" d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1" /></svg>
 const IconUser   = () => <svg {...sv}><path strokeLinecap="round" strokeLinejoin="round" d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
-const IconChart  = () => <svg {...sv}><path strokeLinecap="round" strokeLinejoin="round" d="M3 3v18h18M18 17V9M13 17V5M8 17v-3" /></svg>
+const IconClock  = () => <svg {...sv}><circle cx="12" cy="12" r="9" /><path strokeLinecap="round" strokeLinejoin="round" d="M12 7v5l3 2" /></svg>
 const IconGrid   = () => <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>

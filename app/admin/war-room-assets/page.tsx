@@ -8,6 +8,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { Link } from 'react-router-dom'
+import BackToConfiguration from '@/components/admin/BackToConfiguration'
 
 interface ClientRow {
   userId: number
@@ -110,11 +111,12 @@ export default function WarRoomAssetsPage() {
         </div>
       )}
 
+      <BackToConfiguration />
+
       {/* Header */}
       <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
         <div>
-          <Link to="/admin/configuration" className="text-brand-muted hover:text-[#FC934C] text-xs font-medium">← Configuration</Link>
-          <h1 className="text-2xl font-bold text-[#14254A] mt-1">War Room Assets</h1>
+          <h1 className="text-2xl font-bold text-[#14254A]">War Room Assets</h1>
           <p className="text-brand-muted text-sm mt-1">
             {clients.length} client{clients.length !== 1 ? 's' : ''} · Asset Comparison enabled for {enabledCount}
           </p>
