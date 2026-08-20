@@ -51,12 +51,21 @@ export default function ClientNavbar() {
   // claim (frozen at select-login) is only the fallback.
   const hasRealApiToken = liveApiAccess ?? !!(user?.apiAccess)
 
-  // Dashboard is always visible regardless of token or module permissions.
-  // API-independent modules (e.g. Data Sharing) need only the grant. All other
-  // items require a valid API token + module permission. Matching is by the
-  // stable pageName (see isItemAllowed), so renaming a module never hides it.
+  /* Dashboard needs no API token, but it is NOT unconditional.
+
+     It used to return true before looking at anything, which is why a login
+     granted Reports saw both: the server resolves the two into one — they show
+     the same figures, see effectiveNavModules — and drops Dashboard from
+     /api/user/nav, but this returned true without ever reading that answer.
+
+     So it is exempt from the TOKEN check, and from nothing else. Where the
+     server has kept it, it appears; where Reports replaced it, it does not.
+
+     API-independent modules (e.g. Data Sharing) need only the grant. All other
+     items require a valid API token + module permission. Matching is by the
+     stable pageName (see isItemAllowed), so renaming a module never hides it. */
   function isNavAllowed(item: NavItem): boolean {
-    if (item.href === '/dashboard') return true
+    if (item.href === '/dashboard') return isItemAllowed(item, allowedModules)
     if (!hasRealApiToken && !isApiIndependentItem(item)) return false
     return isItemAllowed(item, allowedModules)
   }

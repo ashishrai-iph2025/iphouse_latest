@@ -12,6 +12,7 @@ import (
 // It is the allow-list of module keys that may be stored in dcp_admin_config_access,
 // and the full set a Super Admin implicitly has access to.
 var configModuleKeys = []string{
+	"guidelines",
 	"modules",
 	"api-credentials",
 	"dashboard-modules",
@@ -26,7 +27,6 @@ var configModuleKeys = []string{
 	"war-room-assets",
 	"email-templates",
 	"email-event-types",
-	"api-playground",
 	"client-admins",
 	"report-config",
 }

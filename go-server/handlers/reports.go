@@ -134,10 +134,17 @@ func ReportsHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	OK(w, map[string]any{
-		"success": true, "configured": true, "connected": true,
-		"host": host, "database": name, "tables": tables,
-	})
+	/* Connected or not is what the page asks and all it draws. The hostname,
+	   the schema and the table names are the warehouse's address, and this
+	   endpoint is open to every admin — so they go only to a Super Admin, who
+	   is the person who would act on them. */
+	out := map[string]any{"success": true, "configured": true, "connected": true}
+	if maySeeWarehouseNames(r) {
+		out["host"] = host
+		out["database"] = name
+		out["tables"] = tables
+	}
+	OK(w, out)
 }
 
 // envDisplay reads a non-secret env value for display. Only host/database names
@@ -171,6 +178,14 @@ func ReportsOptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	/* The window and the other active slicers travel with the request, so the
+	   values offered are the values that have something behind them. A slicer
+	   listing everything the client has ever had offers choices that empty the
+	   page — and the page cannot then say why, because "no rows" and "no such
+	   value in this window" look identical once the choice has been made. */
+	scope := flatQuery(q)
+	scope["clientId"] = clientID
+
 	// Configured platforms (reportplatforms.go) list their own slicer values,
 	// merged across every table the platform reads.
 	if p, ok := platformByKey(kind); ok {
@@ -179,7 +194,7 @@ func ReportsOptions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		specs, _ := specsForPlatform(p)
-		OK(w, mergeSpecOptions(specs, clientID))
+		OK(w, mergeSpecOptions(specs, clientID, scope))
 		return
 	}
 
@@ -191,7 +206,7 @@ func ReportsOptions(w http.ResponseWriter, r *http.Request) {
 			Fail(w, 403, "You do not have access to any reports")
 			return
 		}
-		OK(w, mergeSpecOptions(summarySpecs(plats), clientID))
+		OK(w, mergeSpecOptions(summarySpecs(plats), clientID, scope))
 		return
 	}
 
@@ -292,7 +307,9 @@ func ReportsData(w http.ResponseWriter, r *http.Request) {
 			Fail(w, 403, "You do not have access to this report")
 			return
 		}
-		OK(w, runPlatform(p, flatQuery(q)))
+		// Through the cache — see reportcachebridge.go. Identical answer, and
+		// on a hit, without recomputing eighteen aggregates.
+		OK(w, cachedPlatformReport(p, flatQuery(q), false, false))
 		return
 	}
 

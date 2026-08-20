@@ -1,10 +1,13 @@
 ﻿'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import AdminPageHeader from '@/components/admin/AdminPageHeader'
 import PaginationBar from '@/components/admin/PaginationBar'
 import PageLoader from '@/components/ui/PageLoader'
 import Drawer from '@/components/ui/Drawer'
+import {
+  enforceDashboardReports, selectAllRespectingRule, DASHBOARD_REPORTS_HINT,
+} from '@/lib/moduleExclusivity'
 
 const PER_PAGE = 15
 
@@ -117,11 +120,25 @@ export default function RegistrationRequestsPage() {
     setGrantedLoginId(null)
   }
 
+  /* Module ids paired with their names, for the Dashboard/Reports rule — the
+     picker works in ids and the rule is about names. */
+  const moduleNames = useMemo(
+    () => modules.map(m => ({ id: m.Id, name: m.ModuleName })), [modules])
+
+  /* Everything the rule allows is now fewer than every module, so "all" cannot
+     be a count against modules.length — that comparison would never be true
+     again and the button would read "Select all" even when it was. */
+  const allPicked = (p: Set<number>) => {
+    const want = selectAllRespectingRule(modules.map(m => m.Id), moduleNames)
+    return want.length > 0 && want.every(id => p.has(id))
+  }
+
   function toggleModule(id: number) {
     setPicked(prev => {
       const next = new Set(prev)
       next.has(id) ? next.delete(id) : next.add(id)
-      return next
+      // Dashboard and Reports are one entitlement — see lib/moduleExclusivity.
+      return new Set(enforceDashboardReports([...next], id, moduleNames))
     })
   }
 
@@ -407,12 +424,15 @@ export default function RegistrationRequestsPage() {
                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Module access</p>
                   {modules.length > 0 && (
                     <button type="button"
-                      onClick={() => setPicked(p => p.size === modules.length ? new Set() : new Set(modules.map(m => m.Id)))}
+                      onClick={() => setPicked(p => allPicked(p)
+                        ? new Set()
+                        : new Set(selectAllRespectingRule(modules.map(m => m.Id), moduleNames)))}
                       className="text-xs font-semibold text-[#14254A] hover:underline">
-                      {picked.size === modules.length ? 'Clear all' : 'Select all'}
+                      {allPicked(picked) ? 'Clear all' : 'Select all'}
                     </button>
                   )}
                 </div>
+                <p className="text-[11px] text-gray-400 mb-1">{DASHBOARD_REPORTS_HINT}</p>
                 <p className="text-xs text-gray-500 mb-3">
                   Granted the moment this is approved. Leave everything unticked to approve
                   without access and set it later from Module Permissions.

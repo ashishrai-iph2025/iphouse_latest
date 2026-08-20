@@ -10,6 +10,7 @@ import { ThemeCustomizerProvider } from '@/lib/ThemeCustomizerContext'
 import ThemeCustomizer from '@/components/ui/ThemeCustomizer'
 import ClientAccessSearch from './ClientAccessSearch'
 import NotificationBell from '@/components/shared/NotificationBell'
+import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner'
 
 type NavItem = { label: string; href: string; icon: string }
 type NavGroup = { label: string; items: NavItem[]; superAdminOnly?: boolean }
@@ -234,6 +235,11 @@ function AdminShellInner({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         </header>
+
+        {/* Above the scroll area, not inside it: a warning that scrolls away
+            with the page is a warning most people never see. Renders nothing
+            unless the server says this password is inside a warning window. */}
+        <PasswordExpiryBanner />
 
         <main className="flex-1 overflow-y-auto bg-[#eef2f7] dark:bg-[#0f1f3d]">
           {children}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 
@@ -257,37 +258,44 @@ func EnsureReportsAccess() {
 func ReportClientMapList(w http.ResponseWriter, r *http.Request) {
 	ensureClientMapSchema()
 
+	/* Client companies only — no IP House rows.
+
+	   This excluded role 1 and stopped there, so Super Admin (role 2) came
+	   through and "Admin" sat in a picker whose every other entry is a customer.
+	   Both are staff, and neither is a company anyone maps to a warehouse
+	   client.
+
+	   COALESCE rather than `!= 1 AND != 2`: role is nullable, and in SQL a NULL
+	   fails an inequality rather than passing it, so the null rows — ordinary
+	   clients — would have been dropped instead. */
 	clients, err := db.Query(`
 		SELECT userId, name, ` + ClientIDColumn + ` AS cid FROM dcp_user
-		 WHERE (role IS NULL OR role != 1) AND deleted = 0
+		 WHERE COALESCE(role, 0) = 0 AND deleted = 0
 		 ORDER BY name`)
 	if err != nil {
 		Fail(w, 500, "Could not list clients")
 		return
 	}
 
-	// The warehouse's own client list, merged across every platform, so the
-	// picker offers real ids rather than free text.
+	/* The warehouse's own client list, so the picker offers real ids rather than
+	   free text.
+
+	   Read through WarehouseClientDirectory — ACTIVE companies only, so nobody
+	   maps a portal client onto one the warehouse has retired. It answers from
+	   EITHER backend —
+	   reports_api's directory when the portal reads through it, the platforms'
+	   own client columns when it holds warehouse credentials. It used to be
+	   gated on `db.ReportsConfigured()` alone, which since the reports moved
+	   behind reports_api is never true: the picker was permanently empty and the
+	   tab reported "Warehouse client list unavailable" on an install where the
+	   list was one HTTP call away. */
 	wh := []map[string]any{}
-	if db.ReportsConfigured() {
-		specs := summarySpecs(enabledPlatforms())
-		seen := map[string]string{}
-		for _, s := range specs {
-			for _, c := range idNamePairs(clientOptions(s)) {
-				id := strFromAny(c["id"])
-				if id == "" {
-					continue
-				}
-				name := strFromAny(c["name"])
-				if cur, had := seen[id]; !had || cur == id {
-					seen[id] = name
-				}
-			}
-		}
-		for id, name := range seen {
-			wh = append(wh, map[string]any{"id": id, "name": name})
-		}
+	for id, name := range WarehouseClientDirectory(r.Context()) {
+		wh = append(wh, map[string]any{"id": id, "name": name})
 	}
+	sort.Slice(wh, func(i, j int) bool {
+		return strings.ToLower(strFromAny(wh[i]["name"])) < strings.ToLower(strFromAny(wh[j]["name"]))
+	})
 
 	// Name-match suggestions. Loose on purpose — punctuation and casing differ
 	// between the two systems — and never applied automatically.

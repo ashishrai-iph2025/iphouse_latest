@@ -395,7 +395,10 @@ export default function AdminHomeClient({ name, today, role }: { name: string; t
             <p style={{ fontFamily: "'DM Sans', sans-serif", color: d.text, fontWeight: 600, fontSize: 14 }}>Recent Dashboard Views</p>
             <p style={{ fontFamily: "'Inter', sans-serif", color: d.sub, fontSize: 11 }}>Who opened which PowerBI report</p>
           </div>
-          <div>
+          {/* Scrolls inside itself, like the usage table and Recent Logins —
+              same maxHeight, so the three cards keep a common baseline instead
+              of each ending wherever its own list happens to. */}
+          <div className="overflow-y-auto" style={{ maxHeight: 360 }}>
             {loading ? <Skeleton h={160} /> : (data?.recentDashboardViews ?? []).length === 0 ? <EmptyState /> : (data?.recentDashboardViews ?? []).map((v, i) => (
               <div key={v.id} className="flex items-center gap-3 px-5 py-3"
                 style={{ borderBottom: `1px solid ${d.rowBorder}`, background: i % 2 === 0 ? d.rowEven : d.rowOdd }}>
@@ -555,7 +558,14 @@ export default function AdminHomeClient({ name, today, role }: { name: string; t
               <p style={{ fontFamily: "'DM Sans', sans-serif", color: d.text, fontWeight: 600, fontSize: 14 }}>Recent Logins</p>
               <p style={{ fontFamily: "'Inter', sans-serif", color: d.sub, fontSize: 11 }}>Last 15 login sessions</p>
             </div>
-            <div>
+            {/* Scrolls inside itself, like the usage table above.
+
+                Fifteen rows rendered in full made this card twice the height of
+                the Quick Actions beside it, so the column it sits in ended in a
+                long tail of whitespace and the actions were pushed off the
+                fold. The same maxHeight as that table keeps the two cards
+                reading as one row. */}
+            <div className="overflow-y-auto" style={{ maxHeight: 360 }}>
               {loading ? <Skeleton h={160} /> : (data?.recentLogins ?? []).length === 0 ? <EmptyState /> : (data?.recentLogins ?? []).map((a, i) => (
                 <div key={a.loginId} className="flex items-center gap-3 px-5 py-3"
                   style={{ borderBottom: `1px solid ${d.rowBorder}`, background: i % 2 === 0 ? d.rowEven : d.rowOdd }}>

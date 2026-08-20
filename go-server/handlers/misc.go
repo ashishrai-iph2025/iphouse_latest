@@ -140,15 +140,31 @@ func UserNav(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Dashboard is always granted regardless of permission table entries.
-	// navOrder 0 keeps it first unless explicitly reordered.
-	modules := []map[string]any{
-		{"moduleId": 0, "moduleName": "Dashboard", "pageName": "dashboard", "navOrder": 0, "dropdown": dropByParent["dashboard"]},
-	}
+	/* Dashboard and Reports are one entitlement with two faces — see
+	   effectiveNavModules for the rule and why it lives there. */
+	granted := make([]string, 0, len(allowed))
+	byName := make(map[string]map[string]any, len(allowed))
 	for _, row := range allowed {
 		name := strFromAny(row["ModuleName"])
-		if name == "Dashboard" {
-			continue // already added above
+		if name == "" {
+			continue
+		}
+		granted = append(granted, name)
+		byName[strings.ToLower(name)] = row
+	}
+
+	modules := []map[string]any{}
+	for _, name := range effectiveNavModules(granted) {
+		row, ok := byName[strings.ToLower(name)]
+		if !ok {
+			/* Dashboard as the fallback: it has no grant row, because the rule
+			   grants it rather than the permissions screen. navOrder 0 keeps it
+			   first unless explicitly reordered. */
+			modules = append(modules, map[string]any{
+				"moduleId": 0, "moduleName": "Dashboard", "pageName": "dashboard",
+				"navOrder": 0, "dropdown": dropByParent["dashboard"],
+			})
+			continue
 		}
 		pageName := strFromAny(row["pageName"])
 		modules = append(modules, map[string]any{
@@ -159,6 +175,7 @@ func UserNav(w http.ResponseWriter, r *http.Request) {
 			"dropdown":   dropByParent[pageName],
 		})
 	}
+
 	// Live API-token availability. The session's apiAccess claim is frozen at
 	// select-login time, so a transient Markscan failure there would lock the
 	// sidebar to Dashboard-only for the whole session. ResolveAPIToken serves
@@ -235,6 +252,9 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 			Fail(w, 500, "Could not update your password. Please try again.")
 			return
 		}
+		// A new password starts a new expiry period — and clears any warning
+		// already sent about the old one.
+		StampPasswordChanged(AcctSuperAdmin, intFromAny(row["id"]))
 		OK(w, map[string]any{"success": true})
 		return
 	}
@@ -267,6 +287,9 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 500, "Could not update your password. Please try again.")
 		return
 	}
+	// Every row that took the new hash takes the new clock — stamping one would
+	// leave the others warning about a password that has just been changed.
+	StampPasswordChangedForUsername(claims.LoginUsername)
 	OK(w, map[string]any{"success": true})
 }
 
@@ -610,4 +633,47 @@ func postJSONWithBearer(url, token string, payload any) (map[string]any, error) 
 	var result map[string]any
 	json.NewDecoder(resp.Body).Decode(&result)
 	return result, nil
+}
+
+/*
+── Dashboard and Reports are one entitlement with two faces ──────────────────
+
+	They present the same client's figures, so a login is given exactly ONE of
+	them and never both:
+
+	  Reports granted        Reports. Dashboard is dropped even where it was
+	                         also ticked — two nav items for the same numbers
+	                         are two places to disagree and a choice that means
+	                         nothing to the person making it.
+	  Reports not granted    Dashboard, whether or not it was ticked. It is the
+	                         floor: a login that can sign in can see its own
+	                         figures somewhere.
+
+	Decided HERE, on the read, rather than when the permissions are saved. This
+	endpoint is what the nav and every client-side gate consult, so the rule
+	holds for grants written before it existed and for anything inserted
+	straight into the table — neither of which a save-time check would reach.
+
+	Everything else passes through in the order it was granted.
+*/
+func effectiveNavModules(granted []string) []string {
+	out := make([]string, 0, len(granted)+1)
+	reports := ""
+	for _, n := range granted {
+		if strings.EqualFold(n, reportsPageName) {
+			reports = n
+			break
+		}
+	}
+	if reports == "" {
+		// The fallback carries no grant row; UserNav synthesises it.
+		out = append(out, "Dashboard")
+	}
+	for _, n := range granted {
+		if strings.EqualFold(n, "Dashboard") {
+			continue // never taken from the grants — it is fallback or nothing
+		}
+		out = append(out, n)
+	}
+	return out
 }

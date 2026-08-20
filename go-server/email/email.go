@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/smtp"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -477,6 +478,99 @@ func SendRegistrationReceivedAdmin(firstName, lastName, emailAddr, designation, 
   </table>
   <a href="/admin/registration-requests" style="display:inline-block;margin-top:8px;padding:10px 24px;background:#FC934C;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">Review Request →</a>
 </div></div>`, fullName, emailAddr, designation, remarks, time.Now().UTC().Format("02 Jan 2006, 15:04")),
+	)
+}
+
+/*
+SendPasswordExpiryWarning tells someone their password is about to expire.
+
+Event key: password_expiry_warning — editable in Configuration → Email
+Templates like every other message here, with the fallback below used until
+somebody writes one.
+
+The variables are deliberately several ways of saying the same thing —
+{{days_remaining}}, {{days_label}}, {{expiry_date}} — because the sentence a
+template author wants is "expires tomorrow" on one day and "expires in 2 days"
+on another, and a template that can only interpolate a number has to say
+"expires in 1 days".
+*/
+func SendPasswordExpiryWarning(to, userName string, daysRemaining int, expiryDate string) error {
+	daysLabel := fmt.Sprintf("in %d days", daysRemaining)
+	urgency := "soon"
+	switch daysRemaining {
+	case 0:
+		daysLabel, urgency = "today", "today"
+	case 1:
+		daysLabel, urgency = "tomorrow", "tomorrow"
+	}
+	pretty := expiryDate
+	if t, err := time.Parse("2006-01-02", expiryDate); err == nil {
+		pretty = t.Format("02 Jan 2006")
+	}
+	if strings.TrimSpace(userName) == "" {
+		userName = to
+	}
+
+	return sendTemplate("password_expiry_warning", to, map[string]string{
+		"user_name":      userName,
+		"email":          to,
+		"days_remaining": strconv.Itoa(daysRemaining),
+		"days_label":     daysLabel,
+		"expiry_date":    pretty,
+		"login_url":      DashboardURL,
+	},
+		fmt.Sprintf("Your IP House password expires %s", daysLabel),
+		fmt.Sprintf(`<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+<div style="background:#14254A;padding:22px 28px;"><h2 style="color:#fff;margin:0;font-size:18px;">Your password expires %s</h2></div>
+<div style="padding:28px;color:#14254A;">
+  <p>Hi <strong>%s</strong>,</p>
+  <p>For security, IP House passwords are changed regularly. Yours expires on
+     <strong>%s</strong> — that is <strong>%s</strong>.</p>
+  <p>Change it before then and nothing is interrupted. If it expires first, you will be
+     asked to set a new one the next time you sign in.</p>
+  <p style="margin:24px 0;">
+    <a href="%s" style="background:#FC934C;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;display:inline-block;">Change my password</a>
+  </p>
+  <p style="font-size:12px;color:#5f768b;">Sign in and use <strong>Profile → Change password</strong>.
+     If you did not expect this message, no action is needed — your password has not changed.</p>
+</div></div>`, urgency, userName, pretty, daysLabel, DashboardURL),
+	)
+}
+
+/*
+SendAccountLocked tells someone their account has been locked, and how to get
+back in without waiting.
+
+Event key: account_locked. Sent once, at the moment of locking — not on every
+subsequent attempt, which would turn a lockout into a mail flood aimed at the
+person who is already having a bad time.
+*/
+func SendAccountLocked(to, userName string, hours int, unlockAt string) error {
+	if strings.TrimSpace(userName) == "" {
+		userName = to
+	}
+	return sendTemplate("account_locked", to, map[string]string{
+		"user_name":     userName,
+		"email":         to,
+		"lockout_hours": strconv.Itoa(hours),
+		"unlock_at":     unlockAt,
+		"login_url":     DashboardURL,
+	},
+		"Your IP House account has been locked",
+		fmt.Sprintf(`<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+<div style="background:#14254A;padding:22px 28px;"><h2 style="color:#fff;margin:0;font-size:18px;">Account locked</h2></div>
+<div style="padding:28px;color:#14254A;">
+  <p>Hi <strong>%s</strong>,</p>
+  <p>Your account has been locked after too many incorrect sign-in attempts. It unlocks
+     automatically after <strong>%d hours</strong> (at <strong>%s</strong> UTC).</p>
+  <p>If that was you and you would rather not wait, resetting your password unlocks the
+     account immediately.</p>
+  <p style="margin:24px 0;">
+    <a href="%s" style="background:#FC934C;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;display:inline-block;">Reset my password</a>
+  </p>
+  <p style="font-size:12px;color:#5f768b;">If this was not you, no one has signed in — the attempts failed.
+     Resetting your password is still the safest response.</p>
+</div></div>`, userName, hours, unlockAt, DashboardURL),
 	)
 }
 

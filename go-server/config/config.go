@@ -7,25 +7,25 @@ import (
 )
 
 type Config struct {
-	DBHost     string
-	DBPort     string
-	DBUser     string
-	DBPass     string
-	DBName     string
-	JWTSecret  string
-	MarkscanBase string
-	SMTPHost   string
-	SMTPPort   int
-	SMTPSecure bool
-	SMTPUser   string
-	SMTPPass   string
-	SMTPFrom   string
+	DBHost             string
+	DBPort             string
+	DBUser             string
+	DBPass             string
+	DBName             string
+	JWTSecret          string
+	MarkscanBase       string
+	SMTPHost           string
+	SMTPPort           int
+	SMTPSecure         bool
+	SMTPUser           string
+	SMTPPass           string
+	SMTPFrom           string
 	SessionIdleSeconds int
-	EncryptionKey string
-	APICredKey    string
-	APICredIV     string
-	Port          string
-	RedisAddr     string
+	EncryptionKey      string
+	APICredKey         string
+	APICredIV          string
+	Port               string
+	RedisAddr          string
 }
 
 var C Config
@@ -63,19 +63,19 @@ func Load() {
 		}
 		log.Println("WARNING " + msg)
 	}
-	C.MarkscanBase     = getEnv("MARKSCAN_API_BASE", "https://api.markscan.co.in")
-	C.SMTPHost         = getEnv("SMTP_HOST", "localhost")
-	C.SMTPPort         = getEnvInt("SMTP_PORT", 587)
-	C.SMTPSecure       = os.Getenv("SMTP_SECURE") == "true" || os.Getenv("SMTP_SECURE") == "ssl"
-	C.SMTPUser         = getEnv("SMTP_USER", "")
-	C.SMTPPass         = getEnv("SMTP_PASS", "")
-	C.SMTPFrom         = getEnv("SMTP_FROM", "IP House <noreply@iphouse.com>")
+	C.MarkscanBase = getEnv("MARKSCAN_API_BASE", "https://api.markscan.co.in")
+	C.SMTPHost = getEnv("SMTP_HOST", "localhost")
+	C.SMTPPort = getEnvInt("SMTP_PORT", 587)
+	C.SMTPSecure = os.Getenv("SMTP_SECURE") == "true" || os.Getenv("SMTP_SECURE") == "ssl"
+	C.SMTPUser = getEnv("SMTP_USER", "")
+	C.SMTPPass = getEnv("SMTP_PASS", "")
+	C.SMTPFrom = getEnv("SMTP_FROM", "IP House <noreply@iphouse.com>")
 	C.SessionIdleSeconds = getEnvInt("SESSION_IDLE_TIMEOUT_SECONDS", 1800)
-	C.EncryptionKey    = getEnv("ENCRYPTION_KEY", "")
-	C.APICredKey       = getEnv("API_CRED_KEY", "")
-	C.APICredIV        = getEnv("API_CRED_IV", "")
-	C.Port             = getEnv("GO_PORT", "8080")
-	C.RedisAddr        = getEnv("REDIS_ADDR", "")
+	C.EncryptionKey = getEnv("ENCRYPTION_KEY", "")
+	C.APICredKey = getEnv("API_CRED_KEY", "")
+	C.APICredIV = getEnv("API_CRED_IV", "")
+	C.Port = getEnv("GO_PORT", "8080")
+	C.RedisAddr = getEnv("REDIS_ADDR", "")
 }
 
 func getEnv(key, fallback string) string {

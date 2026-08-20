@@ -22,24 +22,36 @@ import (
 var warRoomPlatforms = []string{
 	"facebook", "youtube", "instagram", "twitter", "telegram",
 	"internet",
-	"ugc and other social media",
+	UGCUmbrellaKey,
 	"i-tunes", "play store", "third party app", "third party mobile app",
 }
 
 // PlatformLabels maps the internal key to a friendly label for the UI strip.
 var PlatformLabels = map[string]string{
-	"facebook":                   "Facebook",
-	"youtube":                    "YouTube",
-	"instagram":                  "Instagram",
-	"twitter":                    "X (Twitter)",
-	"telegram":                   "Telegram",
-	"internet":                   "Open Web",
-	"ugc and other social media": "UGC & Other",
-	"i-tunes":                    "iTunes",
-	"play store":                 "Play Store",
-	"third party app":            "Third-Party App",
-	"third party mobile app":     "Third-Party Mobile",
+	"facebook":               "Facebook",
+	"youtube":                "YouTube",
+	"instagram":              "Instagram",
+	"twitter":                "X (Twitter)",
+	"telegram":               "Telegram",
+	"internet":               "Open Web",
+	UGCUmbrellaKey:           "UGC & Other",
+	"i-tunes":                "iTunes",
+	"play store":             "Play Store",
+	"third party app":        "Third-Party App",
+	"third party mobile app": "Third-Party Mobile",
 }
+
+/*
+UGCUmbrellaKey is the platform key that stands for "UGC and other social media".
+
+Named because it behaves unlike every other key: its endpoint returns only the
+platform named in the request body, so asking for the umbrella alone yields the
+residual bucket rather than the whole platform. Anything counting or fetching it
+must also ask for each of UGCSubPlatforms — see fetchUGCSubPlatforms and
+WarRoomRealtime. A bare string literal in three files is how that gets missed in
+the fourth.
+*/
+const UGCUmbrellaKey = "ugc and other social media"
 
 // PlatformsForWarRoom returns the ordered platform keys.
 func PlatformsForWarRoom() []string { return warRoomPlatforms }
@@ -304,7 +316,7 @@ func NormalizeRow(platform string, r map[string]any) {
 	// and keep it as subPlatform for the per-platform UGC breakdown chart.
 	// Running here (not just at ingestion) retroactively tags rows cached
 	// before subPlatform existed, since stored rows keep their videoURL.
-	if platform == "ugc and other social media" && !notEmpty(r["subPlatform"]) {
+	if platform == UGCUmbrellaKey && !notEmpty(r["subPlatform"]) {
 		r["subPlatform"] = ugcSubPlatformOf(r)
 	}
 
@@ -817,7 +829,7 @@ func channelIdentity(platform string, r map[string]any) (id string, removed bool
 		id = canonicalID
 	case "telegram":
 		id = canonicalID
-	case "ugc and other social media":
+	case UGCUmbrellaKey:
 		id = canonicalID
 	default:
 		return "", false, false
@@ -964,3 +976,79 @@ func MarkScanTime(t time.Time) string {
 func logf(format string, args ...any) { log.Printf("[warroom] "+format, args...) }
 
 var _ = logf // reserved for future diagnostics
+
+/*
+── Counting without fetching ─────────────────────────────────────────────────
+
+	Every /Paged endpoint answers with the page AND the size of the whole result
+	set:
+
+	    { "page": 1, "pageSize": 1000, "totalRecords": 258, "totalPages": 1 }
+
+	So the count a live card wants is already in the response to a one-row
+	request. CountPage asks for pageSize=1 and reads totalRecords — one call per
+	platform, no rows transferred, against FetchAllPages' hundreds of pages for
+	the same number.
+
+	That is what makes a War Room realtime card affordable at all. Built from
+	the report's own data it would have to pull every page of every platform on
+	a timer, which is minutes of MarkScan traffic per refresh; built from the
+	counts it is a dozen small calls.
+*/
+func CountPage(ctx context.Context, token, platform string, body map[string]any) (int, error) {
+	url, ok := infringementEndpoints[platform]
+	if !ok {
+		return 0, fmt.Errorf("unknown platform: %s", platform)
+	}
+
+	b := map[string]any{}
+	if ugc, ok2 := ugcPlatformMap[platform]; ok2 {
+		b["platform"] = ugc
+	}
+	for k, v := range body {
+		b[k] = v
+	}
+	b["pageNo"] = 1
+	/* One row, not zero. A pageSize of 0 is read by some of these endpoints as
+	   "unset" and answered with the default thousand — which would make the
+	   cheap call the expensive one, silently. */
+	b["pageSize"] = 1
+
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	status, raw, err := postPageWithRetry(token, url, b, platform, 1)
+	if err != nil {
+		return 0, err
+	}
+	if status == 401 || status == 403 {
+		return 0, fmt.Errorf("unauthorized")
+	}
+	if status >= 400 {
+		return 0, fmt.Errorf("markscan %s returned %d", platform, status)
+	}
+	return extractTotalRecords(raw), nil
+}
+
+/*
+extractTotalRecords reads the result-set size out of a /Paged response.
+
+Falls back to the length of the returned page where the field is absent: an
+endpoint that answers with a bare array has no envelope to carry a total, and
+one row counted is closer to the truth than zero.
+*/
+func extractTotalRecords(raw any) int {
+	switch v := raw.(type) {
+	case []any:
+		return len(v)
+	case map[string]any:
+		for _, k := range []string{"totalRecords", "TotalRecords", "totalRecord", "total", "Total"} {
+			if n, ok := toInt(v[k]); ok {
+				return n
+			}
+		}
+		rows, _ := extractPaged(raw)
+		return len(rows)
+	}
+	return 0
+}

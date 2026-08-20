@@ -41,6 +41,13 @@ type dimension struct {
 	IdentOverride   string
 	RemovedOverride string
 
+	// The reports_api measure this panel reads in place of the section's own.
+	// Only the API path uses it — the direct-to-warehouse path has the SQL in
+	// IdentOverride — and without it a panel titled "Enforcement Notification"
+	// draws the identified count, which is a plausible number under a title that
+	// promises a different one.
+	APIMeasure string
+
 	// A dimension with no Column is SYNTHETIC: the page shows a panel for it but
 	// there is no GROUP BY behind it, because the rows are assembled from figures
 	// the report already has (see byDelistingStatus in runPlatform). The runner

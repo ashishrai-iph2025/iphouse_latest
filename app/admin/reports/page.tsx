@@ -25,6 +25,7 @@ import { Link } from 'react-router-dom'
 import SearchableSelect from '@/components/ui/SearchableSelect'
 import DateRangePicker from '@/components/ui/DateRangePicker'
 import { WORLD_SHAPES, WORLD_VIEWBOX } from './worldShapes'
+import RealtimeCard from '@/components/shared/RealtimeCard'
 
 /* ── Palette ───────────────────────────────────────────────────────────────────
    Two families, deliberately kept apart:
@@ -315,6 +316,11 @@ interface Section {
       page body, which is the layout this file used to hardcode. */
   panels?: SectionPanel[]
   filters: string[]    // slicer query params this section understands
+  /** The subset of `filters` that gets a DROPDOWN in the rail, in the order it
+      is drawn — the filter pane as Report Configuration arranged it, per
+      platform and per client. Absent from an older server, where the pane is
+      every understood filter less the panel-only ones; see the fallback below. */
+  slicers?: string[]
   extraKpi: string[]   // KPI keys beyond identified/removed/pending/removalPct
   kpiTiles?: string[]  // the headline metrics, in their default reading order
 }
@@ -326,6 +332,13 @@ const FILTER_LABELS: Record<string, string> = {
   channel: 'Channel Name', groupType: 'Group Type', quality: 'Print Quality',
   genre: 'Genre', infringementType: 'Infringement Type',
   deliveryType: 'Delivery Type', keyword: 'Keyword', domain: 'Domain',
+  // Mobile apps.
+  sourceFeed: 'Source Feed', appName: 'App', category: 'Category',
+  developer: 'Developer', storeType: 'Listing Type',
+  contentRating: 'Content Rating', removalStatus: 'Removal Status',
+  // Sports. Attributes of the asset, not of the row — the reports API reads
+  // them off the title master, so they appear only on the sports tables.
+  franchiseName: 'Franchise', matchDay: 'Match Day',
 }
 
 /** Display labels for the extra KPI keys a section may return. */
@@ -333,11 +346,17 @@ const KPI_LABELS: Record<string, string> = {
   googleDelisted: 'Google Delisted', bingDelisted: 'Bing Delisted',
   totalDomains: 'Total Websites', totalAssets: 'Total Assets',
   suspendedWebsites: 'Suspended Websites', impactedTraffic: 'Impacted Traffic',
-  totalChannels: 'Channels', channelsSuspended: 'Channels Suspended',
-  views: 'Total Views', viewsSaved: 'Views Saved',
+  totalChannels: 'Channels', channelsSuspended: 'Website / Channel Suspended',
+  profilesSuspended: 'Profiles Suspended',
+  views: 'Total Views', viewsSaved: 'Total Views Saved',
   impactedSubscribers: 'Impacted Subscribers', likes: 'Total Likes',
   crawled: 'Crawled', notices: 'Notices Sent',
-  totalPlaces: 'Website / Channel / Page', savedRevenue: 'Estimated Saved Revenue',
+  totalPlaces: 'No. of Website / Channel / Page', savedRevenue: 'Estimated Saved Revenue',
+  // Mobile apps.
+  totalApps: 'Total Apps', totalCategories: 'Categories', totalDevelopers: 'Developers',
+  installs: 'Total Installs', ratings: 'Total Ratings', reviews: 'Total Reviews',
+  avgStars: 'Average Rating', enforced: 'Enforced',
+  sourceRemoved: 'Listings Removed', infringingRemoved: 'Downloads Removed',
 }
 
 /** The line under a tile's number saying what it counts. Only for the figures
@@ -349,6 +368,7 @@ const KPI_FOOT: Record<string, string> = {
   totalChannels: 'Channels carrying it',
   channelsSuspended: 'Taken offline entirely',
   suspendedWebsites: 'Taken offline entirely',
+  profilesSuspended: 'Accounts taken down',
   impactedSubscribers: 'Audience the infringement reached',
   impactedTraffic: 'Audience the infringement reached',
   viewsSaved: 'Views the removals prevented',
@@ -358,6 +378,14 @@ const KPI_FOOT: Record<string, string> = {
   bingDelisted: 'Dropped by Bing',
   notices: 'Enforcement notices sent',
   crawled: 'Pages crawled',
+  // Mobile apps.
+  totalApps: 'Distinct app titles',
+  totalDevelopers: 'Publishers behind them',
+  installs: 'Downloads the listings claim',
+  avgStars: 'Mean over rated listings',
+  enforced: 'Notices sent on a listing',
+  sourceRemoved: 'Store pages taken down',
+  infringingRemoved: 'Download links killed',
 }
 
 /** The cross-platform section, which the server serves as a virtual platform
@@ -378,6 +406,11 @@ const SUMMARY = 'summary'
  * more: the report this page replaces carries a Channel Name slicer, the values
  * are searchable rather than a raw scroll, and the panel is a top-ten that
  * cannot reach the channel you are actually looking for.
+ *
+ * This is now a FALLBACK. The pane is arranged in Report Configuration and the
+ * server sends the result as `slicers`; the same two are its defaults there, so
+ * an install where nobody has touched the pane behaves exactly as this list
+ * says — and one where somebody has, does what they asked instead.
  */
 const PANEL_ONLY_FILTERS = new Set(['tatBucket', 'keyword'])
 
@@ -387,13 +420,63 @@ const DIM_FILTER: Record<string, string> = {
   byAsset: 'assetId', byAssetName: 'assetId',
   byLanguage: 'language', byLanguageId: 'language',
   byQualityId: 'quality',
-  byCountry: 'country', bySearchEngine: 'searchEngine',
+  byCountry: 'country', byCountryId: 'country',
+  bySearchEngine: 'searchEngine', bySearchEngineId: 'searchEngine',
   bySearchEngineNotices: 'searchEngine', byTAT: 'tatBucket',
   byPlatform: 'platform', byChannel: 'channel', byGroupType: 'groupType',
   byQuality: 'quality', byGenre: 'genre', byGenreId: 'genre',
   byInfringementType: 'infringementType', byInfringementTypeId: 'infringementType',
   byDeliveryType: 'deliveryType', byKeyword: 'keyword',
   byDomain: 'domain', byDomainSource: 'domain',
+  // Mobile apps. Mirrors DIMFilterParam in go-server/handlers/reportplatforms.go
+  // — this is what makes clicking a bar cross-filter the rest of the page.
+  bySourceFeed: 'sourceFeed', byApp: 'appName', byCategory: 'category',
+  byDeveloper: 'developer', byStoreType: 'storeType',
+  byContentRating: 'contentRating', byRemovalStatus: 'removalStatus',
+  // Sports.
+  byFranchise: 'franchiseName', byMatchDay: 'matchDay',
+}
+
+/**
+ * Panels that draw EVERY row rather than the top slice of one.
+ *
+ * The charts cut to ten by default, which is right for domains, channels and
+ * assets: the eleventh is the eleventh worst of thousands, and the tail is a
+ * scroll nobody reads. It is wrong for a closed set. A league has the
+ * franchises it has and a season has the fixtures it has, so a card that
+ * silently drew ten of them would be answering "the ten busiest match days"
+ * under a title that promises the season.
+ *
+ * Mirrors closedSetDims in go-server/handlers/reportplatforms.go, which is what
+ * stops the same rows being cut on the way here.
+ */
+const FULL_SET_DIMS = new Set(['byMatchDay', 'byFranchise'])
+
+/**
+ * Panels whose rows read in their OWN sequence rather than by volume.
+ *
+ * A breakdown arrives ranked by what it found, because the question asked of
+ * most of them is "which are the worst". A season is not that question:
+ * "Match 12, then Match 7, then Match 41" is an order no season was played in,
+ * and nothing can be read across it — not a build-up over the group stage, not
+ * a spike on a final. Sorted by the label instead, so the card reads left to
+ * right the way the fixtures ran.
+ */
+const SEQUENCE_DIMS = new Set(['byMatchDay'])
+
+/**
+ * Rows in the order their panel should read them.
+ *
+ * Numeric collation, so "Match 2" comes before "Match 10" — the plain string
+ * comparison puts 10 second, which is the classic way a fixture list ends up in
+ * an order that looks deliberate and is not. Applied to the CHART and its table
+ * twin together: they are two views of one panel and reordering only one of
+ * them is worse than reordering neither.
+ */
+const orderRows = (key: string, rows: any[]) => {
+  if (!SEQUENCE_DIMS.has(key) || rows.length < 2) return rows
+  return [...rows].sort((a, b) =>
+    String(a.label ?? '').localeCompare(String(b.label ?? ''), undefined, { numeric: true }))
 }
 
 /** Filters are open-ended: each section declares its own set. */
@@ -788,6 +871,7 @@ const KPI_ICON: Record<string, string> = {
   totalChannels: 'M4 9h16v10H4zM8 9V5h8v4M9 14h6',                         // broadcast
   totalCountries: 'M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z',
   channelsSuspended: 'M5 5l14 14M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z',     // barred
+  profilesSuspended: 'M5 5l14 14M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z',
   suspendedWebsites: 'M5 5l14 14M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z',
   impactedSubscribers: 'M16 19v-2a4 4 0 0 0-8 0v2M12 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
   impactedTraffic: 'M16 19v-2a4 4 0 0 0-8 0v2M12 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
@@ -1958,6 +2042,266 @@ function ColumnChart({ rows, m, onPick, activeVal = '', limit = 10 }: {
   )
 }
 
+/**
+ * A grouped column chart for a CLOSED SET read in its own order — a league's
+ * franchises, a season's fixtures.
+ *
+ * Hand-built rather than recharts, for the same reason StackedBars is: what
+ * this card needs is four things no combination of props will give.
+ *
+ *   THE SCALE STAYS PUT. Seventy fixtures do not fit a card, so the plot
+ *   scrolls — and a y-axis inside the scroller leaves with the first ten of
+ *   them, after which every column is a height with nothing to measure it
+ *   against. The axis is drawn in its own column, outside the scroller.
+ *
+ *   ONE DIRECT LABEL, NOT SEVENTY. A value over every column is chaos and goes
+ *   unread. The busiest category is the one figure the card exists to surface;
+ *   the axis, the tooltip and the Table view carry the rest.
+ *
+ *   THE TARGET IS THE CATEGORY, NOT THE MARK. At eight pixels a column, a click
+ *   that cross-filters the whole page is a test of aim. Each category owns a
+ *   full-height hit band the width of its slot.
+ *
+ *   THE EDGE SAYS THERE IS MORE. A flush scroller reads as a chart that ends,
+ *   so the plot dissolves into the card edge until the last category is on
+ *   screen.
+ *
+ * Everything else — the 2px gap inside a pair, the 4px rounded data end square
+ * at the baseline, the hairline grid — is the spec the other marks in this file
+ * already follow.
+ */
+function SeasonColumns({ rows, m, onPick, activeVal = '' }: {
+  rows: any[]; m: MarkTheme; onPick?: (v: string) => void; activeVal?: string
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const [avail, setAvail] = useState(0)
+  const [atEnd, setAtEnd] = useState(true)
+  const [hover, setHover] = useState<
+    { label: string; urls: number; removed: number; x: number; y: number } | null>(null)
+
+  /* How wide a category may be is decided by how much room the card actually
+     has, which is not knowable from props: the same panel is full-width on the
+     platform page and half-width in the summary. Measured rather than assumed,
+     so a card that can show the whole set spreads to fill it and only a card
+     that cannot starts scrolling. */
+  useEffect(() => {
+    const node = scrollRef.current
+    if (!node) return
+    setAvail(node.clientWidth)
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect.width
+      if (w) setAvail(w)
+    })
+    ro.observe(node)
+    return () => ro.disconnect()
+  }, [])
+
+  const sync = useCallback(() => {
+    const node = scrollRef.current
+    if (!node) return
+    setAtEnd(node.scrollLeft + node.clientWidth >= node.scrollWidth - 2)
+  }, [])
+
+  const data = rows.map(r => ({
+    label: String(r.label ?? '—'),
+    value_: String(r.value ?? r.label ?? ''),
+    urls: Number(r.urls) || 0,
+    removed: Number(r.removed) || 0,
+  }))
+
+  const n = data.length
+  const longest = data.reduce((a, d) => Math.max(a, d.label.length), 0)
+  // Angled only when a straight label would have to be cut to a few characters.
+  const angled = longest > 10 && n > 3
+
+  /* THE SLOT IS DECIDED FIRST, THE MARK SECOND.
+     A category owns a slot; the bars are sized to sit inside it with air left
+     over, rather than a fixed bar width dictating the layout. That ordering is
+     what lets one component draw ten franchises across a full-width card and
+     seventy fixtures in a half-width one without either looking stretched. */
+  const baseBar = n <= 8 ? 22 : n <= 20 ? 14 : 8
+  const minSlot = Math.max(baseBar * 2 + 12, angled ? 48 : 30)
+  const slot = avail > 0 ? Math.max(minSlot, avail / Math.max(n, 1)) : minSlot
+  const plotW = Math.max(Math.round(slot * n), 1)
+  const scrolls = avail > 0 && plotW > avail + 1
+
+  /* 2px between the pair, and at least 10px of surface between one pair and the
+     next — the outer gap has to beat the inner one or neighbouring pairs read
+     as a single group of four bars. Capped at 24: past that a bar is a block,
+     and blocks are loud. */
+  const barW = Math.min(24, Math.max(5, Math.floor((slot - 12) / 2)))
+
+  const AXIS_W = 52
+  const TOP = 22                      // room for the one direct label
+  const PLOT = 190
+  const band = angled ? 52 : 26       // the category-label band
+  const H = TOP + PLOT + band
+
+  const ticks = niceTicks(data.reduce((a, d) => Math.max(a, d.urls, d.removed), 0))
+  const max = ticks[ticks.length - 1] || 1
+  const y = (v: number) => TOP + PLOT - (v / max) * PLOT
+  const peak = n > 0 ? data.reduce((a, d) => (d.urls > a.urls ? d : a), data[0]) : null
+
+  useEffect(sync, [sync, plotW, avail])
+
+  if (n === 0) return <div className="text-sm text-gray-400 py-3">No data.</div>
+
+  const isDim = (d: typeof data[number]) =>
+    activeVal !== '' && activeVal !== d.value_ && activeVal !== d.label
+
+  /* Rounded at the data end and square at the baseline, so a column reads as
+     growing FROM the axis rather than floating above it. */
+  const barPath = (x: number, val: number) => {
+    const h = Math.max((val / max) * PLOT, val > 0 ? 1.5 : 0)
+    if (h <= 0) return ''
+    const r = Math.min(4, barW / 2, h)
+    const top = TOP + PLOT - h
+    return 'M' + x + ',' + (top + r) +
+      'a' + r + ',' + r + ' 0 0 1 ' + r + ',' + -r +
+      'h' + (barW - 2 * r) +
+      'a' + r + ',' + r + ' 0 0 1 ' + r + ',' + r +
+      'v' + (h - r) + 'h' + -barW + 'z'
+  }
+
+  /* NOT EVERY CATEGORY GETS A LABEL WHEN THEY WILL NOT FIT.
+     "Match 12" is about fifty pixels of text and a fixture's slot is thirty, so
+     labelling all of them overlaps them into a grey smear — the failure this
+     card was drawn to avoid. Every second or third one is labelled instead,
+     exactly as a dense time axis is, and the tooltip names the rest. Angled
+     labels escape sideways and need no thinning. */
+  const CHAR_W = 5.6                                   // 10px sans, near enough
+  const labelW = longest * CHAR_W + 6
+  const every = angled ? 1 : Math.max(1, Math.ceil(labelW / slot))
+  const cut = Math.max(4, Math.floor((slot * every - 4) / CHAR_W))
+  const short = (t: string) => (t.length > cut ? t.slice(0, cut) + '…' : t)
+
+  return (
+    <>
+      <div ref={hostRef} className="relative flex items-stretch">
+        {/* The pinned scale — outside the scroller on purpose, see above. */}
+        <svg width={AXIS_W} height={H} className="block flex-none" aria-hidden="true">
+          {ticks.map(t => (
+            <text key={t} x={AXIS_W - 8} y={y(t) + 3.5} textAnchor="end"
+              fill={m.axis} fontSize={10} style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {axisNum(t)}
+            </text>
+          ))}
+        </svg>
+
+        <div ref={scrollRef} onScroll={sync}
+          className="relative flex-1 overflow-x-auto overflow-y-hidden">
+          <svg width={plotW} height={H} className="block"
+            role="img" aria-label="Identified and removed per category">
+            {/* Hairline, solid, one step off the card — run the full plot width
+                so a scrolled category still sits on a readable rule. */}
+            {ticks.map(t => (
+              <line key={t} x1={0} x2={plotW} y1={y(t)} y2={y(t)}
+                stroke={m.grid} strokeWidth={1} />
+            ))}
+
+            {data.map((d, i) => {
+              const cx = i * slot + slot / 2
+              /* The 2px gap inside a pair is the surface doing the separating —
+                 never a stroke drawn around the marks. */
+              const xI = cx - barW - 1
+              const xR = cx + 1
+              const o = isDim(d) ? 0.4 : 1
+              const labelY = TOP + PLOT + (angled ? 12 : 15)
+              return (
+                <g key={d.value_ + i}>
+                  <path d={barPath(xI, d.urls)} fill={m.ident} opacity={o} />
+                  <path d={barPath(xR, d.removed)} fill={m.removed} opacity={o} />
+
+                  {i % every === 0 && (
+                    <text x={cx} y={labelY} fontSize={10} fill={m.axis}
+                      textAnchor={angled ? 'end' : 'middle'}
+                      transform={angled ? `rotate(-32 ${cx} ${labelY})` : undefined}>
+                      {short(d.label)}
+                    </text>
+                  )}
+
+                  {/* The extreme, and only the extreme. */}
+                  {d === peak && d.urls > 0 && (
+                    <text x={cx} y={y(d.urls) - 8} textAnchor="middle" fontSize={10}
+                      fontWeight={700} fill={m.axis}
+                      style={{ fontVariantNumeric: 'tabular-nums' }}>
+                      {axisNum(d.urls)}
+                    </text>
+                  )}
+
+                  <rect x={i * slot} y={TOP} width={slot} height={PLOT} fill="transparent"
+                    style={{ cursor: onPick ? 'pointer' : 'default' }}
+                    onClick={() => d.value_ && onPick?.(d.value_)}
+                    onMouseMove={e => {
+                      const box = hostRef.current?.getBoundingClientRect()
+                      if (!box) return
+                      setHover({
+                        label: d.label, urls: d.urls, removed: d.removed,
+                        x: e.clientX - box.left, y: e.clientY - box.top,
+                      })
+                    }}
+                    onMouseLeave={() => setHover(null)}>
+                    <title>{`${d.label}: ${full(d.urls)} identified, ${full(d.removed)} removed`}</title>
+                  </rect>
+                </g>
+              )
+            })}
+          </svg>
+        </div>
+
+        {/* A SIBLING of the scroller, not a child: an absolutely positioned
+            child of a scroll container is laid against its CONTENT box, so it
+            rides the content and only surfaces once you have reached the end —
+            which is the one moment it should be gone. */}
+        {scrolls && !atEnd && (
+          <div aria-hidden="true"
+            className="absolute top-0 right-0 pointer-events-none"
+            style={{
+              width: 44, height: H,
+              background: `linear-gradient(to right, transparent, ${m.surface})`,
+            }} />
+        )}
+
+        {hover && (
+          <div className="absolute z-10 pointer-events-none rounded-lg px-3 py-2 text-xs shadow-lg border
+            bg-white border-gray-200 dark:bg-[#14254A] dark:border-white/15"
+            style={{
+              left: Math.max(0, Math.min(hover.x + 12, avail + AXIS_W - 190)),
+              top: Math.max(0, hover.y - 12),
+            }}>
+            <div className="font-semibold mb-1 text-gray-500 dark:text-white/60">{hover.label}</div>
+            <div className="font-bold tabular-nums text-[#14254A] dark:text-white">
+              {full(hover.urls)} <span className="font-normal text-gray-400">identified</span>
+            </div>
+            <div className="font-bold tabular-nums text-[#14254A] dark:text-white">
+              {full(hover.removed)} <span className="font-normal text-gray-400">removed</span>
+            </div>
+            <div className="text-[11px] text-gray-400 tabular-nums mt-0.5">
+              {pct(hover.removed, hover.urls)}% removed
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Aligned to the plot rather than to the card, and outside the scroller
+          so the key stays put while the season is dragged past it. */}
+      <div style={{ paddingLeft: AXIS_W }}>
+        <Legend items={[
+          { label: 'Identified', color: m.ident },
+          { label: 'Removed', color: m.removed },
+        ]} />
+      </div>
+      {scrolls && (
+        <p className="text-[11px] text-gray-400 mt-1" style={{ paddingLeft: AXIS_W }}>
+          {n} in this set, in their own order — drag sideways for the rest.
+        </p>
+      )}
+    </>
+  )
+}
+
 /** Slicer in the right rail. */
 function Slicer({ label, value, onChange, options, placeholder = 'All', required, disabled }: {
   label: string; value: string; onChange: (v: string) => void
@@ -2183,6 +2527,20 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
 
   const activeSection = sections.find(s => s.key === section) ?? null
 
+  /* Whether this report is a SPORTS one, which decides if the live counts card
+     belongs above it.
+
+     Read from the platform's own name — the qualifier splitLabel already pulls
+     out for the navigation, "Open Web — Sports" — rather than from a list of
+     keys held here. The keys are configuration an admin edits on Report
+     Configuration; a hardcoded list would go quietly wrong the day somebody
+     added a platform, and the symptom would be a card that is simply absent. */
+  const isSportsSection = useMemo(() => {
+    if (!activeSection) return false
+    const [, qualifier] = splitLabel(activeSection.label)
+    return (qualifier ?? '').trim().toLowerCase() === 'sports'
+  }, [activeSection])
+
   /* ── Connection state ─────────────────────────────────────────────────── */
   const loadHealth = useCallback(() => {
     fetch('/api/reports/health', { credentials: 'include' })
@@ -2242,8 +2600,23 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
       .then(d => {
         if (!mounted.current || !Array.isArray(d.sections)) return
         setSections(d.sections)
-        // Deliberately NOT auto-selecting: the flow is platform → client →
-        // report, so the first step has to be a choice the user makes.
+
+        /* Open the first platform straight away, for a CLIENT.
+
+           Staff arrive here to choose — platform, then client — so an empty
+           state is the honest first step for them, and it stays.
+
+           A client has no such choice: their company is fixed by the mapping,
+           the window already defaults to the last thirty days, and everything
+           needed to draw a report is known before the page renders. Asking them
+           to pick a platform was a step that existed only because this screen
+           is shared with staff.
+
+           `prev || ...` so a section restored from the URL wins: this is a
+           default for an empty page, not a redirect over a real choice. */
+        if (scoped && d.sections.length > 0) {
+          setSection(prev => prev || d.sections[0].key)
+        }
       })
       .catch(e => {
         if (!mounted.current) return
@@ -2253,28 +2626,53 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
   }, [filters.clientId])
 
   /* ── Slicer values for the active section ─────────────────────────────── */
+  /* Re-listed whenever the SCOPE moves, not just when the client changes.
+     A slicer is a list of choices that lead somewhere, and what leads somewhere
+     depends on the window and on the other slicers: a language with no rows in
+     the chosen month is a choice that empties the page, and the page cannot then
+     explain itself, because "this filter matched nothing" and "this value does
+     not occur in this window" look the same once it has been picked.
+
+     The server drops each parameter's own value from the scope it lists that
+     parameter under, so choosing one never collapses its own dropdown to the one
+     already chosen.
+
+     Debounced on the same 350ms as the report itself, and the two fire together:
+     dragging a date range should cost one round of requests at the end, not one
+     per day passed over. */
   useEffect(() => {
     if (!section) return
-    const p = new URLSearchParams({ type: section })
-    if (filters.clientId) p.set('clientId', filters.clientId)
-    fetch(`/api/reports/options?${p}`, { credentials: 'include' })
-      .then(async r => {
-        if (r.status === 401 || r.status === 403) throw new Error(AUTH_MSG)
-        if (!r.ok) throw new Error(`Options request failed (${r.status})`)
-        return r.json()
-      })
-      .then(d => {
-        if (!mounted.current) return
-        if (d.available === false) { setUnavailable(d.error || 'Reports database unavailable'); return }
-        setUnavailable('')
-        setOpts(d)
-      })
-      .catch(e => {
-        if (!mounted.current) return
-        if (e.message === AUTH_MSG) setAuthError(e.message)
-        else setUnavailable(e.message)
-      })
-  }, [section, filters.clientId])
+    let active = true
+    const t = setTimeout(() => {
+      const p = new URLSearchParams({ type: section })
+      if (filters.clientId) p.set('clientId', filters.clientId)
+      if (filters.from) p.set('from', filters.from)
+      if (filters.to) p.set('to', filters.to)
+      // Only what this section declares, so a stale filter from another section
+      // cannot narrow a list on a table that has no such column.
+      for (const key of activeSection?.filters ?? []) {
+        if (filters[key]) p.set(key, filters[key])
+      }
+      fetch(`/api/reports/options?${p}`, { credentials: 'include' })
+        .then(async r => {
+          if (r.status === 401 || r.status === 403) throw new Error(AUTH_MSG)
+          if (!r.ok) throw new Error(`Options request failed (${r.status})`)
+          return r.json()
+        })
+        .then(d => {
+          if (!mounted.current || !active) return
+          if (d.available === false) { setUnavailable(d.error || 'Reports database unavailable'); return }
+          setUnavailable('')
+          setOpts(d)
+        })
+        .catch(e => {
+          if (!mounted.current || !active) return
+          if (e.message === AUTH_MSG) setAuthError(e.message)
+          else setUnavailable(e.message)
+        })
+    }, 350)
+    return () => { active = false; clearTimeout(t) }
+  }, [section, activeSection, filters])
 
   /* ── Auto-run on any filter change, debounced ─────────────────────────── */
   useEffect(() => {
@@ -2321,12 +2719,33 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     setFilters(f => ({ clientId: f.clientId, from: f.from, to: f.to }))
   }
 
+  /* The server sends {id, name, count}; a few lists are still plain strings.
+     `count` is carried through so the dropdown can say what is behind each
+     choice — see the Asset slicer, which lists a client's whole catalogue and
+     would otherwise offer a thousand titles with nothing in the window and no
+     way to tell which. */
   const asOpts = (arr: any[]) =>
     (arr || []).map((o: any) => typeof o === 'string'
       ? { key: o, label: o }
-      : { key: String(o.id), label: String(o.name ?? o.id) })
+      : {
+          key: String(o.id), label: String(o.name ?? o.id),
+          ...(typeof o.count === 'number' ? { count: o.count } : {}),
+        })
 
   const clientOpts = useMemo(() => asOpts(opts.clients), [opts.clients])
+
+  /* Every name a value has been seen under, kept across option refreshes.
+     Now that the lists are scoped, narrowing the window can drop a value the
+     reader has already chosen out of its own list — the report is then correctly
+     empty, but the chip saying WHAT is filtering it should still read as the
+     title they picked rather than reverting to a GUID. */
+  const seenNames = useRef<Record<string, string>>({})
+  useEffect(() => {
+    for (const [key, val] of Object.entries(opts)) {
+      if (!Array.isArray(val)) continue
+      for (const o of asOpts(val)) seenNames.current[`${key} ${o.key}`] = o.label
+    }
+  }, [opts])
 
   const kpi = data?.kpi
 
@@ -2450,9 +2869,20 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
   }, [kpi, kpiPrev, prevWindowLabel, data, m])
 
   /* Active cross-filter chips, from whatever the section declares. */
+  /* The chip shows the NAME, not the value the filter carries. Most slicers now
+     send an id — the warehouse groups by AssetId and labels it AssetName — so
+     reading the raw filter back would put a GUID on screen for a title the
+     reader picked by name a moment earlier. Falls back to the value when the
+     option list has not loaded, which is a chip that is briefly ugly rather
+     than a chip that is briefly absent. */
   const chips = (activeSection?.filters ?? [])
     .filter(k => filters[k])
-    .map(k => ({ key: k, label: FILTER_LABELS[k] ?? k, display: filters[k] }))
+    .map(k => ({
+      key: k, label: FILTER_LABELS[k] ?? k,
+      display: asOpts(opts[k]).find(o => o.key === filters[k])?.label
+        ?? seenNames.current[`${k} ${filters[k]}`]
+        ?? filters[k],
+    }))
 
   /* The page's shape comes from the server: every visual, in the order and at
      the width this platform is configured for (Report Configuration → Layout,
@@ -2499,7 +2929,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
    * grid below are the same component and cannot drift apart.
    */
   const renderDim = (dim: SectionDim, spanClass: string) => {
-    const rows = (data?.breakdowns?.[dim.key] || []) as any[]
+    const rows = orderRows(dim.key, (data?.breakdowns?.[dim.key] || []) as any[])
     const param = DIM_FILTER[dim.key]
     const filterable = !!param && !!activeSection?.filters.includes(param)
     const pick = filterable ? cross(param!) : undefined
@@ -2535,7 +2965,9 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         {viz === 'share'   && <Donut rows={rows} m={m} onPick={pick} activeVal={active} ramp="ordinal" />}
         {viz === 'stacked' && <StackedBars rows={rows} m={m} onPick={pick} activeVal={active} />}
         {viz === 'hbar'    && <HBarChart rows={rows} m={m} onPick={pick} activeVal={active} />}
-        {viz === 'column'  && <ColumnChart rows={rows} m={m} onPick={pick} activeVal={active} />}
+        {viz === 'column'  && (FULL_SET_DIMS.has(dim.key)
+          ? <SeasonColumns rows={rows} m={m} onPick={pick} activeVal={active} />
+          : <ColumnChart rows={rows} m={m} onPick={pick} activeVal={active} />)}
         {viz === 'table'   && <RankTable rows={rows} onPick={pick} activeVal={active} />}
         {viz === 'value'   && <ValueBars rows={rows} m={m} onPick={pick} activeVal={active} />}
         {viz === 'ordinal' && <ValueBars rows={rows} m={m} onPick={pick} activeVal={active} ordered />}
@@ -2862,6 +3294,20 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         <main className={`w-full xl:flex-1 xl:min-w-0 space-y-3 sm:space-y-4
           transition-opacity duration-200 ${loading && data ? 'opacity-60' : ''}`}>
 
+          {/* Live discovery counts, above the report.
+
+              The report is a window someone chose — thirty days, a year — and
+              says nothing about what arrived while they were reading it. This
+              does, and it is the reason to keep the screen open.
+
+              Only on the sports sections: the endpoint behind it counts the
+              sports tables, and showing it over a non-sports report would put a
+              number on screen that does not describe what is under it. */}
+          {filters.clientId && isSportsSection && (
+            <RealtimeCard view="sports" clientId={filters.clientId}
+              startDate={filters.from} endDate={filters.to} />
+          )}
+
           {/* The KPI band is a panel like any other now — it is drawn inside the
               layout below, so it can be moved or hidden along with the charts
               rather than being pinned above them. */}
@@ -2970,33 +3416,98 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             </div>
           )}
 
+          {/* CAVEATS, NOT FAILURES — and deliberately a different colour and a
+              different noun from the block above.
+
+              A panel folded from a partial list drew fine and holds real
+              numbers; it just needs a sentence saying what it covers. Putting
+              that under "Some panels could not be loaded" was both untrue and
+              corrosive: a banner that cries failure over a working report is a
+              banner people learn to scroll past, including on the day something
+              has actually broken. */}
+          {Array.isArray(data?.notices) && data.notices.length > 0 && (
+            <div className="rounded-xl px-4 py-3 text-sm border bg-gray-50 border-gray-200 text-gray-600
+              dark:bg-white/5 dark:border-white/10 dark:text-white/70">
+              <strong className="font-semibold">Worth knowing about this run.</strong>
+              <ul className="mt-1 space-y-0.5">
+                {data.notices.map((n: string, i: number) => (
+                  <li key={i} className="text-[11px] opacity-90">{n}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {err && (
             <div className="rounded-xl px-4 py-3 text-sm border bg-red-50 border-red-200 text-red-700
               dark:bg-red-500/10 dark:border-red-400/25 dark:text-red-300">
               <strong>Error:</strong> {err}
             </div>
           )}
+          {/* The plain sentence comes first and the connection string comes last,
+              folded away. Reading "no report backend is configured — set
+              REPORTS_API_URL …" is work even for the person who can act on it,
+              and for everyone else it was noise in place of an answer. So the
+              headline says what happened in words, and the wording that a
+              developer actually needs sits one click below it, unchanged. */}
           {unavailable && !authError && (
-            <div className="rounded-xl px-4 py-3 text-sm border bg-amber-50 border-amber-200 text-amber-800
-              dark:bg-amber-500/10 dark:border-amber-400/25 dark:text-amber-200">
-              {scoped ? (
-                /* A client can do nothing with a connection string, and the
-                   warehouse's hostname is not theirs to know. */
-                <>
-                  <strong>Reports are temporarily unavailable.</strong>
-                  <p className="text-[11px] mt-1 opacity-80">
-                    We are aware of it — please try again shortly.
+            <div className="rounded-2xl border bg-white dark:bg-[#1a2d55] border-gray-100 dark:border-white/10
+              shadow-card px-5 py-6 sm:px-7 sm:py-8">
+              <div className="flex flex-col items-center text-center gap-3">
+                <span className="w-11 h-11 grid place-items-center rounded-full
+                  bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-300">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <ellipse cx="12" cy="5" rx="8" ry="3" />
+                    <path d="M4 5v14c0 1.7 3.6 3 8 3M20 5v6" />
+                    <path d="M18 14v3.5M18 21h.01" />
+                  </svg>
+                </span>
+
+                <div>
+                  <p className="font-bold text-[#14254A] dark:text-white">
+                    {scoped ? 'Reports are temporarily unavailable' : 'Reports aren’t connected yet'}
                   </p>
-                </>
-              ) : (
-                <>
-                  <strong>Reports database:</strong> {unavailable}
-                  <p className="text-[11px] mt-1 opacity-80">
-                    Set REPORTS_DB_HOST / REPORTS_DB_NAME / REPORTS_DB_USER / REPORTS_DB_PASS in .env.local,
-                    then restart the Go API — the environment is read once at boot.
+                  <p className="text-sm mt-1.5 max-w-md mx-auto leading-relaxed text-gray-500 dark:text-white/45">
+                    {scoped
+                      /* A client can do nothing with a connection string, and the
+                         warehouse's hostname is not theirs to know. */
+                      ? 'We are aware of it and are restoring the connection — please try again shortly.'
+                      : 'This page reads from the analytics warehouse, and that connection has not been set up on this server yet. Nothing is wrong with the report itself.'}
                   </p>
-                </>
-              )}
+                </div>
+
+                <button
+                  onClick={() => { setUnavailable(''); loadHealth(); setFilters(f => ({ ...f })) }}
+                  className="mt-1 px-4 py-2 rounded-lg text-xs font-bold text-white bg-[#14254A]
+                    hover:opacity-90 transition-opacity">
+                  Try again
+                </button>
+
+                {/* Staff only: the exact server message, kept verbatim so it is
+                    still copy-pasteable into a ticket. */}
+                {!scoped && (
+                  <details className="w-full max-w-md mt-2 text-left group">
+                    <summary className="cursor-pointer list-none text-[11px] font-bold uppercase tracking-widest
+                      text-gray-400 hover:text-[#14254A] dark:hover:text-white text-center">
+                      Technical details
+                      <span className="ml-1 inline-block group-open:rotate-90 transition-transform">›</span>
+                    </summary>
+                    <div className="mt-2.5 rounded-xl border border-gray-100 dark:border-white/10
+                      bg-gray-50 dark:bg-white/[0.04] px-3.5 py-3 space-y-2">
+                      <p className="text-[11px] font-mono break-words text-gray-600 dark:text-white/60">
+                        {unavailable}
+                      </p>
+                      <p className="text-[11px] leading-relaxed text-gray-500 dark:text-white/45">
+                        Set <code>REPORTS_API_URL</code> to read through reports_api, or{' '}
+                        <code>REPORTS_DB_HOST</code> / <code>REPORTS_DB_NAME</code> /{' '}
+                        <code>REPORTS_DB_USER</code> / <code>REPORTS_DB_PASS</code> to query the warehouse
+                        directly, in <code>.env.local</code>. Then restart the Go API — the environment is
+                        read once at boot.
+                      </p>
+                    </div>
+                  </details>
+                )}
+              </div>
             </div>
           )}
         </main>
@@ -3085,8 +3596,14 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             </>
             )}
 
-            {/* Slicers follow the active section's declared filters */}
-            {(activeSection?.filters ?? []).filter(k => !PANEL_ONLY_FILTERS.has(k)).map(key => (
+            {/* The filter pane, as Report Configuration arranged it for this
+                platform and this client: which slicers are here at all, and in
+                what order. An older server sends no pane, so fall back to every
+                filter the section understands less the panel-only ones — which
+                is the arrangement this page used to hardcode. */}
+            {(activeSection?.slicers
+              ?? (activeSection?.filters ?? []).filter(k => !PANEL_ONLY_FILTERS.has(k))
+            ).map(key => (
               <Slicer key={key} label={FILTER_LABELS[key] ?? key}
                 value={filters[key] || ''} onChange={setF(key)}
                 options={asOpts(opts[key])} />

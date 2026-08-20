@@ -152,6 +152,7 @@ const (
 	panelTrend   = "trend"   // identification over time, merged or per source
 	panelRate    = "rate"    // removal rate over time
 	panelDim     = "dim"     // one breakdown
+	panelFilter  = "filter"  // ONE slicer in the report's filter pane
 )
 
 // Stable keys for the panels that are not breakdowns.
@@ -160,8 +161,9 @@ const (
 	keyHeadDims  = "head:breakdowns"
 	keyTrend     = "trend"
 	keyRate      = "rate"
-	keyTrendRole = "trend:" // + role, e.g. trend:linking
-	keyTilePfx   = "kpi:"   // + metric, e.g. kpi:totalAssets
+	keyTrendRole = "trend:"  // + role, e.g. trend:linking
+	keyTilePfx   = "kpi:"    // + metric, e.g. kpi:totalAssets
+	keyFilterPfx = "filter:" // + slicer parameter, e.g. filter:country
 )
 
 /*
@@ -196,15 +198,18 @@ func validSpan(s string) bool {
 // app/admin/reports/page.tsx; this copy exists so the configuration screen can
 // name a tile without the warehouse having been queried.
 var kpiTileLabels = map[string]string{
-	"identified":          "Total Infringements",
-	"removed":             "Removed",
-	"removalPct":          "Total Removal %",
-	"pending":             "Pending Removal",
-	"totalAssets":         "Total Assets",
-	"totalDomains":        "Total Websites",
-	"totalChannels":       "Channels",
-	"totalPlaces":         "No. of Website / Channel / Page",
-	"channelsSuspended":   "Website / Channel Suspended",
+	"identified":        "Total Infringements",
+	"removed":           "Removed",
+	"removalPct":        "Total Removal %",
+	"pending":           "Pending Removal",
+	"totalAssets":       "Total Assets",
+	"totalDomains":      "Total Websites",
+	"totalChannels":     "Channels",
+	"totalPlaces":       "No. of Website / Channel / Page",
+	"channelsSuspended": "Website / Channel Suspended",
+	// The social equivalent, and deliberately its own key: a suspended ACCOUNT
+	// is not a suspended channel, and one report shows both.
+	"profilesSuspended":   "Profiles Suspended",
 	"suspendedWebsites":   "Suspended Websites",
 	"impactedSubscribers": "Impacted Subscribers",
 	"impactedTraffic":     "Impacted Traffic",
@@ -217,6 +222,18 @@ var kpiTileLabels = map[string]string{
 	"googleDelisted":      "Google Delisted",
 	"bingDelisted":        "Bing Delisted",
 	"delisted":            "Delisted",
+
+	// ── Mobile apps ──────────────────────────────────────────────────────────
+	"totalApps":         "Total Apps",
+	"totalCategories":   "Categories",
+	"totalDevelopers":   "Developers",
+	"installs":          "Total Installs",
+	"ratings":           "Total Ratings",
+	"reviews":           "Total Reviews",
+	"avgStars":          "Average Rating",
+	"enforced":          "Enforced",
+	"sourceRemoved":     "Listings Removed",
+	"infringingRemoved": "Downloads Removed",
 }
 
 func kpiTileLabel(metric string) string {
@@ -271,6 +288,7 @@ type panelDef struct {
 	Viz    string // breakdown only
 	Role   string // trend only: which source it draws
 	Metric string // tile only: the kpi key it shows
+	Param  string // filter only: the slicer query parameter it controls
 	Span   string
 	Hidden bool
 }
@@ -290,6 +308,9 @@ func (p panelDef) asMap() map[string]any {
 	}
 	if p.Metric != "" {
 		out["metric"] = p.Metric
+	}
+	if p.Param != "" {
+		out["param"] = p.Param
 	}
 	if p.Hidden {
 		out["hidden"] = true
@@ -481,6 +502,28 @@ func applyLayout(platformKey, clientID string, panels []panelDef) []panelDef {
 	return out
 }
 
+/*
+hiddenDimsFor is the set of BREAKDOWN keys an admin has switched off.
+
+Read by the sections endpoint so that hiding a chart also drops its slicer. The
+two were separate before: the panel obeyed the layout and the filter rail did
+not, so switching off Genre left a Genre dropdown in the rail filtering a report
+that no longer showed genres — a control whose only visible effect was to empty
+the page.
+
+Only breakdowns. A tile or a trend has no slicer to take with it, and a stored
+row against one is a stale row rather than an instruction.
+*/
+func hiddenDimsFor(platformKey, clientID string, dims []map[string]any, roles, tiles []string) map[string]bool {
+	out := map[string]bool{}
+	for _, p := range applyLayout(platformKey, clientID, defaultPanels(dims, roles, tiles)) {
+		if p.Kind == panelDim && p.Hidden {
+			out[p.Key] = true
+		}
+	}
+	return out
+}
+
 // sectionPanels is the whole job: default layout for this platform's shape, with
 // whatever has been configured for this client laid over it. Hidden panels are
 // dropped here, so the report page never has to know they existed.
@@ -515,6 +558,188 @@ func rolesForPlatform(p platformDef) []string {
 	return out
 }
 
+/* ── The filter pane ──────────────────────────────────────────────────────────
+
+   The slicers down the right of a report are panels too.
+
+   They used to be derived and nothing else: a platform offered a control for
+   every column its tables could filter on, and one whose breakdown had been
+   hidden left with it. That is a good default and a bad law. A client who reads
+   by country and never by language wants the Language slicer gone whether or not
+   the Language chart is still on the page; turnaround is picked off its own bar
+   and wants no dropdown at all. Neither is a statement about the warehouse, so
+   neither belonged in code.
+
+   So the pane is arranged on the same screen, out of the same table, with the
+   same per-client fallback: one panel per slicer, keyed `filter:<param>`,
+   carrying an order and a visible flag. A rail is one column wide, so a filter
+   panel has no width to set.
+
+   The DEFAULT is exactly the rule it replaces, which is why a platform nobody
+   has configured has the pane it always had. */
+
+// filterParamLabels is what a slicer is CALLED. Mirrors FILTER_LABELS in
+// app/admin/reports/page.tsx; this copy exists so the configuration screen can
+// name a slicer without the warehouse having been queried.
+var filterParamLabels = map[string]string{
+	"assetId":          "Asset",
+	"language":         "Language",
+	"country":          "Country",
+	"searchEngine":     "Search Engine",
+	"tatBucket":        "TAT Bucket",
+	"platform":         "Platform",
+	"channel":          "Channel Name",
+	"groupType":        "Group Type",
+	"quality":          "Print Quality",
+	"genre":            "Genre",
+	"infringementType": "Infringement Type",
+	"deliveryType":     "Delivery Type",
+	"keyword":          "Keyword",
+	"domain":           "Domain",
+
+	// ── Mobile apps ──────────────────────────────────────────────────────────
+	"sourceFeed":    "Source Feed",
+	"appName":       "App",
+	"category":      "Category",
+	"developer":     "Developer",
+	"storeType":     "Listing Type",
+	"contentRating": "Content Rating",
+	"removalStatus": "Removal Status",
+
+	// ── Sports ───────────────────────────────────────────────────────────────
+	"franchiseName": "Franchise",
+	"matchDay":      "Match Day",
+}
+
+func filterParamLabel(param string) string {
+	if l, ok := filterParamLabels[param]; ok {
+		return l
+	}
+	return param
+}
+
+/*
+panelOnlyFilters are the slicers a report does not put in the pane unless it is
+asked to.
+
+Turnaround is read off its own panel — you pick the bucket by clicking the bar —
+so a dropdown of the same values is a second control for one job. Keyword is a
+long tail with no useful head to pick from. Both still FILTER: clicking the panel
+sets one and a chip appears to clear it. Only the dropdown is absent, and now
+only until somebody switches it on.
+
+Mirrors PANEL_ONLY_FILTERS in app/admin/reports/page.tsx, which is the fallback
+for a page talking to a server too old to send the pane.
+*/
+var panelOnlyFilters = map[string]bool{"tatBucket": true, "keyword": true}
+
+// filterParamsFor is every slicer parameter a platform's tables can serve, in a
+// stable order — the candidates the filter pane is arranged from.
+func filterParamsFor(p platformDef) []string {
+	specs, _ := specsForPlatform(p)
+	seen := map[string]bool{}
+	for _, sp := range specs {
+		for param := range sp.Filters {
+			seen[param] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// filterParamOf reads the slicer parameter back off a filter panel's key.
+func filterParamOf(panelKey string) string {
+	return strings.TrimPrefix(panelKey, keyFilterPfx)
+}
+
+/*
+defaultFilterVisible is whether a slicer is in the pane before anyone has
+configured it — the rule this screen replaces, kept as the starting point.
+
+`stillShown` is the set of parameters whose breakdown survived the layout. Pass
+one that is true for everything to switch the follow-the-panel half off, which is
+what the summary needs: its panels are a fixed subset across several platforms,
+so "no panel for this parameter" is the normal case there rather than somebody's
+decision to hide it.
+*/
+func defaultFilterVisible(param string, stillShown map[string]bool) bool {
+	if panelOnlyFilters[param] {
+		return false
+	}
+	return !dimFilterParamHasPanel(param) || stillShown[param]
+}
+
+/*
+filterPanels is the pane for one platform and one client: every slicer that
+platform can serve, in the configured order, each carrying whether it is drawn.
+
+A stored row beats the default in both directions — an admin who switched the
+Turnaround slicer on meant it, and one who switched Country off meant that too,
+whatever became of the matching chart.
+*/
+func filterPanels(platformKey, clientID string, params []string, stillShown map[string]bool) []panelDef {
+	stored := layoutFor(platformKey, clientID)
+	type ranked struct {
+		p    panelDef
+		rank float64
+	}
+	list := make([]ranked, 0, len(params))
+	for i, param := range params {
+		p := panelDef{
+			Key: keyFilterPfx + param, Kind: panelFilter, Param: param,
+			Label: filterParamLabel(param), Span: spanFull,
+			Hidden: !defaultFilterVisible(param, stillShown),
+		}
+		// Same scale as applyLayout, and for the same reason: a slicer that only
+		// just appeared because a table gained a column has to land near where it
+		// would have been, not ahead of an arrangement somebody made.
+		rank := float64((i + 1) * 10)
+		if row, ok := stored[p.Key]; ok {
+			rank = float64(row.Order)
+			p.Hidden = row.Hidden
+		}
+		list = append(list, ranked{p, rank})
+	}
+	sort.SliceStable(list, func(i, j int) bool { return list[i].rank < list[j].rank })
+
+	out := make([]panelDef, 0, len(list))
+	for _, r := range list {
+		out = append(out, r.p)
+	}
+	return out
+}
+
+// sectionSlicers is the pane as the REPORT needs it: the parameters that get a
+// control, in the order they are drawn down the rail.
+func sectionSlicers(platformKey, clientID string, params []string, stillShown map[string]bool) []string {
+	out := make([]string, 0, len(params))
+	for _, p := range filterPanels(platformKey, clientID, params, stillShown) {
+		if !p.Hidden {
+			out = append(out, p.Param)
+		}
+	}
+	return out
+}
+
+// stillShownParams is the set of slicer parameters whose breakdown is still on
+// the page, read off a layout that has already been applied.
+func stillShownParams(panels []panelDef) map[string]bool {
+	out := map[string]bool{}
+	for _, p := range panels {
+		if p.Kind != panelDim || p.Hidden {
+			continue
+		}
+		if param := DIMFilterParam(p.Key); param != "" {
+			out[param] = true
+		}
+	}
+	return out
+}
+
 /*
 ── GET /api/admin/report-layout?platform=&clientId= ─────────────────────────
 
@@ -535,14 +760,29 @@ func ReportLayoutGet(w http.ResponseWriter, r *http.Request) {
 	}
 	clientID := strings.TrimSpace(r.URL.Query().Get("clientId"))
 
-	dims, roles, tiles, label, ok := layoutInputsFor(key)
+	in, ok := layoutInputsFor(key)
 	if !ok {
 		Fail(w, 404, "Unknown platform: "+key)
 		return
 	}
 
-	defaults := defaultPanels(dims, roles, tiles)
+	defaults := defaultPanels(in.Dims, in.Roles, in.Tiles)
 	panels := applyLayout(key, clientID, defaults)
+
+	/* The filter pane hangs off the layout that was just applied, not off the
+	   defaults: which slicers a platform gets by default depends on which charts
+	   survived, so the pane has to be read after the overlay rather than beside
+	   it. Its panels are appended, so they are one contiguous block at the end of
+	   the list and the screen can arrange them on their own. */
+	stillShown := map[string]bool{}
+	if in.FollowPanels {
+		stillShown = stillShownParams(panels)
+	} else {
+		for _, param := range in.Params {
+			stillShown[param] = true
+		}
+	}
+	panels = append(panels, filterPanels(key, clientID, in.Params, stillShown)...)
 
 	// What the default WOULD be, so the page can show a Reset that means
 	// something and mark the rows that differ from it.
@@ -570,9 +810,17 @@ func ReportLayoutGet(w http.ResponseWriter, r *http.Request) {
 		// known — so the configuration screen gets a plain name to arrange by.
 		row["name"] = panelName(p)
 		// A heading is a rule across the page; letting it be half a row wide
-		// would make it a label floating beside a chart.
-		if p.Kind == panelHeading {
+		// would make it a label floating beside a chart. A slicer sits in a
+		// one-column rail, so it has no width to argue about either.
+		if p.Kind == panelHeading || p.Kind == panelFilter {
 			row["fixedSpan"] = true
+		}
+		if p.Kind == panelFilter {
+			row["defaultSpan"] = spanFull
+			// Whether this slicer is in the pane when nothing is configured, so
+			// the screen can mark the ones that have been overridden — and say
+			// which two are deliberately off to begin with.
+			row["defaultHidden"] = !defaultFilterVisible(p.Param, stillShown)
 		}
 		out = append(out, row)
 	}
@@ -587,7 +835,7 @@ func ReportLayoutGet(w http.ResponseWriter, r *http.Request) {
 	own := len(readLayoutRows(key, clientID)) > 0
 	shared := len(readLayoutRows(key, layoutAllClients)) > 0
 	OK(w, map[string]any{
-		"success": true, "platform": key, "label": label, "clientId": clientID,
+		"success": true, "platform": key, "label": in.Label, "clientId": clientID,
 		"panels": out, "vizChoices": vizList,
 		// Whether what is shown belongs to this client or is the shared default
 		// they are currently following — the screen says which, so "Reset" is
@@ -628,13 +876,32 @@ func panelName(p panelDef) string {
 	return p.Key
 }
 
-// layoutInputsFor resolves the breakdowns, source roles and headline figures a
-// platform's layout is built from — the same three things the sections endpoint
-// uses, so the configuration page and the report can never disagree about which
-// panels exist.
-func layoutInputsFor(key string) (dims []map[string]any, roles, tiles []string, label string, ok bool) {
+// layoutInputs is everything a platform's layout is built from — the same things
+// the sections endpoint reads, so the configuration page and the report can never
+// disagree about which panels exist.
+type layoutInputs struct {
+	Dims   []map[string]any
+	Roles  []string
+	Tiles  []string
+	Params []string // slicer parameters, the filter pane's candidates
+	Label  string
+	/* FollowPanels: whether an unconfigured slicer leaves with its breakdown.
+
+	   True for a platform section, where every slicer has a chart on the same
+	   page. False for the summary, whose panel list is a fixed subset over
+	   several platforms — there, a parameter with no panel is the normal case
+	   rather than somebody's decision to hide it, and applying the rule would
+	   strip most of the pane. */
+	FollowPanels bool
+}
+
+func layoutInputsFor(key string) (layoutInputs, bool) {
 	if p, found := platformByKey(key); found {
-		return sectionDimensions(p), rolesForPlatform(p), kpiTilesFor(platformExtraKPIs(p)), p.Label, true
+		return layoutInputs{
+			Dims: sectionDimensions(p), Roles: rolesForPlatform(p),
+			Tiles: kpiTilesFor(platformExtraKPIs(p)), Params: filterParamsFor(p),
+			Label: p.Label, FollowPanels: true,
+		}, true
 	}
 	if key == summaryKey && summaryIsBuiltIn() {
 		plats := summaryPlatforms(nil)
@@ -647,11 +914,14 @@ func layoutInputsFor(key string) (dims []map[string]any, roles, tiles []string, 
 		// exist — the per-client overlay is applied by the caller.
 		sec, built := summarySection(plats, layoutAllClients)
 		if !built {
-			return nil, nil, nil, "", false
+			return layoutInputs{}, false
 		}
-		return asMaps(sec["dimensions"]), nil, asStrings(sec["kpiTiles"]), summaryLabel, true
+		return layoutInputs{
+			Dims: asMaps(sec["dimensions"]), Tiles: asStrings(sec["kpiTiles"]),
+			Params: asStrings(sec["filters"]), Label: summaryLabel,
+		}, true
 	}
-	return nil, nil, nil, "", false
+	return layoutInputs{}, false
 }
 
 // platformExtraKPIs is every figure beyond the base four that a platform's
@@ -723,7 +993,7 @@ func ReportLayoutSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clientID := strings.TrimSpace(body.ClientID)
-	if _, _, _, _, ok := layoutInputsFor(key); !ok {
+	if _, ok := layoutInputsFor(key); !ok {
 		Fail(w, 404, "Unknown platform: "+key)
 		return
 	}

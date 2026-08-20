@@ -10,19 +10,11 @@ import { useTimeZone } from '@/lib/timezone'
 import {
   matchesUrlType, platformLabel, isOpenWebPlatform, OPEN_WEB_URL_TYPES, type OpenWebUrlType,
 } from '@/lib/platformCategories'
+/* One resolver for both this screen and the category screen, which now renders
+   the same card — see lib/infringementFields.ts. */
+import { resolveFields, isListingPlatform, isLiveStatus } from '@/lib/infringementFields'
 
 const PAGE_SIZES = [10, 25, 50, 100, 1000]
-
-function get(row: InfringementItem, ...keys: string[]): string {
-  for (const k of keys) {
-    const v = row[k]
-    if (v != null && String(v).trim() !== '' && String(v) !== 'null' && String(v) !== 'undefined') {
-      if (k === 'isSourceURL') return v ? 'Source' : 'Infringing'
-      return String(v)
-    }
-  }
-  return '—'
-}
 
 /**
  * Timestamps upstream are UTC, and this used to hand them to `new Date(v)` —
@@ -34,72 +26,6 @@ function get(row: InfringementItem, ...keys: string[]): string {
 function useFmtDate() {
   const { formatUtc } = useTimeZone()
   return (v: string) => (v === '—' ? '—' : formatUtc(v, { fallback: v }))
-}
-
-// Listing-style platforms (Meta Ads, Marketplace) carry commerce fields
-// (listing/shop URLs, seller, price) and use the pipeline status
-// (currentStatusName) as their display status when removalStatus is empty.
-function isListingPlatform(platform: string) {
-  const p = platform.trim().toLowerCase()
-  return p === 'meta ads' || p === 'marketplace'
-}
-
-// Positive-count helper: ratings/reviews/purchases are meaningless as 0.
-function positiveNum(v: unknown): string {
-  const n = Number(v)
-  return v != null && isFinite(n) && n > 0 ? String(n) : '—'
-}
-
-function resolveFields(row: InfringementItem, platform = '') {
-  const listing = isListingPlatform(platform)
-
-  // Marketplace price range: min / max + currency.
-  const priceParts = [row['listingPriceMin'], row['listingPriceMax']]
-    .filter(v => v != null && String(v).trim() !== '')
-    .map(v => Number(v).toLocaleString())
-  const currency = row['listingCurrency'] != null ? String(row['listingCurrency']).trim() : ''
-  const price = priceParts.length ? `${priceParts.join(' – ')}${currency ? ` ${currency}` : ''}` : '—'
-
-  return {
-    asset: get(row, 'assetName', 'AssetName', 'asset', 'Asset', 'title'),
-    type: get(row, 'infringementType', 'InfringementType', 'infringementTypeName', 'type', 'isSourceURL'),
-    status: listing
-      ? get(row, 'removalStatus', 'RemovalStatus', 'status', 'currentStatusName')
-      : get(row, 'removalStatus', 'RemovalStatus', 'status'),
-    videoUrl: get(row, 'videoURL', 'VideoURL', 'videoUrl', 'sourceURLLink'),
-    profileUrl: get(row, 'profileURL', 'ProfileURL', 'channelOrProfileURL', 'channelURL', 'channelUrl', 'ChannelURL', 'shopUrl'),
-    hostUrl: get(row, 'sourceURL', 'sourceUrl', 'SourceURL', 'hostURL', 'hostUrl'),
-    linkUrl: get(row, 'infringingURL', 'infringingUrl', 'url', 'URL', 'postURL', 'postUrl', 'listingUrl'),
-    domain: get(row, 'infringingDomain', 'domain', 'infringingHost', 'host'),
-    sourceDomain: get(row, 'sourceDomain', 'sourceHost'),
-    videoTitle: get(row, 'videoTitle', 'VideoTitle', 'caption', 'title', 'postDescription', 'listingTitle'),
-    channelName: get(row, 'channelName', 'ChannelName', 'profileName', 'channelOrProfileName', 'userName', 'chatTitle', 'sellerName'),
-    channelId: get(row, 'channelId', 'channelID', 'ChannelId', 'channelURL', 'channelUrl', 'pageId'),
-    views: get(row, 'views', 'Views', 'viewCount'),
-    likes: get(row, 'like_count', 'likeCount', 'likes'),
-    comments: get(row, 'comment_count', 'commentCount', 'commentsCount'),
-    subscribers: get(row, 'subscribers', 'subscriberCount', 'subscrbers', 'followersCount', 'members'),
-    quality: get(row, 'qualityOfPrint', 'QualityOfPrint', 'qualityOfPrintName', 'quality', 'qualityPrint'),
-    duration: get(row, 'videoLength', 'VideoLength', 'videoDuration', 'duration'),
-    keywords: get(row, 'keywords', 'Keywords', 'keyword', 'category'),
-    screenshot: get(row, 'screenshotUrl', 'screenshotURL', 'screenshot', 'screenshot_url'),
-    discovered: get(row, 'urlUploadDate', 'URLUploadDate', 'publishedDate', 'PublishedDate', 'discoveredDate', 'detectedDate', 'detectionDate', 'createdAt', 'date'),
-    published: get(row, 'publishedDate', 'PublishedDate', 'postUploadDate'),
-    uploaded: get(row, 'urlUploadDate', 'URLUploadDate'),
-    country: get(row, 'country', 'Country', 'countryName', 'sellerCountryName'),
-    language: get(row, 'audioLanguage', 'AudioLanguage', 'language1', 'language', 'lang', 'languageName'),
-    searchEngine: get(row, 'searchEngine', 'engine', 'searchEngineType'),
-    removalTime: get(row, 'removalTime', 'RemovalTime'),
-    delistStatus: get(row, 'delistingremovalstatus', 'delistingRemovalStatus', 'delistingStatus', 'delisting', 'delistStatus'),
-    delistTime: get(row, 'delistingTime', 'delistingDate', 'delistDate'),
-    dmcaStatus: get(row, 'dmcaremovalstatus', 'dmcaRemovalStatus', 'hostDmcaStatus', 'infringingDmcaStatus', 'infringingDmca', 'dmcaStatus'),
-    dmcaTime: get(row, 'dmcaRemovalTime', 'infringingDmcaTime', 'hostDmcaTime'),
-    // Listing-platform extras (— on every other platform)
-    price,
-    ratings: positiveNum(row['ratings']),
-    reviews: positiveNum(row['noOfReviews']),
-    buys: positiveNum(row['noOfBuys']),
-  }
 }
 
 /**
@@ -510,7 +436,7 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
           <div className="bg-white dark:bg-[#1a2d55] rounded-2xl shadow-card border border-gray-100 dark:border-white/10 divide-y divide-gray-100 dark:divide-white/8 overflow-hidden">
             {pageRows.map((item, i) => {
               const f = resolveFields(item, platformParam)
-              const isActive = f.status === '—' || f.status.toLowerCase().includes('active') || f.status.toLowerCase() === 'live'
+              const isActive = isLiveStatus(f.status)
 
               return (
                 /* The whole row opens the record — the link-styled "View Details"

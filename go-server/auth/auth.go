@@ -16,14 +16,14 @@ import (
 
 // Claims stored in the JWT cookie.
 type Claims struct {
-	LoginID        int64   `json:"loginId"`
-	UserID         int64   `json:"userId"`
-	Role           *int64  `json:"role"`
-	LoginType      int64   `json:"loginType"`
-	LoginUsername  string  `json:"loginUsername"`
-	LoginFirstName string  `json:"loginFirstName"`
-	LoginLastName  string  `json:"loginLastName"`
-	ClientName     string  `json:"clientName"`
+	LoginID        int64  `json:"loginId"`
+	UserID         int64  `json:"userId"`
+	Role           *int64 `json:"role"`
+	LoginType      int64  `json:"loginType"`
+	LoginUsername  string `json:"loginUsername"`
+	LoginFirstName string `json:"loginFirstName"`
+	LoginLastName  string `json:"loginLastName"`
+	ClientName     string `json:"clientName"`
 	// APIToken is intentionally NOT stored in the JWT. A JWT is only signed, not
 	// encrypted — embedding the Markscan bearer token there exposed it to anyone
 	// who could read the cookie value. The token is now held server-side (in-memory

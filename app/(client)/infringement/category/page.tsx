@@ -16,6 +16,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams, useRouter } from '@/lib/router'
 import Breadcrumb from '@/components/ui/Breadcrumb'
+/* The same resolver and the same card as the single-platform view — see
+   lib/infringementFields.ts. Two readings of one row would drift. */
+import { resolveFields, isLiveStatus } from '@/lib/infringementFields'
 import Portal from '@/components/ui/Portal'
 import { useMasterData } from '@/lib/masterDataContext'
 import {
@@ -65,12 +68,10 @@ const HIDDEN_COLUMN = /^(id|.*guid|clientId|clientMasterId|assetId|rowNo|rowNumb
 /** Shown in the detail drawer only. These are real values, just not ones worth
     a column: an account URL is long, near-identical down the page, and what a
     reader actually wants from it is one row at a time. */
-const DRAWER_ONLY = /^(profileURL|profileUrl|channelURL|channelUrl|channelOrProfileURL|channelOrProfileUrl|shopURL|shopUrl)$/i
 
 /** How many columns a table carries before the rest becomes drawer-only. The
     drawer holds every field, so this trades nothing away — it just stops a
     twenty-column table from being scrolled sideways to read one row. */
-const MAX_TABLE_COLUMNS = 10
 
 const isScalar = (v: any) =>
   v === null || v === undefined || (typeof v !== 'object' && typeof v !== 'function')
@@ -124,8 +125,8 @@ const isImageKey = (key: string) => /screenshot|thumbnail|thumb|image|snapshot/i
 function NoShot({ title = 'Screenshot not available' }: { title?: string }) {
   return (
     <span title={title}
-      className="w-16 h-11 rounded-lg border border-dashed border-gray-200 bg-gray-50/80
-        flex flex-col items-center justify-center gap-0.5 text-gray-300">
+      className="w-12 h-12 rounded-xl border border-dashed border-gray-200 bg-gray-50/80
+        flex flex-col items-center justify-center gap-0.5 text-gray-300 flex-shrink-0">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -159,8 +160,8 @@ function Thumb({ src, onOpen }: { src: string; onOpen: () => void }) {
     /* The row underneath opens the detail drawer, so a click meant for the
        screenshot must not also open it. */
     <button type="button" onClick={e => { e.stopPropagation(); onOpen() }} title="View screenshot"
-      className="block w-16 h-11 rounded-lg overflow-hidden border border-gray-200 bg-gray-50
-        hover:ring-2 hover:ring-[#FC934C]/60 transition-all">
+      className="block w-12 h-12 rounded-xl overflow-hidden border border-gray-200 bg-gray-50
+        hover:ring-2 hover:ring-[#FC934C]/60 transition-all flex-shrink-0">
       <img src={src} alt="Screenshot" loading="lazy" onError={() => setFailed(true)}
         className="w-full h-full object-cover" />
     </button>
@@ -211,34 +212,6 @@ function UrlCell({ url }: { url: string }) {
   )
 }
 
-function Cell({ value, columnKey, onPreview }: {
-  value: any
-  /** Given, an image-bearing column renders its picture instead of its URL. */
-  columnKey?: string
-  onPreview?: (src: string) => void
-}) {
-  // An image column is ALWAYS drawn as an image or as the "not available" mark —
-  // never as its text. A signed screenshot URL in a cell is a wall of credential
-  // that pushes every other column off the screen and says nothing.
-  if (columnKey && isImageKey(columnKey)) {
-    if (!isUrl(value)) return <NoShot />
-    const src = String(value).trim()
-    return <Thumb src={src} onOpen={() => onPreview?.(src)} />
-  }
-  if (isUrl(value)) return <UrlCell url={String(value).trim()} />
-  const text = cellText(value)
-  return <span title={text === '—' ? undefined : text} className="block truncate">{text}</span>
-}
-
-/** The whole row, for the fields the table could not fit or could not flatten. */
-/**
- * The whole row, in a panel that slides in from the right.
- *
- * The table is deliberately narrow now — ten columns, no account URLs — because
- * a client scanning for the row they want does not need every field to find it.
- * This is where they read it once found: every value the platform returned, in
- * the same reading order the columns use, with nothing truncated.
- */
 function DetailDrawer({ row, platform, onClose, onPreview }: {
   row: Record<string, any>
   platform: string
@@ -537,6 +510,31 @@ function pgRange(cur: number, tot: number): (number | '…')[] {
  * error states. Self-contained because nothing about it generalises to the
  * platform beside it — that is the whole reason these are separate tables.
  */
+/**
+ * One labelled URL on a card.
+ *
+ * Truncated at 80 characters with the whole thing on hover. These are share
+ * links carrying tracking segments — the first eighty characters identify the
+ * post, and the remaining two hundred push every other field off the row, which
+ * is what the table did to all of them at once.
+ *
+ * The click is stopped: the card underneath opens the detail drawer, and a
+ * reader clicking a link means the link.
+ */
+function CardLink({ label, href }: { label: string; href: string }) {
+  if (href === '—' || !href) return null
+  return (
+    <p className="text-xs truncate">
+      <span className="text-gray-400">{label}: </span>
+      <a href={href} target="_blank" rel="noopener noreferrer"
+        onClick={e => e.stopPropagation()}
+        className="text-blue-600 hover:underline" title={href}>
+        {href.length > 80 ? href.slice(0, 80) + '…' : href}
+      </a>
+    </p>
+  )
+}
+
 function PlatformTable({ result, label, onPreview, onOpenRow }: {
   result: PlatformResult; label: string
   onPreview: (src: string) => void
@@ -545,11 +543,11 @@ function PlatformTable({ result, label, onPreview, onOpenRow }: {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
 
+  /* Still derived, but only to say how many fields the record carries — the
+     drawer is what shows them now. The card reads named fields through
+     resolveFields rather than whichever columns happened to come back, which is
+     what makes one layout work across platforms that share almost no columns. */
   const allColumns = useMemo(() => deriveColumns(result.items), [result.items])
-  // The table's columns are the ones worth scanning; the drawer has the rest.
-  const columns = useMemo(
-    () => allColumns.filter(c => !DRAWER_ONLY.test(c)).slice(0, MAX_TABLE_COLUMNS),
-    [allColumns])
   const totalPages = Math.max(1, Math.ceil(result.items.length / pageSize))
   const start = (page - 1) * pageSize
   const rows = result.items.slice(start, start + pageSize)
@@ -566,7 +564,7 @@ function PlatformTable({ result, label, onPreview, onOpenRow }: {
           </span>
           {allColumns.length > 0 && (
             <span className="text-[10px] font-semibold text-gray-400">
-              {columns.length} of {allColumns.length} fields · click a row for the rest
+              click a record for all {allColumns.length} fields
             </span>
           )}
         </h2>
@@ -588,42 +586,107 @@ function PlatformTable({ result, label, onPreview, onOpenRow }: {
         <p className="px-5 py-6 text-sm text-gray-400">No infringements found for this platform.</p>
       ) : (
         <>
-          {/* Cells do not wrap: a row is one line high, so ten rows can be
-              compared down a column instead of each one being three lines of
-              rewrapped text. What that costs — truncated values — the hover
-              reveal and the drawer give back. */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="bg-[#14254A]/[0.03]">
-                  {columns.map(c => (
-                    <th key={c} title={c}
-                      className="text-left font-bold uppercase tracking-widest text-[9px] text-gray-400
-                        px-3 py-2 whitespace-nowrap">
-                      {columnTitle(c)}
-                    </th>
-                  ))}
-                  <th className="w-8" />
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row, i) => (
-                  <tr key={start + i}
-                    onClick={() => onOpenRow(row)}
-                    title="Open the full details"
-                    className="border-t border-gray-100 cursor-pointer hover:bg-[#FC934C]/[0.06] transition-colors">
-                    {columns.map(c => (
-                      <td key={c} className="px-3 py-2 text-gray-700 whitespace-nowrap max-w-[220px]">
-                        <Cell value={row[c]} columnKey={c} onPreview={onPreview} />
-                      </td>
-                    ))}
-                    {/* A visible affordance for the row click — a whole row being
-                        a button is not obvious without one. */}
-                    <td className="px-2 py-2 text-right text-gray-300">›</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {/* One card per record, matching the single-platform view.
+
+              It was a wide table of seventeen columns, and at that width every
+              value was truncated to nothing: a Facebook URL and a profile name
+              both became "https://www.facebook.com/per…". A category search
+              returns several platforms whose columns barely overlap, so the
+              table also changed shape from tab to tab and could not be scanned
+              down a column anyway — the one thing a table is for.
+
+              The card shows what identifies a record — asset, type, the URLs,
+              who posted it, when it was found — at full width, and puts the
+              status where the eye lands. The rest is one click away, as it was
+              before. */}
+          <div className="divide-y divide-gray-100">
+            {rows.map((row, i) => {
+              const f = resolveFields(row, label)
+              const live = isLiveStatus(f.status)
+              // The post itself, whatever this platform calls it.
+              const postUrl = f.linkUrl !== '—' ? f.linkUrl : f.videoUrl
+              const postLabel = f.videoUrl !== '—' && f.linkUrl === '—' ? 'Media File' : 'Post URL'
+
+              return (
+                <div key={start + i}
+                  onClick={() => onOpenRow(row)}
+                  role="button" tabIndex={0}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenRow(row) }
+                  }}
+                  title="Open the full details"
+                  className="group flex items-start gap-4 px-5 py-4 cursor-pointer transition-colors
+                    hover:bg-[#FC934C]/[0.06] focus:outline-none focus-visible:bg-[#FC934C]/[0.10]">
+                  <Thumb src={f.screenshot} onOpen={() => onPreview(f.screenshot)} />
+
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-[#14254A] truncate">
+                      {f.asset !== '—' ? f.asset : label}
+                      {f.type !== '—' && <span className="text-gray-400 font-normal"> — {f.type}</span>}
+                    </p>
+
+                    {/* The title of the post, where there is one and it is not
+                        just the asset name repeated. */}
+                    {f.videoTitle !== '—' && f.videoTitle !== f.asset && (
+                      <p className="text-xs text-gray-500 truncate mt-0.5" title={f.videoTitle}>
+                        {f.videoTitle}
+                      </p>
+                    )}
+
+                    <div className="mt-1 space-y-0.5">
+                      <CardLink label={postLabel} href={postUrl} />
+                      <CardLink label="Host URL" href={f.hostUrl} />
+                      {/* The account, by name — the URL is a credential-length
+                          string that identifies nothing to a reader. */}
+                      {f.profileUrl !== '—' && (
+                        <p className="text-xs truncate">
+                          <span className="text-gray-400">Profile: </span>
+                          <a href={f.profileUrl} target="_blank" rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            className="text-blue-600 hover:underline" title={f.profileUrl}>
+                            {f.channelName !== '—' ? f.channelName : f.profileUrl.slice(0, 60)}
+                          </a>
+                        </p>
+                      )}
+                      {f.profileUrl === '—' && f.channelName !== '—' && (
+                        <p className="text-xs text-gray-500 truncate">
+                          <span className="text-gray-400">Profile: </span>{f.channelName}
+                        </p>
+                      )}
+                    </div>
+
+                    <p className="text-xs text-gray-400 mt-1.5">
+                      {f.discovered !== '—' && <span>Discovered: {cellText(f.discovered)}</span>}
+                      {f.published !== '—' && <span className="ml-3">| Published: {cellText(f.published)}</span>}
+                      {f.language !== '—' && <span className="ml-3">| Lang: {f.language}</span>}
+                      {f.country !== '—' && <span className="ml-3">| {f.country}</span>}
+                      {f.subscribers !== '—' && (
+                        <span className="ml-3">| Subscribers: {Number(f.subscribers).toLocaleString()}</span>
+                      )}
+                      {f.comments !== '—' && f.comments !== '0' && (
+                        <span className="ml-3">| Comments: {f.comments}</span>
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wide border ${
+                      live
+                        ? 'bg-green-100 text-green-700 border-green-200'
+                        : 'bg-gray-100 text-gray-500 border-gray-200'}`}>
+                      {f.status !== '—' ? f.status : 'Active'}
+                    </span>
+                    <button type="button"
+                      onClick={e => { e.stopPropagation(); onOpenRow(row) }}
+                      className="inline-flex items-center gap-1.5 text-xs font-bold whitespace-nowrap px-3 py-1.5
+                        rounded-lg border border-[#14254A]/15 text-[#14254A] bg-white transition-all
+                        hover:bg-[#14254A] hover:border-[#14254A] hover:text-white group-hover:border-[#14254A]/40">
+                      View Details
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
           </div>
 
           {totalPages > 1 && (

@@ -49,6 +49,7 @@ const AdminClientsAddPage  = lazy(() => import('@/app/admin/clients/add/page'))
 const AdminUsersPage       = lazy(() => import('@/app/admin/users/page'))
 const AdminUsersAddPage    = lazy(() => import('@/app/admin/users/add/page'))
 const AdminClientAdminsPage = lazy(() => import('@/app/admin/client-admins/page'))
+const AdminGuidelinesPage   = lazy(() => import('@/app/admin/guidelines/page'))
 const AdminNotificationsPage = lazy(() => import('@/app/admin/notifications/page'))
 const AdminNotificationDetail = lazy(() => import('@/app/admin/notifications/detail'))
 const RegistrationsPage    = lazy(() => import('@/app/admin/registrations/page'))
@@ -71,13 +72,13 @@ const WarRoomAssetsPage    = lazy(() => import('@/app/admin/war-room-assets/page
 const PlatformBriefPage    = lazy(() => import('@/app/admin/platform-brief/page'))
 const DatabaseBackupPage   = lazy(() => import('@/app/admin/database-backup/page'))
 const AwsCredentialsPage   = lazy(() => import('@/app/admin/aws-credentials/page'))
+const SecurityPolicyPage   = lazy(() => import('@/app/admin/security-policy/page'))
 const ApiCredsPage         = lazy(() => import('@/app/admin/api-credentials/page'))
 const ActivityPage         = lazy(() => import('@/app/admin/activity/page'))
 const TrackingPage         = lazy(() => import('@/app/admin/tracking/page'))
 const PowerBICredsPage     = lazy(() => import('@/app/admin/powerbi-creds/page'))
 const PowerBIWorkspacePage = lazy(() => import('@/app/admin/powerbi-workspace/page'))
 const SuperAdminPage       = lazy(() => import('@/app/admin/super-admin/page'))
-const ApiPlaygroundPage    = lazy(() => import('@/app/admin/api-playground/page'))
 const AdminWarRoomPage     = lazy(() => import('@/app/admin/war-room/page'))
 
 // ── Route guards ──────────────────────────────────────────────────────────────
@@ -238,7 +239,7 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
 //     implicitly). This mirrors the server-side grant enforcement so a plain
 //     Admin can't reach a page — by pasting its URL — that they weren't granted.
 // Every other admin page stays available to any admin (role >= 1).
-const SUPER_ADMIN_PATHS = ['/admin/super-admin', '/admin/platform-brief', '/admin/database-backup', '/admin/aws-credentials']
+const SUPER_ADMIN_PATHS = ['/admin/super-admin', '/admin/platform-brief', '/admin/database-backup', '/admin/aws-credentials', '/admin/security-policy']
 
 function AdminAccessGuard({ children }: { children: ReactNode }) {
   const pathname = usePathname()
@@ -525,6 +526,7 @@ export default function App() {
           <Route path="/admin/users"                      element={<AdminUsersPage />} />
           <Route path="/admin/users/add"                  element={<AdminUsersAddPage />} />
           <Route path="/admin/client-admins"              element={<AdminClientAdminsPage />} />
+          <Route path="/admin/guidelines"                 element={<AdminGuidelinesPage />} />
           <Route path="/admin/notifications"              element={<AdminNotificationsPage />} />
           <Route path="/admin/notifications/:id"          element={<AdminNotificationDetailRoute />} />
           <Route path="/admin/registrations"              element={<RegistrationsPage />} />
@@ -547,13 +549,13 @@ export default function App() {
           <Route path="/admin/platform-brief"             element={<PlatformBriefPage />} />
           <Route path="/admin/database-backup"            element={<DatabaseBackupPage />} />
           <Route path="/admin/aws-credentials"            element={<AwsCredentialsPage />} />
+          <Route path="/admin/security-policy"            element={<SecurityPolicyPage />} />
           <Route path="/admin/api-credentials"            element={<ApiCredsPage />} />
           <Route path="/admin/activity"                   element={<ActivityPage />} />
           <Route path="/admin/tracking"                   element={<TrackingPage />} />
           <Route path="/admin/powerbi-creds"              element={<PowerBICredsPage />} />
           <Route path="/admin/powerbi-workspace"          element={<PowerBIWorkspacePage />} />
           <Route path="/admin/super-admin"                element={<SuperAdminPage />} />
-          <Route path="/admin/api-playground"             element={<ApiPlaygroundPage />} />
           <Route path="/admin/war-room"                   element={<AdminWarRoomPage />} />
         </Route>
 

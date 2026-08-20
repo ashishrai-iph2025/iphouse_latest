@@ -15,6 +15,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import BackToConfiguration from '@/components/admin/BackToConfiguration'
+import SearchableSelect from '@/components/ui/SearchableSelect'
 
 interface LoginRow {
   loginId: number
@@ -177,26 +178,34 @@ export default function ClientAdminsPage() {
             {filtered.length} login{filtered.length !== 1 ? 's' : ''}
           </span>
           <div className="flex items-center gap-2 flex-wrap">
-            <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+            <label className="flex items-center gap-1.5 h-11 text-xs text-gray-500 cursor-pointer select-none">
               <input type="checkbox" checked={onlyAdmins}
                 onChange={e => { setOnlyAdmins(e.target.checked); setPage(1) }}
                 className="w-3.5 h-3.5 rounded accent-emerald-500" />
               Client Admins only
             </label>
             <select value={apiFilter} onChange={e => { setApiFilter(e.target.value as '' | 'yes' | 'no'); setPage(1) }}
-              className="border border-gray-200 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-300">
+              className="h-11 border border-gray-200 rounded-xl px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
               <option value="">API access: any</option>
               <option value="yes">Has API access</option>
               <option value="no">No API access</option>
             </select>
-            <select value={client} onChange={e => { setClient(e.target.value); setPage(1) }}
-              className="border border-gray-200 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-300">
-              <option value="">All clients</option>
-              {clients.map(([id, name]) => <option key={id} value={String(id)}>{name}</option>)}
-            </select>
+            {/* The same picker the reports screens use, rather than a native
+                select. There are ninety-odd companies here: a plain <select>
+                offers no way to search them, so finding one means scrolling a
+                list whose order the reader cannot see. */}
+            <div className="w-64">
+              <SearchableSelect
+                options={clients.map(([id, name]) => ({ key: String(id), label: name }))}
+                value={client}
+                onChange={v => { setClient(v); setPage(1) }}
+                placeholder="Select client"
+                emptyLabel="All Client"
+              />
+            </div>
             <input type="text" placeholder="Search by name, login or client…"
               value={search} onChange={e => { setSearch(e.target.value); setPage(1) }}
-              className="border border-gray-200 rounded-xl px-3 py-1.5 text-xs w-64 focus:outline-none focus:ring-2 focus:ring-blue-300"
+              className="h-11 border border-gray-200 rounded-xl px-3 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-300"
             />
           </div>
         </div>

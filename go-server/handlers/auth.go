@@ -467,6 +467,20 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		OK(w, map[string]any{"success": false, "error": "No active code"})
 		return
 	}
+
+	/* The OTP lockout, alongside the per-code cap below.
+
+	   They answer different questions and both are needed. Burning the code
+	   after five wrong guesses stops ONE code being brute-forced; it does not
+	   stop somebody requesting a fresh code and starting again, which over an
+	   afternoon is the same attack at a slower pace. The lockout counts across
+	   codes and is held in the database, so it survives a restart and is shared
+	   by every process. */
+	otpAcct := otpLockAccount(body.Email, body.UserID)
+	if st := CheckLock(AcctLogin, otpAcct, FailOTP); st.Locked {
+		OK(w, map[string]any{"success": false, "locked": true, "error": LockMessage(st)})
+		return
+	}
 	// A 6-digit code is only 1e6 wide: without a per-code attempt cap it can be
 	// brute-forced (per-IP rate limiting alone is not enough — an attacker with
 	// several source addresses still gets there). Burn the code after too many
@@ -479,6 +493,14 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// Constant-time compare so the response time can't leak the code prefix.
 	if subtle.ConstantTimeCompare([]byte(storedCode), []byte(body.Code)) != 1 {
+		lock := RecordFailure(AcctLogin, otpAcct, FailOTP)
+		if lock.Locked {
+			db.Exec("UPDATE dcp_user SET twofa_code = NULL, twofa_code_expires = NULL WHERE userId = ? LIMIT 1", body.UserID)
+			clearOTPAttempts(body.UserID)
+			notifyIfJustLocked(lock, body.Email, "")
+			OK(w, map[string]any{"success": false, "locked": true, "error": LockMessage(lock)})
+			return
+		}
 		left := registerOTPFailure(body.UserID)
 		if left <= 0 {
 			db.Exec("UPDATE dcp_user SET twofa_code = NULL, twofa_code_expires = NULL WHERE userId = ? LIMIT 1", body.UserID)
@@ -495,6 +517,7 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clearOTPAttempts(body.UserID)
+	ClearFailures(AcctLogin, otpAcct, FailOTP)
 	db.Exec("UPDATE dcp_user SET twofa_code = NULL, twofa_code_expires = NULL WHERE userId = ? LIMIT 1", body.UserID)
 
 	// The username MUST be the exact email the user authenticated with — never
@@ -740,12 +763,27 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	// Portal-staff login (Admin or Super Admin — unified in dcp_super_admin)
 	if sa := superAdminByEmail(body.Username); sa != nil {
-		hash, _ := sa["password_hash"].(string)
-		if !ipauth.VerifyPassword(body.Password, hash) {
-			Fail(w, 401, "Invalid credentials")
+		id := intFromAny(sa["id"])
+
+		/* The lock is checked BEFORE the password, and answers the same way for
+		   a right password as for a wrong one. Checking after would let someone
+		   confirm a guessed password against a locked account — the lockout
+		   would hold the session back while the error message gave away that the
+		   credential was correct. */
+		if st := CheckLock(AcctSuperAdmin, id, FailPassword); st.Locked {
+			go activity.Log(id, "login_blocked", "auth/login", ip, ua, map[string]any{"reason": "locked"})
+			Fail(w, 423, LockMessage(st))
 			return
 		}
-		id := intFromAny(sa["id"])
+
+		hash, _ := sa["password_hash"].(string)
+		if !ipauth.VerifyPassword(body.Password, hash) {
+			st := RecordFailure(AcctSuperAdmin, id, FailPassword)
+			notifyIfJustLocked(st, strFromAny(sa["email"]), strFromAny(sa["name"]))
+			Fail(w, 401, failedLoginMessage(st))
+			return
+		}
+		ClearFailures(AcctSuperAdmin, id, FailPassword)
 		upgradeLegacyHash(body.Password, hash, "UPDATE dcp_super_admin SET password_hash = ? WHERE id = ?", id)
 		claims := claimsForSuperAdminRow(sa)
 		go db.Exec("UPDATE dcp_super_admin SET last_login = UTC_TIMESTAMP() WHERE id = ?", id)
@@ -769,11 +807,25 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 401, "Invalid credentials")
 		return
 	}
-	hash, _ := row["login_password"].(string)
-	if !ipauth.VerifyPassword(body.Password, hash) {
-		Fail(w, 401, "Invalid credentials")
+
+	// Same order and the same reasons as the staff branch above: locked before
+	// verified, so the response cannot confirm a guessed password.
+	if st := CheckLock(AcctLogin, intFromAny(row["loginId"]), FailPassword); st.Locked {
+		go activity.Log(intFromAny(row["loginId"]), "login_blocked", "auth/login", ip, ua,
+			map[string]any{"reason": "locked"})
+		Fail(w, 423, LockMessage(st))
 		return
 	}
+
+	hash, _ := row["login_password"].(string)
+	if !ipauth.VerifyPassword(body.Password, hash) {
+		st := RecordFailure(AcctLogin, intFromAny(row["loginId"]), FailPassword)
+		notifyIfJustLocked(st, strFromAny(row["login_username"]),
+			strings.TrimSpace(strFromAny(row["first_name"])+" "+strFromAny(row["last_name"])))
+		Fail(w, 401, failedLoginMessage(st))
+		return
+	}
+	ClearFailures(AcctLogin, intFromAny(row["loginId"]), FailPassword)
 	upgradeLegacyHash(body.Password, hash, "UPDATE dcp_user_login SET login_password = ? WHERE loginId = ?", intFromAny(row["loginId"]))
 
 	// Markscan API token
@@ -1081,6 +1133,24 @@ func ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	db.Exec("UPDATE dcp_password_resets SET used = 1 WHERE id = ?", intFromAny(row["id"]))
+
+	/* The clock restarts and the lockout clears, together.
+
+	   This is the "instant recovery" half of the policy: somebody locked out for
+	   24 hours who can still read their email does not have to wait it out. The
+	   reset is proof of control of the mailbox, which is a stronger claim than
+	   the one the lock was protecting against, so holding the lock afterwards
+	   would punish the owner and nobody else. */
+	if accountType == "super_admin" {
+		StampPasswordChanged(AcctSuperAdmin, targetID)
+	} else if lg, _ := db.QueryOne(
+		"SELECT login_username FROM dcp_user_login WHERE loginId = ? LIMIT 1", targetID); lg != nil &&
+		strFromAny(lg["login_username"]) != "" {
+		StampPasswordChangedForUsername(strFromAny(lg["login_username"]))
+	} else {
+		StampPasswordChanged(AcctLogin, targetID)
+	}
+
 	go activity.Log(targetID, "password_reset", "auth/reset-password", activity.GetIP(r), activity.GetUA(r), map[string]any{"method": "reset_token", "accountType": accountType})
 
 	OK(w, map[string]any{"success": true})
@@ -1264,7 +1334,37 @@ func sanitizeClaims(c ipauth.Claims) map[string]any {
 		m["impersonating"] = true
 		m["impersonatorName"] = c.ImpersonatorName
 	}
+
+	/* Password age travels with the session, so the banner is decided once by
+	   the server and not by the page counting days of its own. It is attached
+	   HERE rather than in the login response alone, because a session that has
+	   been open across midnight has to start warning without being signed out
+	   and back in — which for a portal people leave open all day is most of them.
+
+	   Only when there is something to say. A password with three weeks left adds
+	   nothing to every session poll. */
+	if st := passwordStatusForClaims(c); st.Enabled && st.Warn {
+		m["passwordExpiry"] = st
+	}
 	return m
+}
+
+/*
+passwordStatusForClaims grades the signed-in account's password.
+
+Staff and client logins are told apart the same way ChangePassword tells them
+apart — a dcp_super_admin row for this email wins — because that is the table
+their password actually lives in, and grading the wrong table would warn the
+wrong person on the wrong schedule. LoginType cannot be used for this: a client
+row uses login_type = 2 to mean "password login", which is not the same claim.
+*/
+func passwordStatusForClaims(c ipauth.Claims) PasswordStatus {
+	if row, _ := db.QueryOne(
+		"SELECT id FROM dcp_super_admin WHERE email = ? AND is_active = 1 LIMIT 1",
+		c.LoginUsername); row != nil {
+		return PasswordStatusForAccount(AcctSuperAdmin, intFromAny(row["id"]))
+	}
+	return PasswordStatusForAccount(AcctLogin, c.LoginID)
 }
 
 func trimStr(s string) string {

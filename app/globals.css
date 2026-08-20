@@ -102,7 +102,39 @@ html, body {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-.fade-in { animation: fadeIn 0.3s ease both; }
+/* `backwards`, NOT `both`.
+ *
+ * `both` keeps the last keyframe applied after the animation ends, and that
+ * keyframe carries `transform: translateY(0)`. An identity transform is still a
+ * transform, and any transform other than `none` makes the element a containing
+ * block for `position: fixed` descendants — so every modal inside a page
+ * wrapped in `.fade-in` was being positioned against the page body rather than
+ * the viewport, and appeared boxed inside the content area with the sidebar and
+ * header left undimmed.
+ *
+ * `backwards` still applies the opening frame before the animation runs, so
+ * there is no flash of un-faded content, and applies nothing once it has
+ * finished. The end state of this animation IS the element's natural state —
+ * opacity 1, no offset — so dropping it changes nothing visible. */
+.fade-in { animation: fadeIn 0.3s ease backwards; }
+
+/* ── Right-hand drawer ─────────────────────────
+   Slides in from the edge it is anchored to, so the panel reads as having come
+   from the side of the screen rather than having appeared over it. Short, and
+   eased out rather than in-out: the arrival should feel settled by the time the
+   eye reaches it. */
+@keyframes drawerIn {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+.animate-drawer-in { animation: drawerIn 0.22s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* Respect a reader who has asked for less movement. A panel that slides is a
+   convenience; a panel that slides for somebody with vestibular sensitivity is
+   a symptom. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-drawer-in { animation: fadeIn 0.15s ease both; }
+}
 
 /* ── Table ─────────────────────────────────── */
 .data-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }

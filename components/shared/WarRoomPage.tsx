@@ -12,6 +12,7 @@ import {
   type WarRoomReport as Report, type WarRoomRow, type WarRoomMeta,
   type ClientOption, type WarRoomProgressEvent,
 } from '@/lib/warroom'
+import RealtimeCard from '@/components/shared/RealtimeCard'
 
 // Mirrors go-server/markscan/warroom.go's warRoomPlatforms + PlatformLabels, so
 // the loader can list every platform up front (as "pending") before any progress
@@ -554,6 +555,43 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
           </div>
         )}
       </div>
+
+      {/* Live discovery counts, above the report.
+
+          It answers a question the report cannot: what has come in since the
+          report was generated. A War Room report is a snapshot someone asked
+          for; this keeps moving while they read it.
+
+          Shown whether or not a report has been generated — on the empty state
+          it is the only thing on screen with anything to say. Staff pass the
+          selected client as a PORTAL user id, which is what this page's picker
+          holds; a client login passes nothing and is scoped server-side. */}
+      {/* Only once an asset is chosen.
+
+          This page is "cross-platform intelligence for an ASSET", and with none
+          selected the card had nothing to scope itself to — so it showed the
+          client's whole live total, sixty-five thousand, above an empty asset
+          picker and a "No report yet" panel. That number is true and answers a
+          question this screen is not asking; read here it looks like the count
+          for an asset nobody has picked.
+
+          The reports screens keep the unscoped card, where a client-wide total
+          is what that page is about. */}
+      {(!admin || clientId) && assetNames.length > 0 && (
+        <div className="mb-4">
+          {/* Counted by MARKSCAN, not the warehouse — the same system this
+              page's report is pulled from, over the same date window. A card
+              above a MarkScan report answering from the warehouse would invite
+              a comparison the two cannot survive.
+
+              The warehouse source is still there and still used by the reports
+              screens; see RealtimeCard's `source`. */}
+          <RealtimeCard view="war-room" source="markscan"
+            assetNames={assetNames}
+            userId={admin ? clientId : undefined}
+            startDate={startDate} endDate={endDate} />
+        </div>
+      )}
 
       {/* Report / empty state */}
       {!report && !loading && (

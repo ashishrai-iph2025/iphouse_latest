@@ -107,7 +107,7 @@ func clientAdminsList(w http.ResponseWriter, r *http.Request) {
 		FROM dcp_user_login l
 		INNER JOIN dcp_user u ON u.userId = l.userId
 		` + roleJoin + `
-		WHERE u.deleted = 0`
+		WHERE u.deleted = 0` + staffFilter
 
 	var rows []map[string]any
 	var err error

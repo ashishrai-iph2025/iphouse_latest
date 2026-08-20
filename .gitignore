@@ -8,6 +8,9 @@ node_modules/
 
 # Build output
 dist/
+# Not a Next.js project — this is stray turbopack cache from a tool that ran
+# `next` in this directory. Ignored so it never lands in a commit again.
+.next/
 
 # Local docker overrides (e.g. host port mapping on EC2) — keep deploy box clean
 docker-compose.override.yml

@@ -15,6 +15,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import BackToConfiguration from '@/components/admin/BackToConfiguration'
+import ReportsApiConnectionPanel from '@/components/admin/ReportsApiConnectionPanel'
+import ReportCachePanel from '@/components/admin/ReportCachePanel'
 import AdminPageHeader from '@/components/admin/AdminPageHeader'
 import SearchableSelect from '@/components/ui/SearchableSelect'
 import MultiSearchableSelect from '@/components/ui/MultiSearchableSelect'
@@ -22,7 +24,7 @@ import MultiSearchableSelect from '@/components/ui/MultiSearchableSelect'
 const NAVY   = '#14254A'
 const ORANGE = '#FC934C'
 
-type Tab = 'sources' | 'layout' | 'inventory' | 'access' | 'clients'
+type Tab = 'warehouse' | 'sources' | 'layout' | 'inventory' | 'access' | 'clients' | 'connection' | 'cache'
 
 /** One portal client and the warehouse client it reads. */
 interface ClientMapRow {
@@ -55,26 +57,42 @@ const SPANS: Span[] = ['full', 'half', 'third', 'quarter']
 
 interface LayoutPanel {
   key: string
-  kind: 'tile' | 'heading' | 'trend' | 'rate' | 'dim'
+  kind: 'tile' | 'heading' | 'trend' | 'rate' | 'dim' | 'filter'
   name: string
   label?: string
   viz?: string
   metric?: string
+  /** Filters only: the query parameter this slicer sets. */
+  param?: string
   span: Span
   hidden: boolean
+  /** Filters only: whether the pane leaves this slicer out before anyone
+      configures it, so an overridden one can be marked as such. */
+  defaultHidden?: boolean
   defaultSpan: Span
   /** Breakdowns only: the chart the report opens with. Empty means the shape the
       registry chose for that dimension. */
   defaultViz?: string
   defaultVizLabel?: string
   /** A section rule spans the page by definition; a half-width one is a label
-      floating beside a chart. */
+      floating beside a chart. A slicer sits in a one-column rail, so it has no
+      width either. */
   fixedSpan?: boolean
 }
 
 const KIND_LABEL: Record<LayoutPanel['kind'], string> = {
   tile: 'KPI card', heading: 'Section rule', trend: 'Trend', rate: 'Trend', dim: 'Chart',
+  filter: 'Filter',
 }
+
+/* ── The filter pane ──────────────────────────────────────────────────────────
+   The slicers down the right of a report are panels too — arranged here, stored
+   the same way, and following the same per-client rule. They live in a rail
+   rather than the grid, so they are ordered and switched on or off but never
+   given a width, and they are kept in their own list rather than folded into the
+   rows: a slicer does not take columns from a chart, and pretending it does
+   would make the preview lie. */
+const isPaneFilter = (p: LayoutPanel) => p.kind === 'filter'
 
 /** Short width labels. The list is a two-column layout now, so "Full row / Half
     / Third / Quarter" spelled out four times per row is most of the row — the
@@ -105,6 +123,12 @@ const KIND_STYLE: Record<LayoutPanel['kind'], { tint: string; glyph: React.React
   heading: {
     tint: 'bg-gray-100 text-gray-400 dark:bg-white/5 dark:text-white/40',
     glyph: <><path d="M4 8h16M4 14h10" /></>,
+  },
+  // A funnel: the one control on the page that narrows what every other panel
+  // is drawn from, which is why it gets its own colour rather than a chart's.
+  filter: {
+    tint: 'bg-sky-100 text-sky-700 dark:bg-sky-400/15 dark:text-sky-200',
+    glyph: <><path d="M3 5h18l-7 8v6l-4 2v-8L3 5z" /></>,
   },
 }
 
@@ -147,21 +171,52 @@ interface TableDetail {
   identExpr?: string; removedExpr?: string
   dimensions?: number; error?: string
 }
+/** One source as it is described to a login that may not see warehouse names.
+    An alias to tell it apart, a reference to quote, and its state — no table,
+    no columns, no SQL. Served by go-server/handlers/reportsources.go. */
+interface SourceSummary {
+  alias: string; ref: string
+  usable: boolean; dimensions?: number; error?: string
+}
 /** A platform is a name plus the tables it reads — nothing else is configured;
     the client/date columns and the measures are derived per table by the server
-    and reported back here so they can be checked. */
+    and reported back here so they can be checked.
+
+    `tables` and `tableDetail` arrive for a Super Admin only. Everyone else gets
+    `sources` and `tableCount` instead: the server decides, and the difference is
+    in the payload rather than in what this page chooses to draw. */
 interface Platform {
   key: string; label: string; order: number; enabled: boolean
-  tables: string[]
+  tables?: string[]
   tableDetail?: TableDetail[]
+  sources?: SourceSummary[]
+  tableCount?: number
 }
 /** One row per platform × table: a platform reading three tables gets three. */
 interface InventoryRow {
-  key: string; label: string; table: string; enabled: boolean
+  key: string; label: string; enabled: boolean
+  /** Present only when the warehouse names have been revealed; otherwise the
+      row carries `alias` and `ref` instead. */
+  table?: string
+  alias?: string; ref?: string
   tableExists?: boolean
   clientCol?: string; dateCol?: string; identExpr?: string
+  /** How many breakdown panels this table can fill — from the catalogue, so it
+      survives when the row counts below cannot be read. */
+  dimensions?: number
   rows?: number; clients?: number; firstDate?: string; lastDate?: string
   error?: string
+}
+/** One table in the warehouse, as the Warehouse tab shows it. `served` is
+    whether reports_api will answer for it; `usedBy` names the platforms already
+    reading it, which is what makes hiding one a decision rather than a click. */
+interface WarehouseTable {
+  table: string; name: string; type: string; engine: string
+  rows: number; bytes: number; comment: string
+  hidden: boolean; served: boolean; usedBy: string
+  /** False when a platform reads this table. The SERVER decides it and the save
+      enforces the same rule — the switch must not have its own opinion. */
+  canHide: boolean
 }
 interface AccessUser {
   loginId: number; name: string; username: string; client: string
@@ -242,10 +297,83 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   )
 }
 
+/**
+ * The footer under a long table.
+ *
+ * Renders NOTHING for a single page — a pager under nine rows is furniture. The
+ * page numbers are a window around the current one rather than the whole run:
+ * four hundred rows is sixteen pages, and a strip of sixteen buttons is harder
+ * to use than two arrows.
+ *
+ * `noun` so the count reads as what it is counting. "1–25 of 340 logins" tells
+ * somebody where they are; "1–25 of 340" makes them work it out.
+ */
+function Pager({ page, totalPages, perPage, total, onPage, noun, suffix }: {
+  page: number; totalPages: number; perPage: number; total: number
+  onPage: (p: number) => void
+  noun: [string, string]
+  suffix?: string
+}) {
+  if (totalPages <= 1) return null
+  const btn = 'px-2 py-1 rounded border border-gray-200 dark:border-white/15 ' +
+    'disabled:opacity-30 hover:bg-gray-50 dark:hover:bg-white/5'
+  const windowed = Array.from({ length: totalPages }, (_, i) => i + 1)
+    .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
+
+  return (
+    <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-3
+      border-t border-gray-100 dark:border-white/10">
+      <span className="text-[11px] text-gray-500 dark:text-white/45">
+        {(page - 1) * perPage + 1}–{Math.min(page * perPage, total)} of{' '}
+        <b className="text-[#14254A] dark:text-white">{total}</b>{' '}
+        {total === 1 ? noun[0] : noun[1]}{suffix}
+      </span>
+
+      <div className="flex items-center gap-1 text-xs">
+        <button onClick={() => onPage(1)} disabled={page === 1} aria-label="First page" className={btn}>«</button>
+        <button onClick={() => onPage(Math.max(1, page - 1))} disabled={page === 1}
+          aria-label="Previous page" className={btn}>‹</button>
+
+        {windowed.map((p, idx, arr) => (
+          <span key={p} className="flex items-center gap-1">
+            {/* A gap in the sequence gets an ellipsis, so 1 … 7 8 9 … 16 reads
+                as a range rather than as a numbering mistake. */}
+            {idx > 0 && arr[idx - 1] !== p - 1 && <span className="text-gray-300 px-0.5">…</span>}
+            <button onClick={() => onPage(p)}
+              aria-current={page === p ? 'page' : undefined}
+              className={`px-2.5 py-1 rounded border text-xs font-medium transition-colors ${
+                page === p
+                  ? 'text-white border-transparent'
+                  : 'border-gray-200 hover:bg-gray-50 dark:border-white/15 dark:hover:bg-white/5'}`}
+              style={page === p ? { background: NAVY } : undefined}>
+              {p}
+            </button>
+          </span>
+        ))}
+
+        <button onClick={() => onPage(Math.min(totalPages, page + 1))} disabled={page === totalPages}
+          aria-label="Next page" className={btn}>›</button>
+        <button onClick={() => onPage(totalPages)} disabled={page === totalPages}
+          aria-label="Last page" className={btn}>»</button>
+      </div>
+    </div>
+  )
+}
+
 /* ── Page ─────────────────────────────────────────────────────────────────── */
 
 export default function ReportConfigPage() {
   const [tab, setTab] = useState<Tab>('sources')
+  /* Super Admin only. Starts false so a slow or failed load errs towards
+     showing less rather than briefly showing table names and then hiding
+     them — a redaction that flickers has already happened. */
+  const [canEditSources, setCanEditSources] = useState(false)
+  /* Whether the reader has ASKED for the warehouse names. Off on every visit —
+     it is a deliberate act, not a saved preference, for the same reason a
+     revealed API key does not stay revealed. `revealed` is the server's
+     confirmation that the response actually carries them. */
+  const [revealNames, setRevealNames] = useState(false)
+  const [revealed, setRevealed] = useState(false)
   const [platforms, setPlatforms] = useState<Platform[]>([])
   const [draftTables, setDraftTables] = useState<Record<string, string[]>>({})
   const [draftLabel, setDraftLabel] = useState<Record<string, string>>({})
@@ -254,7 +382,18 @@ export default function ReportConfigPage() {
   const [confirmDelete, setConfirmDelete] = useState<Platform | null>(null)
   const [tables, setTables] = useState<{ key: string; label: string }[]>([])
   const [inventory, setInventory] = useState<InventoryRow[]>([])
+  const [inventoryProfiled, setInventoryProfiled] = useState(true)
+  /* The warehouse listing. Fetched only when its tab is opened — it enumerates
+     the whole database and nobody arriving to reorder a report should pay for
+     that. */
+  const [whTables, setWhTables] = useState<WarehouseTable[]>([])
+  const [whQuery, setWhQuery] = useState('')
+  const [whSchema, setWhSchema] = useState('')
+  const [whNote, setWhNote] = useState('')
+  const [whPage, setWhPage] = useState(1)
+  const [whOnly, setWhOnly] = useState<'all' | 'served' | 'hidden'>('all')
   const [access, setAccess] = useState<{ reports: { key: string; label: string }[]; users: AccessUser[] }>({ reports: [], users: [] })
+  const [accessPage, setAccessPage] = useState(1)
   const [busy, setBusy] = useState('')
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null)
   const [err, setErr] = useState('')
@@ -287,6 +426,7 @@ export default function ReportConfigPage() {
   const [clientMap, setClientMap] = useState<ClientMapRow[]>([])
   const [warehouseClients, setWarehouseClients] = useState<{ key: string; label: string }[]>([])
   const [mapQuery, setMapQuery] = useState('')
+  const [mapPage, setMapPage] = useState(1)
   // Drag state for the preview: what is being carried, and what it is over.
   const [dragKey, setDragKey] = useState('')
   const [overKey, setOverKey] = useState('')
@@ -298,26 +438,43 @@ export default function ReportConfigPage() {
 
   const loadPlatforms = useCallback(async () => {
     try {
-      const r = await fetch('/api/admin/report-platforms?shape=1', { credentials: 'include' })
+      /* `reveal` is asked for, never assumed. Being a Super Admin is permission
+         to see the warehouse names; it is not a reason to be shown them on
+         every visit, and the routine work on this screen — rename a report,
+         hide one, reorder them — does not need them at all. */
+      const r = await fetch(`/api/admin/report-platforms?shape=1${revealNames ? '&reveal=1' : ''}`,
+        { credentials: 'include' })
       if (!r.ok) throw new Error(`Could not load the platforms (${r.status})`)
       const d = await r.json()
       const list: Platform[] = d.platforms || []
       setPlatforms(list)
+      /* Whether this login may see and change the warehouse sources. Taken from
+         the response rather than from the session, because it is the SERVER's
+         decision and the response is already shaped by it: reading it here
+         cannot disagree with what was actually sent. */
+      setCanEditSources(d.canEditSources === true)
+      // Whether THIS response carries the names, so nothing has to infer which
+      // of the two shapes it is holding.
+      setRevealed(d.revealed === true)
       // Drafts start from what is stored, so the form always shows what is live.
       setDraftTables(Object.fromEntries(list.map(p => [p.key, p.tables || []])))
       setDraftLabel(Object.fromEntries(list.map(p => [p.key, p.label])))
       setErr('')
     } catch (e: any) { setErr(e.message) }
-  }, [])
+  }, [revealNames])
 
   const loadTables = useCallback(async () => {
     try {
       const r = await fetch('/api/admin/report-config/tables', { credentials: 'include' })
       const d = await r.json()
       if (d.available === false) { setErr(d.error || 'Warehouse unavailable'); return }
+      /* The list is the WAREHOUSE's, curated on the Warehouse tab — so it now
+         contains tables reports_api does not serve, and a platform pointed at
+         one of those saves cleanly and then fails at read time. Said in the
+         option itself, which is the last place it can be said cheaply. */
       setTables((d.tables || []).map((t: any) => ({
         key: String(t.name),
-        label: `${t.name}${t.approxRows != null ? `  ·  ~${nf(Number(t.approxRows))} rows` : ''}`,
+        label: `${t.name}${t.served === false ? '  ·  not served by the reports service' : ''}`,
       })))
     } catch { /* the table picker degrades to whatever is already saved */ }
   }, [])
@@ -325,12 +482,59 @@ export default function ReportConfigPage() {
   const loadInventory = useCallback(async () => {
     setBusy('inventory')
     try {
-      const r = await fetch('/api/admin/report-config/inventory', { credentials: 'include' })
+      const r = await fetch(`/api/admin/report-config/inventory${revealNames ? '?reveal=1' : ''}`,
+        { credentials: 'include' })
       const d = await r.json()
       if (d.available === false) { setErr(d.error || 'Warehouse unavailable'); return }
       setInventory(d.reports || [])
+      // Whether the row/client/date columns could be filled at all. Reading
+      // through reports_api they cannot, and the table has to say so rather
+      // than showing blanks that look like empty tables.
+      setInventoryProfiled(d.profiled !== false)
+      setErr('')
     } catch (e: any) { setErr(e.message) } finally { setBusy('') }
-  }, [])
+  }, [revealNames])
+
+  const loadWarehouse = useCallback(async () => {
+    setBusy('warehouse')
+    try {
+      const p = new URLSearchParams()
+      if (whQuery.trim()) p.set('q', whQuery.trim())
+      if (whSchema.trim()) p.set('schema', whSchema.trim())
+      const r = await fetch(`/api/admin/warehouse-tables?${p}`, { credentials: 'include' })
+      const d = await r.json()
+      if (d.available === false || !d.success) {
+        setErr(d.error || 'Could not read the warehouse table list')
+        setWhTables([])
+        return
+      }
+      setWhTables(d.tables || [])
+      setWhNote(d.rowsNote || '')
+      setErr('')
+    } catch (e: any) { setErr(e.message) } finally { setBusy('') }
+  }, [whQuery, whSchema])
+
+  /* Optimistic, then reconciled. The switch is the whole interaction on this
+     screen and a round trip before it moves makes the list feel broken; a
+     failure puts it back and says so. */
+  async function setTableHidden(t: WarehouseTable, hidden: boolean) {
+    setWhTables(list => list.map(x => x.table === t.table ? { ...x, hidden } : x))
+    try {
+      const r = await fetch('/api/admin/warehouse-tables', {
+        method: 'PUT', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ table: t.table, hidden }),
+      })
+      const d = await r.json()
+      if (!d.success) throw new Error(d.error || 'Could not save')
+      // The picker's contents just changed, so anything holding the old list
+      // has to be re-read rather than left to go stale.
+      loadTables()
+    } catch (e: any) {
+      setWhTables(list => list.map(x => x.table === t.table ? { ...x, hidden: !hidden } : x))
+      flash(e.message, false)
+    }
+  }
 
   const loadAccess = useCallback(async () => {
     try {
@@ -351,9 +555,10 @@ export default function ReportConfigPage() {
       if (!r.ok) throw new Error(d.error || `Could not load the layout (${r.status})`)
       const panels: LayoutPanel[] = (d.panels || []).map((p: any) => ({
         key: String(p.key), kind: p.kind, name: String(p.name || p.label || p.key),
-        label: p.label, viz: p.viz, metric: p.metric,
+        label: p.label, viz: p.viz, metric: p.metric, param: p.param,
         span: (p.span || p.defaultSpan || 'half') as Span,
         hidden: !!p.hidden,
+        defaultHidden: p.defaultHidden,
         defaultSpan: (p.defaultSpan || 'half') as Span,
         defaultViz: p.defaultViz, defaultVizLabel: p.defaultVizLabel,
         fixedSpan: !!p.fixedSpan,
@@ -425,10 +630,15 @@ export default function ReportConfigPage() {
     }
   }
 
-  useEffect(() => { loadPlatforms(); loadTables() }, [loadPlatforms, loadTables])
+  useEffect(() => { loadPlatforms() }, [loadPlatforms])
+  /* The table picker is a list of every warehouse table, so it is fetched only
+     once the server has said this login may have one. Asking unconditionally
+     would be a guaranteed 403 on every load for everyone else. */
+  useEffect(() => { if (revealed) loadTables() }, [revealed, loadTables])
   useEffect(() => { if (tab === 'clients' && clientMap.length === 0) loadClientMap() },
     [tab, clientMap.length, loadClientMap])
-  useEffect(() => { if (tab === 'inventory' && inventory.length === 0) loadInventory() }, [tab, inventory.length, loadInventory])
+  useEffect(() => { if (tab === 'inventory' && canEditSources) loadInventory() },
+    [tab, canEditSources, loadInventory])
   useEffect(() => { if (tab === 'access' && access.users.length === 0) loadAccess() }, [tab, access.users.length, loadAccess])
 
   /* The Layout tab opens on the first platform in the sidebar order, which is
@@ -452,9 +662,15 @@ export default function ReportConfigPage() {
      All local until Save: arranging a page is a sequence of small moves, and
      writing each one straight through would mean a half-finished layout is what
      everyone else sees. */
+  /* The grid and the filter pane are two lists in one array, so a move that
+     crossed between them would put a slicer among the charts — where the server
+     would still store it, and the report would still draw it in the rail, at a
+     position nobody could see. Refused rather than clamped: the arrows are
+     disabled at each group's edge, so this only ever fires on a drag. */
   const moveLayout = (index: number, by: number) => setLayout(cur => {
     const to = index + by
-    if (to < 0 || to >= cur.length) return cur
+    if (index < 0 || to < 0 || to >= cur.length) return cur
+    if (isPaneFilter(cur[index]) !== isPaneFilter(cur[to])) return cur
     const next = [...cur]
     const [row] = next.splice(index, 1)
     next.splice(to, 0, row)
@@ -474,6 +690,7 @@ export default function ReportConfigPage() {
     const from = cur.findIndex(p => p.key === fromKey)
     const to = cur.findIndex(p => p.key === toKey)
     if (from < 0 || to < 0) return cur
+    if (isPaneFilter(cur[from]) !== isPaneFilter(cur[to])) return cur
     const next = [...cur]
     const [row] = next.splice(from, 1)
     next.splice(to, 0, row)
@@ -488,6 +705,13 @@ export default function ReportConfigPage() {
     setLayout(cur => cur.map(p => p.key === key ? { ...p, viz } : p))
   const toggleHidden = (key: string) =>
     setLayout(cur => cur.map(p => p.key === key ? { ...p, hidden: !p.hidden } : p))
+
+  /* Two lists in one array: the grid the report draws, and the rail beside it.
+     They are edited on the same screen and saved in the same call — one layout,
+     one order — but they are never packed into the same rows, because a slicer
+     takes no columns from a chart. */
+  const gridPanels = useMemo(() => layout.filter(p => !isPaneFilter(p)), [layout])
+  const panePanels = useMemo(() => layout.filter(isPaneFilter), [layout])
 
   const layoutDirty = useMemo(
     () => JSON.stringify(layout.map(p => [p.key, p.span, p.viz ?? '', p.hidden])) !==
@@ -681,6 +905,16 @@ export default function ReportConfigPage() {
     } finally { setBusy('') }
   }
 
+  /* Every login the search matches. This — NOT the current page — is what a
+     bulk tick acts on, and what the header boxes report the state of.
+
+     That is a deliberate choice now that the two can differ. The scope of a
+     bulk change is the thing the operator defined by typing in the search box;
+     making it silently mean "the 25 of them I happen to be looking at" would let
+     someone search for a client, tick a column, and leave eleven pages of that
+     same client untouched with nothing on screen to say so. Pagination is a
+     viewing concern, not a scope one — and before it existed these were the same
+     set, so this preserves the behaviour rather than changing it. */
   const visibleUsers = useMemo(() => {
     const q = userQuery.trim().toLowerCase()
     if (!q) return access.users
@@ -688,6 +922,40 @@ export default function ReportConfigPage() {
       u.name.toLowerCase().includes(q) || u.username.toLowerCase().includes(q) ||
       (u.client || '').toLowerCase().includes(q))
   }, [access.users, userQuery])
+
+  /* ── Paging over the matches ──────────────────────────────────────────────
+     The grid is one row per login and one column per platform, so a few hundred
+     logins is a few thousand checkboxes in one table — slow to render and
+     impossible to read. */
+  const ACCESS_PER_PAGE = 25
+  const accessTotalPages = Math.max(1, Math.ceil(visibleUsers.length / ACCESS_PER_PAGE))
+  // Clamped rather than stored blindly: narrowing the search while on page 7
+  // would otherwise show an empty table with no rows and no explanation.
+  const accessSafePage = Math.min(accessPage, accessTotalPages)
+  const pagedUsers = useMemo(
+    () => visibleUsers.slice((accessSafePage - 1) * ACCESS_PER_PAGE, accessSafePage * ACCESS_PER_PAGE),
+    [visibleUsers, accessSafePage])
+
+  // Back to the first page whenever the result set changes underneath.
+  useEffect(() => { setAccessPage(1) }, [userQuery, access.users.length])
+
+  /* ── The client mapping list, paged the same way ─────────────────────────
+     Each row carries a searchable select over the whole warehouse client list,
+     so a few hundred rows is a few hundred of those mounted at once. */
+  const MAP_PER_PAGE = 25
+  const visibleClientMap = useMemo(() => {
+    const q = mapQuery.trim().toLowerCase()
+    if (!q) return clientMap
+    return clientMap.filter(c => c.name.toLowerCase().includes(q))
+  }, [clientMap, mapQuery])
+
+  const mapTotalPages = Math.max(1, Math.ceil(visibleClientMap.length / MAP_PER_PAGE))
+  const mapSafePage = Math.min(mapPage, mapTotalPages)
+  const pagedClientMap = useMemo(
+    () => visibleClientMap.slice((mapSafePage - 1) * MAP_PER_PAGE, mapSafePage * MAP_PER_PAGE),
+    [visibleClientMap, mapSafePage])
+
+  useEffect(() => { setMapPage(1) }, [mapQuery, clientMap.length])
 
   /* Whether a bulk write is in flight — every tri-state box is disabled during
      one, so a second click cannot race the first. */
@@ -729,6 +997,12 @@ export default function ReportConfigPage() {
   const renderPanelRow = (p: LayoutPanel) => {
     const i = layout.findIndex(x => x.key === p.key)
     const dropping = overKey === p.key && !!dragKey && dragKey !== p.key
+    /* A slicer moves within the pane and a chart within the grid, never between
+       the two — so the arrows stop at each group's edge rather than at the end
+       of the array they happen to share. */
+    const pane = isPaneFilter(p)
+    const atTop = i <= 0 || isPaneFilter(layout[i - 1]) !== pane
+    const atEnd = i < 0 || i === layout.length - 1 || isPaneFilter(layout[i + 1]) !== pane
     return (
       <div key={p.key}
         draggable
@@ -785,6 +1059,15 @@ export default function ReportConfigPage() {
                   emptyLabel={`Default · ${p.defaultVizLabel ?? p.defaultViz ?? '—'}`} />
               </span>
             </span>
+          ) : pane ? (
+            /* What the slicer FILTERS is already its name, so the second line
+               says the one thing the name cannot: whether it is here because
+               nobody changed anything, or because somebody did. */
+            <span className="block text-[10px] text-gray-400 truncate">
+              Slicer in the filter pane
+              {p.defaultHidden === true ? ' · off unless switched on' : ''}
+              {p.defaultHidden === false && p.hidden ? ' · normally shown' : ''}
+            </span>
           ) : (
             <span className="block text-[10px] text-gray-400 truncate">
               {KIND_LABEL[p.kind]}
@@ -795,7 +1078,12 @@ export default function ReportConfigPage() {
 
         {/* Width. A section rule always spans the page — a half-width one is a
             label floating beside a chart — so its control is shown but inert
-            rather than missing, and the row still reads the same way. */}
+            rather than missing, and the row still reads the same way.
+
+            A slicer gets no control at all: the pane is one column, so there is
+            no width to be wrong about, and an inert row of fractions would imply
+            there was. */}
+        {!pane && (
         <span className="flex gap-0.5 p-0.5 rounded-lg bg-[#14254A]/[0.05] dark:bg-white/[0.07] flex-shrink-0">
           {SPANS.map(s => (
             <button key={s} onClick={() => setSpan(p.key, s)}
@@ -810,11 +1098,14 @@ export default function ReportConfigPage() {
             </button>
           ))}
         </span>
+        )}
 
         {/* An eye, not a word: this is a switch, and a button reading "Visible"
             looks like a statement of fact rather than something to press. */}
         <button onClick={() => toggleHidden(p.key)}
-          title={p.hidden ? 'Show on the report' : 'Hide from the report'}
+          title={p.hidden
+            ? (pane ? 'Show this slicer in the filter pane' : 'Show on the report')
+            : (pane ? 'Take this slicer out of the filter pane' : 'Hide from the report')}
           aria-pressed={!p.hidden}
           className={`w-8 h-8 grid place-items-center rounded-lg border transition-colors flex-shrink-0 ${
             p.hidden
@@ -830,12 +1121,12 @@ export default function ReportConfigPage() {
         </button>
 
         <span className="flex flex-col flex-shrink-0">
-          <button onClick={() => moveLayout(i, -1)} disabled={i <= 0}
+          <button onClick={() => moveLayout(i, -1)} disabled={atTop}
             title="Move up" aria-label={`Move ${p.name} up`}
             className="w-5 h-4 grid place-items-center rounded text-[8px] text-gray-300
               hover:text-[#14254A] hover:bg-[#14254A]/[0.06] disabled:opacity-25
               dark:hover:text-white dark:hover:bg-white/10">▲</button>
-          <button onClick={() => moveLayout(i, 1)} disabled={i < 0 || i === layout.length - 1}
+          <button onClick={() => moveLayout(i, 1)} disabled={atEnd}
             title="Move down" aria-label={`Move ${p.name} down`}
             className="w-5 h-4 grid place-items-center rounded text-[8px] text-gray-300
               hover:text-[#14254A] hover:bg-[#14254A]/[0.06] disabled:opacity-25
@@ -846,11 +1137,31 @@ export default function ReportConfigPage() {
   }
 
   const TABS: { key: Tab; label: string; hint: string }[] = [
-    { key: 'sources',   label: 'Data sources',    hint: 'Which table feeds which platform report' },
+    /* First, because it is upstream of everything else here: what the picker on
+       the next tab is allowed to offer is decided on this one. Super Admin only
+       — it enumerates the whole database. */
+    ...(canEditSources
+      ? [{ key: 'warehouse' as Tab, label: 'Warehouse',
+           hint: 'Every table in the database, and which of them a platform may be pointed at' }]
+      : []),
+    { key: 'sources',   label: 'Data sources',
+      hint: canEditSources
+        ? 'Which table feeds which platform report'
+        : 'Which source feeds which platform report' },
     { key: 'layout',    label: 'Page layout',     hint: 'Where each visual sits on a report, and how wide it is' },
-    { key: 'inventory', label: 'Database report',  hint: 'What each mapped table actually holds' },
+    // The Database report is the fullest disclosure on this screen — every
+    // mapped table, its columns and its row counts — so it is not offered at
+    // all to a login that may not see them.
+    ...(canEditSources
+      ? [{ key: 'inventory' as Tab, label: 'Database report', hint: 'What each mapped table actually holds' }]
+      : []),
     { key: 'clients',   label: 'Client mapping',  hint: 'Which reporting client each portal client reads' },
     { key: 'access',    label: 'User access',      hint: 'Which logins may see which platform' },
+    // Last, because it is the thing you set once and the others are the daily
+    // work — but on this screen rather than a separate page, since "which table
+    // feeds this report" and "which service serves those tables" are one question.
+    { key: 'connection', label: 'API connection', hint: 'Which reports service this portal reads from' },
+    { key: 'cache',      label: 'Cache & Redis',   hint: 'Reports kept ready in Redis, and the refresh that fills it' },
   ]
 
   return (
@@ -891,17 +1202,218 @@ export default function ReportConfigPage() {
       </div>
 
       {/* ── Data sources ────────────────────────────────────────────────────── */}
+      {/* ── Warehouse ───────────────────────────────────────────────────────── */}
+      {tab === 'warehouse' && canEditSources && (() => {
+        const q = whQuery.trim().toLowerCase()
+        const shown = whTables.filter(t => {
+          if (whOnly === 'served' && !t.served) return false
+          if (whOnly === 'hidden' && !t.hidden) return false
+          // The server already applied `q`; this keeps the list responsive while
+          // somebody is still typing, before the fetch has come back.
+          return !q || t.table.toLowerCase().includes(q)
+        })
+        const PER = 25
+        const pages = Math.max(1, Math.ceil(shown.length / PER))
+        const page = Math.min(whPage, pages)
+        const paged = shown.slice((page - 1) * PER, page * PER)
+        const hiddenNow = whTables.filter(t => t.hidden).length
+
+        return (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <p className="text-xs text-gray-500 dark:text-white/45 max-w-2xl leading-relaxed">
+                Every table the warehouse holds. Hiding one takes it out of the picker on
+                <b className="text-[#14254A] dark:text-white"> Data sources</b> — it is a tidy-up of the
+                choices, not a permission.
+                <br />
+                A table a platform already reads is <b className="text-[#14254A] dark:text-white">locked</b>{' '}
+                and cannot be hidden. Point that platform at something else first.
+              </p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <input value={whQuery} onChange={e => { setWhQuery(e.target.value); setWhPage(1) }}
+                  onKeyDown={e => { if (e.key === 'Enter') loadWarehouse() }}
+                  placeholder="Search table name…"
+                  className="text-xs rounded-xl px-3 py-2 w-full sm:w-[220px] border
+                    bg-white border-gray-200 text-[#14254A] placeholder-gray-400 focus:outline-none focus:border-[#14254A]
+                    dark:bg-white/5 dark:border-white/15 dark:text-white dark:placeholder-white/30" />
+                <input value={whSchema} onChange={e => setWhSchema(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') loadWarehouse() }}
+                  placeholder="schema (default)"
+                  title="Leave empty for the warehouse this service reads. `mediascan` holds the master tables."
+                  className="text-xs rounded-xl px-3 py-2 w-full sm:w-[150px] border
+                    bg-white border-gray-200 text-[#14254A] placeholder-gray-400 focus:outline-none focus:border-[#14254A]
+                    dark:bg-white/5 dark:border-white/15 dark:text-white dark:placeholder-white/30" />
+                <button onClick={loadWarehouse} disabled={busy === 'warehouse'}
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold border transition-colors
+                    border-gray-200 text-gray-500 hover:text-[#14254A]
+                    dark:border-white/15 dark:text-white/60 disabled:opacity-50">
+                  {busy === 'warehouse' ? 'Reading…' : '↻ Read warehouse'}
+                </button>
+              </div>
+            </div>
+
+            <Card className="p-3">
+              <div className="flex items-center gap-4 text-xs flex-wrap">
+                <span className="flex items-baseline gap-1.5">
+                  <span className="text-base font-extrabold text-[#14254A] dark:text-white tabular-nums">
+                    {whTables.length}
+                  </span>
+                  <span className="text-gray-500 dark:text-white/45">tables</span>
+                </span>
+                <span className="text-gray-500 dark:text-white/45">
+                  <b className="text-[#14254A] dark:text-white tabular-nums">
+                    {whTables.filter(t => t.served).length}
+                  </b> served by the reports service
+                </span>
+                <span className="text-gray-500 dark:text-white/45">
+                  <b className="text-[#14254A] dark:text-white tabular-nums">{hiddenNow}</b> hidden
+                </span>
+
+                <span className="ml-auto flex items-center gap-1">
+                  {([['all', 'All'], ['served', 'Served'], ['hidden', 'Hidden']] as const).map(([k, l]) => (
+                    <button key={k} onClick={() => { setWhOnly(k); setWhPage(1) }}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                        whOnly === k
+                          ? 'text-white border-transparent'
+                          : 'border-gray-200 text-gray-500 hover:text-[#14254A] dark:border-white/15 dark:text-white/60'}`}
+                      style={whOnly === k ? { background: NAVY } : undefined}>
+                      {l}
+                    </button>
+                  ))}
+                </span>
+              </div>
+            </Card>
+
+            {whTables.length === 0 && busy !== 'warehouse' && (
+              <Card className="p-10 text-center">
+                <p className="font-bold text-[#14254A] dark:text-white mb-1">Nothing read yet</p>
+                <p className="text-sm text-gray-500 dark:text-white/45">
+                  Press <b>Read warehouse</b> to list the tables. This asks the reports service, which
+                  restricts the call by address as well as by key — if it refuses, the message will say so.
+                </p>
+              </Card>
+            )}
+
+            {whTables.length > 0 && (
+              <Card className="overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm min-w-[760px]">
+                    <thead>
+                      <tr style={{ background: NAVY }}>
+                        {['Table', 'Rows (approx)', 'Size', 'Served', 'Used by', 'In the picker'].map(h => (
+                          <th key={h} className="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-white/70">
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paged.length === 0 && (
+                        <tr><td colSpan={6} className="px-4 py-12 text-center text-sm text-gray-400">
+                          No table matches.
+                        </td></tr>
+                      )}
+                      {paged.map((t, i) => (
+                        <tr key={t.table} className={`border-b border-[#14254A]/[0.07] dark:border-white/[0.07] ${
+                          i % 2 ? 'bg-[#14254A]/[0.02] dark:bg-white/[0.02]' : ''}`}>
+                          <td className="px-4 py-2.5">
+                            <code className="text-[11px] text-[#14254A] dark:text-white">{t.name}</code>
+                            {t.type === 'VIEW' && <Pill tone="mute">View</Pill>}
+                            {t.comment && (
+                              <p className="text-[10px] text-gray-400 truncate max-w-[280px]" title={t.comment}>
+                                {t.comment}
+                              </p>
+                            )}
+                          </td>
+                          <td className="px-4 py-2.5 font-mono text-xs text-gray-500 dark:text-white/45 tabular-nums">
+                            {nf(t.rows)}
+                          </td>
+                          <td className="px-4 py-2.5 font-mono text-xs text-gray-500 dark:text-white/45 tabular-nums">
+                            {t.bytes >= 1 << 30
+                              ? `${(t.bytes / (1 << 30)).toFixed(1)} GB`
+                              : `${Math.round(t.bytes / (1 << 20))} MB`}
+                          </td>
+                          <td className="px-4 py-2.5">
+                            {t.served
+                              ? <Pill tone="ok">Yes</Pill>
+                              : <Pill tone="mute">No</Pill>}
+                          </td>
+                          <td className="px-4 py-2.5 text-[11px] text-gray-500 dark:text-white/45">
+                            {t.usedBy || '—'}
+                          </td>
+                          <td className="px-4 py-2.5">
+                            {/* The switch reads as what it CONTROLS — whether the
+                                picker offers it — rather than as "hidden", so it
+                                is not mistaken for a permission or a delete.
+
+                                A table a platform reads cannot be hidden at all:
+                                the control is disabled and says why, rather than
+                                accepting the click and failing behind it. */}
+                            <label className={`inline-flex items-center gap-2 ${
+                              t.canHide ? 'cursor-pointer' : 'cursor-not-allowed'}`}
+                              title={t.canHide
+                                ? undefined
+                                : `In use by ${t.usedBy}. Point that platform elsewhere before hiding this table.`}>
+                              <input type="checkbox" checked={!t.hidden} disabled={!t.canHide}
+                                onChange={e => setTableHidden(t, !e.target.checked)}
+                                className={`w-4 h-4 rounded ${t.canHide ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}
+                                style={{ accentColor: ORANGE }} />
+                              <span className={`text-[11px] font-semibold ${
+                                !t.canHide ? 'text-gray-400'
+                                  : t.hidden ? 'text-gray-400'
+                                    : 'text-[#14254A] dark:text-white'}`}>
+                                {t.hidden ? 'Hidden' : 'Offered'}
+                              </span>
+                            </label>
+                            {!t.canHide && (
+                              <p className="text-[10px] text-gray-400 mt-0.5">
+                                Locked — in use
+                              </p>
+                            )}
+                            {t.hidden && t.usedBy && (
+                              /* Only reachable from data written before the rule
+                                 existed. Left visible so an install carrying that
+                                 state can see it rather than wonder why a table
+                                 is missing from the picker. */
+                              <p className="text-[10px] text-amber-600 dark:text-amber-300 mt-0.5">
+                                Still read by {t.usedBy}
+                              </p>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <Pager page={page} totalPages={pages} perPage={PER} total={shown.length}
+                  onPage={setWhPage} noun={['table', 'tables']} />
+              </Card>
+            )}
+
+            {whNote && (
+              <p className="text-[11px] text-gray-400 leading-relaxed max-w-3xl">{whNote}</p>
+            )}
+          </div>
+        )
+      })()}
+
       {tab === 'sources' && (() => {
         /* Counts for the strip at the top. A configuration screen should say
            what state it is in before it says what you can change. */
-        const broken = platforms.filter(p => (p.tableDetail ?? []).some(t => !t.usable))
+        const broken = platforms.filter(p =>
+          (p.tableDetail ?? []).some(t => !t.usable) || (p.sources ?? []).some(s => !s.usable))
         const hidden = platforms.filter(p => !p.enabled)
         const q = sourceQuery.trim().toLowerCase()
         const shown = q
           ? platforms.filter(p =>
               p.label.toLowerCase().includes(q) ||
               p.key.toLowerCase().includes(q) ||
-              p.tables.some(t => t.toLowerCase().includes(q)))
+              // Only over what this login can actually see. Matching a hidden
+              // table name would let the box be used to test guesses at one.
+              (p.tables ?? []).some(t => t.toLowerCase().includes(q)) ||
+              (p.sources ?? []).some(s =>
+                s.alias.toLowerCase().includes(q) || s.ref.toLowerCase().includes(q)))
           : platforms
 
         return (
@@ -947,23 +1459,64 @@ export default function ReportConfigPage() {
                       focus:outline-none focus:border-[#14254A]
                       dark:bg-white/5 dark:border-white/15 dark:text-white dark:placeholder-white/30" />
                 )}
-                <button onClick={() => setAddOpen(o => !o)}
-                  className="px-3.5 py-1.5 rounded-lg text-xs font-bold text-white transition-all"
-                  style={{ background: NAVY }}>
-                  {addOpen ? 'Cancel' : '+ Add platform'}
-                </button>
+                {/* The reveal. Offered only to a Super Admin, off on arrival,
+                    and never remembered — the same shape as revealing an API
+                    key, because it is the same kind of act. */}
+                {canEditSources && (
+                  <button onClick={() => { setRevealNames(v => !v); setAddOpen(false) }}
+                    title={revealed
+                      ? 'Go back to showing sources by reference'
+                      : 'Show the real warehouse schema and table names'}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                      revealed
+                        ? 'border-[#FC934C]/40 text-[#c2691f] bg-[#FC934C]/10'
+                        : 'border-gray-200 text-gray-500 hover:text-[#14254A] dark:border-white/15 dark:text-white/60'}`}>
+                    {revealed ? 'Hide warehouse names' : 'Show warehouse names'}
+                  </button>
+                )}
+
+                {/* Adding a platform means naming the warehouse tables behind
+                    it, so it is offered only once those names are on screen —
+                    and the server refuses it either way. */}
+                {canEditSources && revealed && (
+                  <button onClick={() => setAddOpen(o => !o)}
+                    className="px-3.5 py-1.5 rounded-lg text-xs font-bold text-white transition-all"
+                    style={{ background: NAVY }}>
+                    {addOpen ? 'Cancel' : '+ Add platform'}
+                  </button>
+                )}
               </div>
             </div>
           </Card>
 
+          {/* Said once, plainly, rather than leaving someone to wonder why the
+              sources are named the way they are and nothing can be edited. The
+              wording differs by WHY they are hidden: a Super Admin has simply
+              not asked yet, and telling them to contact a Super Admin would be
+              absurd. */}
+          {!revealed && (
+            <Card className="p-3">
+              <p className="text-xs text-gray-500 dark:text-white/45 leading-relaxed">
+                <b className="text-[#14254A] dark:text-white">Sources are shown by reference.</b>{' '}
+                {canEditSources
+                  ? 'The warehouse tables behind each report are hidden until you ask for them — use Show warehouse names above. Renaming a report, hiding it and reordering it all work without them.'
+                  : 'The warehouse tables behind each report, and the columns they are read by, are visible to Super Admins only. You can still rename a report, hide it from the sidebar and change its order — quote a source’s reference to a Super Admin if one needs looking at.'}
+              </p>
+            </Card>
+          )}
+
           {/* ── Add a platform, only when asked for ─────────────────────── */}
-          {addOpen && (
+          {addOpen && revealed && (
             <Card className="p-4">
               <div className="text-sm font-bold text-[#14254A] dark:text-white mb-1">Add a platform</div>
               <p className="text-xs text-gray-500 dark:text-white/45 mb-3 max-w-2xl leading-relaxed">
                 A platform is a name and the warehouse tables behind it. Pick more than one and their
                 numbers are added together. Everything else — which column holds the client, which holds
                 the date, how rows are counted — is worked out from the tables themselves.
+                <br />
+                The list offers what the <b className="text-[#14254A] dark:text-white">Warehouse</b> tab
+                leaves visible. A table marked <i>not served by the reports service</i> can be chosen but
+                will not return data until a dataset for it exists there.
               </p>
               <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,240px)_1fr_auto] gap-3 lg:items-end">
                 <Field label="Platform name" hint="This is the name shown in the Reports sidebar">
@@ -1013,17 +1566,20 @@ export default function ReportConfigPage() {
               at once is a wall nobody reads. */}
           {shown.map(p => {
             const idx = platforms.indexOf(p)
-            const tablesDraft = draftTables[p.key] ?? p.tables
+            const tablesDraft = draftTables[p.key] ?? p.tables ?? []
             const labelDraft = draftLabel[p.key] ?? p.label
             const dirty = labelDraft !== p.label ||
-              JSON.stringify(tablesDraft) !== JSON.stringify(p.tables)
+              (revealed && JSON.stringify(tablesDraft) !== JSON.stringify(p.tables ?? []))
             const unusable = (p.tableDetail ?? []).filter(t => !t.usable)
+            const unusableRefs = (p.sources ?? []).filter(s => !s.usable)
+            const brokenCount = revealed ? unusable.length : unusableRefs.length
+            const sourceCount = p.tables?.length ?? p.tableCount ?? 0
             // An edited card stays open whatever else is clicked: a half-made
             // change must never be hidden behind a collapsed row.
             const open = openPlatform === p.key || dirty
 
             return (
-              <Card key={p.key} className={unusable.length > 0
+              <Card key={p.key} className={brokenCount > 0
                 ? 'overflow-hidden ring-1 ring-amber-300/70 dark:ring-amber-400/30'
                 : 'overflow-hidden'}>
 
@@ -1062,14 +1618,17 @@ export default function ReportConfigPage() {
                     </svg>
                     <span className="text-sm font-bold text-[#14254A] dark:text-white truncate">{p.label}</span>
                     <span className="text-[11px] text-gray-400 truncate hidden sm:inline">
-                      {p.tables.length === 1
+                      {/* A table name here would defeat the whole exercise for
+                          the sake of a subtitle: the count says as much about
+                          whether to open the row, and says nothing else. */}
+                      {revealed && p.tables?.length === 1
                         ? p.tables[0].split('.').pop()
-                        : `${p.tables.length} tables`}
+                        : `${sourceCount} source${sourceCount === 1 ? '' : 's'}`}
                     </span>
                     {dirty && <Pill tone="warn">Unsaved</Pill>}
-                    {unusable.length > 0 && (
+                    {brokenCount > 0 && (
                       <Pill tone="warn">
-                        {unusable.length} table{unusable.length === 1 ? '' : 's'} cannot be read
+                        {brokenCount} source{brokenCount === 1 ? '' : 's'} cannot be read
                       </Pill>
                     )}
                     {!p.enabled && <Pill tone="mute">Hidden from Reports</Pill>}
@@ -1077,7 +1636,7 @@ export default function ReportConfigPage() {
 
                   {/* Visibility without opening anything: the commonest change
                       on this screen is "take that one off the sidebar". */}
-                  <button onClick={() => savePlatform(p.key, p.label, p.tables, !p.enabled)}
+                  <button onClick={() => savePlatform(p.key, p.label, p.tables ?? [], !p.enabled)}
                     disabled={busy === p.key}
                     title={p.enabled ? 'Hide from the Reports sidebar' : 'Show in the Reports sidebar'}
                     className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors
@@ -1100,18 +1659,73 @@ export default function ReportConfigPage() {
                             focus:outline-none focus:border-[#14254A]
                             dark:bg-white/5 dark:border-white/15 dark:text-white" />
                       </Field>
-                      <Field label="Warehouse tables it reads"
-                        hint={tablesDraft.length > 1 ? 'Numbers from these tables are added together' : undefined}>
-                        <MultiSearchableSelect options={tables} values={tablesDraft}
-                          onChange={v => setDraftTables(d => ({ ...d, [p.key]: v }))}
-                          noun={['table', 'tables']} placeholder="Search warehouse tables…" />
-                      </Field>
+                      {revealed ? (
+                        <Field label="Warehouse tables it reads"
+                          hint={tablesDraft.length > 1 ? 'Numbers from these tables are added together' : undefined}>
+                          <MultiSearchableSelect options={tables} values={tablesDraft}
+                            onChange={v => setDraftTables(d => ({ ...d, [p.key]: v }))}
+                            noun={['table', 'tables']} placeholder="Search warehouse tables…" />
+                        </Field>
+                      ) : (
+                        <Field label="Sources it reads"
+                          hint={sourceCount > 1 ? 'Numbers from these sources are added together' : undefined}>
+                          <div className="rounded-xl border border-gray-200 dark:border-white/15
+                            bg-gray-50 dark:bg-white/[0.04] px-3 py-2.5 text-sm
+                            text-gray-500 dark:text-white/45">
+                            {sourceCount} source{sourceCount === 1 ? '' : 's'}, listed below.
+                            Changing them is a Super Admin action.
+                          </div>
+                        </Field>
+                      )}
                     </div>
+
+                    {/* The same card without a name on it. Whether a source is
+                        understood, how much of the report it can fill and what
+                        is wrong with it are all state — none of it identifies
+                        the table, and all of it is what this screen is for. The
+                        reference is there so a fault can be reported to someone
+                        who can look it up. */}
+                    {!revealed && (p.sources ?? []).length > 0 && (
+                      <div className="mt-3 space-y-2">
+                        {(p.sources ?? []).map(s => (
+                          <div key={s.ref}
+                            className={`rounded-xl border p-3 ${s.usable
+                              ? 'border-gray-100 dark:border-white/10'
+                              : 'border-amber-300/70 bg-amber-50/50 dark:border-amber-400/30 dark:bg-amber-500/[0.07]'}`}>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-[12px] font-semibold text-[#14254A] dark:text-white">
+                                {s.alias}
+                              </span>
+                              <code className="text-[10px] px-1.5 py-0.5 rounded bg-[#14254A]/[0.06]
+                                text-[#14254A]/60 dark:bg-white/10 dark:text-white/50"
+                                title="Quote this when reporting a problem with this source">
+                                ref {s.ref}
+                              </code>
+                              {s.usable
+                                ? <Pill tone="ok">Understood</Pill>
+                                : <Pill tone="bad">Cannot be read</Pill>}
+                            </div>
+                            {s.usable ? (
+                              <p className="text-[11px] text-gray-500 dark:text-white/45 mt-1.5 leading-relaxed">
+                                It can fill <b className="text-[#14254A] dark:text-white">{s.dimensions}</b>{' '}
+                                breakdown panel{s.dimensions === 1 ? '' : 's'}.
+                              </p>
+                            ) : (
+                              <p className="text-[11px] text-[#b45309] dark:text-amber-300 mt-1.5 leading-relaxed">
+                                {sentence(s.error || 'This source could not be read')}{' '}
+                                Its numbers are left out of this platform until it can be.
+                                Ask a Super Admin to check source <b>{s.ref}</b>.
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
                     {/* What the server worked out, in words first and
                         expressions second. An admin needs to know a table is
                         understood; the SQL is for the day it is not. */}
-                    {(p.tableDetail ?? []).length > 0 && (
+                    {revealed && (p.tableDetail ?? []).length > 0 && (
                       <div className="mt-3 space-y-2">
                         {(p.tableDetail ?? []).map(t => (
                           <div key={t.table}
@@ -1183,7 +1797,7 @@ export default function ReportConfigPage() {
                         {dirty && (
                           <button onClick={() => {
                             setDraftLabel(d => ({ ...d, [p.key]: p.label }))
-                            setDraftTables(d => ({ ...d, [p.key]: p.tables }))
+                            setDraftTables(d => ({ ...d, [p.key]: p.tables ?? [] }))
                           }}
                             className="px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-colors
                               border-gray-200 text-gray-500 hover:text-[#14254A] hover:border-gray-300
@@ -1191,15 +1805,21 @@ export default function ReportConfigPage() {
                             Discard
                           </button>
                         )}
-                        <button onClick={() => setConfirmDelete(p)} disabled={busy === p.key}
-                          className="px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-colors
-                            border-gray-200 text-red-600 hover:bg-red-50 hover:border-red-300
-                            dark:border-white/15 dark:text-red-300 dark:hover:bg-red-500/15 disabled:opacity-50">
-                          Delete
-                        </button>
+                        {/* Deleting a platform discards a source mapping that
+                            only a Super Admin could put back, so it belongs
+                            with the rest of these settings. */}
+                        {canEditSources && (
+                          <button onClick={() => setConfirmDelete(p)} disabled={busy === p.key}
+                            className="px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-colors
+                              border-gray-200 text-red-600 hover:bg-red-50 hover:border-red-300
+                              dark:border-white/15 dark:text-red-300 dark:hover:bg-red-500/15 disabled:opacity-50">
+                            Delete
+                          </button>
+                        )}
                         {dirty ? (
                           <button onClick={() => savePlatform(p.key, labelDraft.trim(), tablesDraft, p.enabled)}
-                            disabled={!labelDraft.trim() || tablesDraft.length === 0 || busy === p.key}
+                            disabled={!labelDraft.trim() ||
+                              (revealed && tablesDraft.length === 0) || busy === p.key}
                             className="px-4 py-1.5 rounded-lg text-[11px] font-bold text-white transition-all
                               disabled:opacity-40 disabled:cursor-not-allowed"
                             style={{ background: NAVY }}>
@@ -1261,6 +1881,15 @@ export default function ReportConfigPage() {
             Panels flow in the order below and wrap when a row fills, which the preview shows
             exactly. Hidden panels are not sent to the report at all, so switching KPI cards off is
             how you show fewer of them.
+          </p>
+          <p className="text-xs text-gray-500 dark:text-white/45 max-w-3xl leading-relaxed">
+            The <strong>filter pane</strong> down the right of the report is arranged here too —
+            which slicers a reader gets and in what order, for this platform and, if you pick one
+            below, for this client alone. A slicer starts out following its chart: hide the Genre
+            breakdown and the Genre dropdown goes with it, since a control whose only visible effect
+            is to empty the page is worse than no control. Switch one on here and it stays whatever
+            became of its chart. Turnaround and Keyword start off — both are picked by clicking
+            their own panel — and can be switched on like any other.
           </p>
 
           {/* Which platform is being arranged. The summary is here too — it is a
@@ -1350,13 +1979,20 @@ export default function ReportConfigPage() {
                     </span>
                   </h3>
                   <span className="text-[10px] text-gray-400">
-                    {layout.filter(p => !p.hidden && p.kind === 'tile').length} KPI cards ·{' '}
-                    {layout.filter(p => !p.hidden && p.kind === 'dim').length} charts ·{' '}
-                    {packRows(layout.filter(p => !p.hidden)).length} rows
+                    {gridPanels.filter(p => !p.hidden && p.kind === 'tile').length} KPI cards ·{' '}
+                    {gridPanels.filter(p => !p.hidden && p.kind === 'dim').length} charts ·{' '}
+                    {packRows(gridPanels.filter(p => !p.hidden)).length} rows ·{' '}
+                    {panePanels.filter(p => !p.hidden).length} filters
                   </span>
                 </div>
-                <div className="space-y-1.5">
-                  {packRows(layout.filter(p => !p.hidden)).map((row, i) => (
+                {/* The grid and the rail beside it, laid out the way the report
+                    lays them out — the charts take the width and the slicers sit
+                    down one narrow column to their right. Drawing the pane as a
+                    list under the grid would say it was part of the page flow,
+                    which is the one thing about it that is not true. */}
+                <div className="flex gap-2 items-start">
+                <div className="flex-1 min-w-0 space-y-1.5">
+                  {packRows(gridPanels.filter(p => !p.hidden)).map((row, i) => (
                     <div key={i} className="grid grid-cols-12 gap-1.5">
                       {row.map(p => (
                         <div key={p.key}
@@ -1394,6 +2030,37 @@ export default function ReportConfigPage() {
                     </div>
                   ))}
                 </div>
+
+                {/* The pane. Narrow on purpose: it is the shape of the thing,
+                    and a filter list as wide as the charts would read as another
+                    column of the report. */}
+                <div className="w-[104px] flex-shrink-0 rounded-lg border border-gray-100 dark:border-white/10
+                  bg-[#14254A]/[0.02] dark:bg-white/[0.02] p-1.5 space-y-1">
+                  <p className="text-[8px] font-bold uppercase tracking-widest text-gray-400 px-1 pb-0.5">
+                    Filters
+                  </p>
+                  {/* Always there, and shown as such: a report cannot be run
+                      without a window, so it is not in the list below either. */}
+                  <div className="rounded-md px-1.5 py-1.5 text-[9px] font-semibold border border-dashed
+                    border-gray-200 text-gray-400 dark:border-white/15 dark:text-white/35">
+                    Date range
+                  </div>
+                  {panePanels.filter(p => !p.hidden).map(p => (
+                    <div key={p.key}
+                      className="rounded-md px-1.5 py-1.5 text-[9px] font-semibold truncate border
+                        bg-sky-50 border-sky-200 text-sky-800
+                        dark:bg-sky-400/10 dark:border-sky-400/25 dark:text-sky-200"
+                      title={p.name}>
+                      {p.name}
+                    </div>
+                  ))}
+                  {panePanels.filter(p => !p.hidden).length === 0 && (
+                    <p className="text-[9px] text-gray-400 px-1 leading-snug">
+                      Date range only
+                    </p>
+                  )}
+                </div>
+                </div>
               </Card>
 
               <div className="space-y-3">
@@ -1404,7 +2071,7 @@ export default function ReportConfigPage() {
                   states how much of its twelve columns is used, because a row
                   that does not add up is allowed and should be visible rather
                   than silently corrected. */}
-              {packRows(layout.filter(p => !p.hidden)).map((row, i) => {
+              {packRows(gridPanels.filter(p => !p.hidden)).map((row, i) => {
                 const used = row.reduce((a, p) => a + (SPAN_COLS[p.span] ?? 0), 0)
                 return (
                   <Card key={`row${i}`} className="overflow-hidden">
@@ -1428,7 +2095,7 @@ export default function ReportConfigPage() {
               {/* Hidden panels keep their place in the order — they are only a
                   save away from being back on the page — so they are listed,
                   not dropped. */}
-              {layout.some(p => p.hidden) && (
+              {gridPanels.some(p => p.hidden) && (
                 <Card className="overflow-hidden">
                   <div className="flex items-center gap-2 px-3 py-1.5 bg-[#14254A]/[0.025] dark:bg-white/[0.03]">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
@@ -1440,8 +2107,37 @@ export default function ReportConfigPage() {
                     </span>
                   </div>
                   <div className="divide-y divide-gray-50 dark:divide-white/[0.06]">
-                    {layout.filter(p => p.hidden).map(renderPanelRow)}
+                    {gridPanels.filter(p => p.hidden).map(renderPanelRow)}
                   </div>
+                </Card>
+              )}
+
+              {/* ── The filter pane ────────────────────────────────
+                  Its own card, and the hidden ones listed with the rest rather
+                  than swept into the block above: the pane is short, the whole
+                  question here is which of a dozen slicers a reader gets, and
+                  answering it should not mean reading two lists. */}
+              {panePanels.length > 0 && (
+                <Card className="overflow-hidden">
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-sky-500/[0.06] dark:bg-sky-400/[0.07]">
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-sky-700 dark:text-sky-200">
+                      Filter pane
+                    </span>
+                    <span className="h-px flex-1 bg-sky-100 dark:bg-white/10" />
+                    <span className="text-[10px] text-gray-400 tabular-nums">
+                      {panePanels.filter(p => !p.hidden).length}/{panePanels.length} shown
+                    </span>
+                  </div>
+                  <div className="divide-y divide-gray-50 dark:divide-white/[0.06]">
+                    {panePanels.map(renderPanelRow)}
+                  </div>
+                  <p className="px-3 py-2 text-[10px] text-gray-400 leading-relaxed border-t
+                    border-gray-50 dark:border-white/[0.06]">
+                    The date range and, for staff, the client picker are always in the pane — a
+                    report cannot be run without them. Everything else is this list, top to bottom.
+                    A slicer switched off still filters when a reader clicks the matching chart;
+                    only the dropdown goes.
+                  </p>
                 </Card>
               )}
               </div>
@@ -1524,9 +2220,7 @@ export default function ReportConfigPage() {
 
           <Card className="overflow-hidden">
             <div className="divide-y divide-gray-100 dark:divide-white/10">
-              {clientMap
-                .filter(c => !mapQuery || c.name.toLowerCase().includes(mapQuery.trim().toLowerCase()))
-                .map(c => (
+              {pagedClientMap.map(c => (
                   <div key={c.userId} className="flex items-center gap-3 px-4 py-2.5 flex-wrap">
                     <span className="min-w-0 flex-1">
                       <span className="block text-[13px] font-semibold text-[#14254A] dark:text-white truncate">
@@ -1565,10 +2259,22 @@ export default function ReportConfigPage() {
                       : <Pill tone="mute">Off</Pill>}
                   </div>
                 ))}
+              {/* Told apart, because they send the reader somewhere different:
+                  nothing loaded at all, versus a search that matched nothing. */}
               {clientMap.length === 0 && busy !== 'clients' && (
                 <p className="px-4 py-8 text-center text-sm text-gray-400">No clients found.</p>
               )}
+              {clientMap.length > 0 && visibleClientMap.length === 0 && (
+                <p className="px-4 py-8 text-center text-sm text-gray-400">
+                  No client matches &ldquo;{mapQuery}&rdquo;.
+                </p>
+              )}
             </div>
+
+            <Pager page={mapSafePage} totalPages={mapTotalPages}
+              perPage={MAP_PER_PAGE} total={visibleClientMap.length}
+              onPage={setMapPage} noun={['client', 'clients']}
+              suffix={mapQuery.trim() ? ' matching' : undefined} />
           </Card>
 
           <p className="text-[11px] text-gray-400 leading-relaxed max-w-3xl">
@@ -1580,13 +2286,15 @@ export default function ReportConfigPage() {
       )}
 
       {/* ── Database report ─────────────────────────────────────────────────── */}
-      {tab === 'inventory' && (
+      {tab === 'inventory' && canEditSources && (
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <p className="text-xs text-gray-500 dark:text-white/45 max-w-2xl leading-relaxed">
               What each platform is actually attached to. A platform reading several tables appears
-              once per table, with the client and date columns that were derived from it, its row and
-              client counts, and the span of its dates.
+              once per table, with the client and date columns that were derived from it
+              {inventoryProfiled
+                ? ', its row and client counts, and the span of its dates.'
+                : ' and how much of a report it can fill.'}
             </p>
             <button onClick={loadInventory} disabled={busy === 'inventory'}
               className="px-3.5 py-2 rounded-xl text-xs font-bold border transition-colors
@@ -1595,6 +2303,22 @@ export default function ReportConfigPage() {
               {busy === 'inventory' ? 'Checking…' : '↻ Re-check'}
             </button>
           </div>
+
+          {/* The three profile columns are one query against the warehouse, and
+              reading through reports_api there is no warehouse connection to
+              make it with — every aggregate over there is scoped to one client,
+              and these ask about the table as a whole. Said once, here, so the
+              empty cells below are not read as empty tables. */}
+          {!inventoryProfiled && inventory.length > 0 && (
+            <Card className="p-3">
+              <p className="text-[11px] text-gray-500 dark:text-white/45 leading-relaxed">
+                <b className="text-[#14254A] dark:text-white">Row and date counts are unavailable.</b>{' '}
+                This portal reads its reports through the reports service rather than holding
+                warehouse credentials of its own, so it can say what each table is and whether the
+                engine understands it, but not how many rows it holds.
+              </p>
+            </Card>
+          )}
 
           <Card className="overflow-hidden">
             <div className="overflow-x-auto">
@@ -1614,15 +2338,31 @@ export default function ReportConfigPage() {
                       {busy === 'inventory' ? 'Checking the warehouse…' : 'No results yet.'}
                     </td></tr>
                   )}
+                  {/* Keyed on `ref` rather than `table`: the table is absent
+                      when the names are hidden, and a key that collapses to
+                      "platform--0" for every row of a platform is not a key. */}
                   {inventory.map((row, i) => (
-                    <tr key={`${row.key}-${row.table}-${i}`}
+                    <tr key={`${row.key}-${row.ref || row.table || i}-${i}`}
                       className={`border-b border-[#14254A]/[0.07] dark:border-white/[0.07] ${
                         i % 2 ? 'bg-[#14254A]/[0.02] dark:bg-white/[0.02]' : ''}`}>
                       <td className="px-4 py-3 font-semibold text-[#14254A] dark:text-white whitespace-nowrap">
                         {row.label}
                       </td>
                       <td className="px-4 py-3">
-                        <code className="text-[11px] text-[#14254A]/70 dark:text-white/60">{row.table || '—'}</code>
+                        {row.table
+                          ? <code className="text-[11px] text-[#14254A]/70 dark:text-white/60">{row.table}</code>
+                          : (
+                            /* Aliased. The reference is what makes two sources of
+                               one platform tellable apart and what somebody quotes
+                               when reporting a fault with one. */
+                            <span>
+                              <span className="text-[12px] text-[#14254A] dark:text-white">{row.alias || '—'}</span>
+                              {row.ref && (
+                                <code className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-[#14254A]/[0.06]
+                                  text-[#14254A]/60 dark:bg-white/10 dark:text-white/50">{row.ref}</code>
+                              )}
+                            </span>
+                          )}
                       </td>
                       <td className="px-4 py-3">
                         {row.error ? <Pill tone="bad">Problem</Pill>
@@ -1633,8 +2373,18 @@ export default function ReportConfigPage() {
                             title={row.error}>{row.error}</p>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-[11px] font-mono text-gray-500 dark:text-white/45 whitespace-nowrap">
-                        {row.clientCol ? `${row.clientCol} · ${row.dateCol}` : '—'}
+                      <td className="px-4 py-3 text-[11px] whitespace-nowrap">
+                        <span className="font-mono text-gray-500 dark:text-white/45">
+                          {row.clientCol ? `${row.clientCol} · ${row.dateCol}` : '—'}
+                        </span>
+                        {/* How much of a report this table can fill. Derived from
+                            the catalogue, so it is the one substantive figure
+                            still available when the row counts are not. */}
+                        {row.dimensions != null && (
+                          <span className="block text-[10px] text-gray-400 mt-0.5">
+                            fills {row.dimensions} panel{row.dimensions === 1 ? '' : 's'}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 font-mono text-xs text-[#14254A] dark:text-white">
                         {row.rows != null ? nf(row.rows) : '—'}
@@ -1655,6 +2405,10 @@ export default function ReportConfigPage() {
       )}
 
       {/* ── User access ─────────────────────────────────────────────────────── */}
+      {tab === 'connection' && <ReportsApiConnectionPanel />}
+
+      {tab === 'cache' && <ReportCachePanel />}
+
       {tab === 'access' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -1664,8 +2418,8 @@ export default function ReportConfigPage() {
               a full list.
               <br />
               The box beside a name covers that login; the one under a column heading covers that
-              platform for every login <b>currently shown</b>, so searching first narrows what a
-              bulk tick will touch.
+              platform for <b>every login the search matches</b> — all {visibleUsers.length} of them,
+              not just this page — so searching first narrows what a bulk tick will touch.
             </p>
             <input value={userQuery} onChange={e => setUserQuery(e.target.value)}
               placeholder="Search name, email or client…"
@@ -1689,8 +2443,8 @@ export default function ReportConfigPage() {
                         <TriCheck state={gridState}
                           disabled={busyAccess || visibleUsers.length === 0}
                           title={gridState === 'all'
-                            ? `Remove every platform from all ${visibleUsers.length} logins shown`
-                            : `Give every platform to all ${visibleUsers.length} logins shown`}
+                            ? `Remove every platform from all ${visibleUsers.length} matching logins`
+                            : `Give every platform to all ${visibleUsers.length} matching logins`}
                           onChange={() => applyAccess(visibleUsers.map(u => ({
                             user: u, allowed: gridState === 'all' ? [] : null,
                           })))} />
@@ -1708,8 +2462,8 @@ export default function ReportConfigPage() {
                             <TriCheck state={st}
                               disabled={busyAccess || visibleUsers.length === 0}
                               title={st === 'all'
-                                ? `Remove ${r.label} from all ${visibleUsers.length} logins shown`
-                                : `Give ${r.label} to all ${visibleUsers.length} logins shown`}
+                                ? `Remove ${r.label} from all ${visibleUsers.length} matching logins`
+                                : `Give ${r.label} to all ${visibleUsers.length} matching logins`}
                               onChange={() => applyAccess(visibleUsers.map(u => {
                                 const cur = effective(u)
                                 const next = st === 'all'
@@ -1729,7 +2483,7 @@ export default function ReportConfigPage() {
                       No logins match.
                     </td></tr>
                   )}
-                  {visibleUsers.map((u, i) => (
+                  {pagedUsers.map((u, i) => (
                     <tr key={u.loginId} className={`border-b border-[#14254A]/[0.07] dark:border-white/[0.07] ${
                       i % 2 ? 'bg-[#14254A]/[0.02] dark:bg-white/[0.02]' : ''}`}>
                       <td className="px-4 py-2.5">
@@ -1771,6 +2525,11 @@ export default function ReportConfigPage() {
                 </tbody>
               </table>
             </div>
+
+            <Pager page={accessSafePage} totalPages={accessTotalPages}
+              perPage={ACCESS_PER_PAGE} total={visibleUsers.length}
+              onPage={setAccessPage} noun={['login', 'logins']}
+              suffix={userQuery.trim() ? ' matching' : undefined} />
           </Card>
         </div>
       )}

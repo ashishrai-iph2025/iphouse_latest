@@ -22,6 +22,17 @@ import { createPortal } from 'react-dom'
 interface Option {
   key: string
   label: string
+  /* How much is behind this option in the scope on screen, where the caller
+     knows. Optional: a picker whose list IS the data (clients, platforms) has
+     nothing useful to put here, and an omitted count renders nothing rather
+     than a misleading zero.
+
+     It exists because a list can only be complete or only be relevant, not
+     both. The Asset list is the client's whole catalogue — 1,572 titles, so the
+     one being looked for can always be found — and most of them have nothing in
+     the chosen month. Without the number the reader discovers that by picking
+     one and watching the page empty. */
+  count?: number
 }
 
 interface Props {
@@ -187,6 +198,9 @@ export default function SearchableSelect({
   const ink = {
     text:   dark ? 'rgba(255,255,255,0.86)' : '#14254A',
     muted:  dark ? 'rgba(255,255,255,0.38)' : '#9ca3af',
+    // One step back from muted, for a count of zero: still legible, but it must
+    // not compete with the counts that mean something.
+    faint:  dark ? 'rgba(255,255,255,0.26)' : '#c3c8d0',
     check:  dark ? 'rgba(255,255,255,0.55)' : '#14254A',
     hot:    '#FC934C',
     hotInk: '#ffffff',
@@ -277,6 +291,20 @@ export default function SearchableSelect({
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {o.label}
                 </span>
+                {/* Tabular figures and a fixed slot, so the counts form a column
+                    the eye can run down instead of ragged text after each name.
+                    A zero is DIMMED rather than hidden: "nothing in this window"
+                    is the answer to a question the reader would otherwise have
+                    to spend a click on. */}
+                {o.count !== undefined && !o.clear && (
+                  <span style={{
+                    flexShrink: 0, fontSize: 12, fontVariantNumeric: 'tabular-nums',
+                    color: hot ? ink.hotInk : (o.count > 0 ? ink.muted : ink.faint),
+                    opacity: o.count > 0 ? 1 : 0.75,
+                  }}>
+                    {o.count.toLocaleString()}
+                  </span>
+                )}
                 {/* The check says what is CHOSEN. The fill says what is under the
                     cursor. They are different questions and answering both with
                     colour is what made the old list hard to read. */}

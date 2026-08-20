@@ -6,6 +6,7 @@ import ImpersonationBanner from './ImpersonationBanner'
 import SideNav from './SideNav'
 import IdleTimeoutGuard from './IdleTimeoutGuard'
 import Footer from '@/components/ui/Footer'
+import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner'
 import ThemeCustomizer from '@/components/ui/ThemeCustomizer'
 import { MasterDataProvider } from '@/lib/masterDataContext'
 import { ModuleAccessProvider } from '@/lib/moduleAccess'
@@ -46,6 +47,10 @@ function Shell({ children }: { children: React.ReactNode }) {
         <ImpersonationBanner />
         {/* Top header (logo + profile) – hidden for without-header layout */}
         {!noHeader && <ClientNavbar />}
+
+        {/* Directly under the header and outside the scrolling body, for the
+            same reason as the admin shell: it must not scroll away. */}
+        <PasswordExpiryBanner />
 
         {/* Body: sidebar + main content */}
         <div className={`flex flex-1 min-h-0 overflow-hidden ${isRightSide ? 'flex-row-reverse' : 'flex-row'}`}>

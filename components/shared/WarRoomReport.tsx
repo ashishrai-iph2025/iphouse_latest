@@ -156,9 +156,10 @@ const UGC_LABELS: Record<string, string> = {
 ═══════════════════════════════════════════════════════════════════════════ */
 export default function WarRoomReport({ report, rows, admin = false }: { report: Report; rows: WarRoomRow[]; admin?: boolean }) {
   const [filters, setFilters] = useState<WarRoomFilters>({})
-  // Per-platform pills stay hidden behind a "Show Platforms" toggle next to
-  // the All Platforms tab; forced visible while a platform filter is active
-  // (otherwise the active selection would be invisible).
+  // Whether the per-platform strip has been opened. The All Platforms tab is
+  // what opens it — see platformsOpen, which also forces it visible while a
+  // platform is selected, since an active selection off screen is a report
+  // filtered by something the reader cannot see.
   const [showPlatforms, setShowPlatforms] = useState(false)
 
   const hasFilter = Object.values(filters).some(Boolean)
@@ -268,6 +269,10 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
   )
 
   const activePlatform = filters.platform || ''
+  /* The strip is open when it was opened, and always while a platform is
+     selected — a selected tab that is not on screen would leave the report
+     filtered with nothing saying by what. */
+  const platformsOpen = showPlatforms || !!activePlatform
   const ap  = activePlatform ? view.platforms.find(p => p.platform === activePlatform) : undefined
   const s: Totals     = ap?.totals    ?? view.summary
   const f: Funnel     = ap?.funnel    ?? view.funnel
@@ -603,12 +608,18 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
     </div>
   )
 
-  /* Funnel, status, donuts. Equal-height rows (items-stretch) so every card in
-     a row shares the same height and width — plain row-major grid, no masonry
-     reflow, so nothing zigzags. Same two-slot treatment as the trend block. */
+  /* Funnel and donuts. Equal-height rows (items-stretch) so every card in a row
+     shares the same height and width — plain row-major grid, no masonry reflow,
+     so nothing zigzags. Same two-slot treatment as the trend block.
+
+     "Current status" used to sit between them and was removed: it restated the
+     funnel beside it — removed, pending and active are the funnel's own stages
+     — so the row spent a quarter of its width saying the same thing twice, in a
+     less readable form. The column count drops with it, which is what lets the
+     three that remain grow instead of leaving a gap. */
   const funnelStatusRow = (
-    <div className={`grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch ${
-      activePlatform === 'internet' ? 'xl:grid-cols-3' : 'xl:grid-cols-4'} ${fullWidthBlocks ? 'mt-3' : ''}`}>
+    <div className={`grid grid-cols-1 gap-3 items-stretch ${
+      activePlatform === 'internet' ? 'md:grid-cols-3' : 'md:grid-cols-2 xl:grid-cols-4'} ${fullWidthBlocks ? 'mt-3' : ''}`}>
 
       <div className="flex flex-col">
         <Label info={admin && <InfoTip text={LOGIC.funnel} />}
@@ -620,10 +631,6 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
         <Card className="mt-1 overflow-hidden flex-1 flex flex-col">
           <FunnelView f={f} />
         </Card>
-      </div>
-      <div className="flex flex-col">
-        <Label>Current status</Label>
-        <SegmentBars className="flex-1 mt-1" title="Current status" data={b.byStatus} dim="status" active={filters.status} onSelect={toggle} info={admin && <InfoTip text={LOGIC.currentStatus} />} exportLabel="Current status" />
       </div>
       <div className="flex flex-col">
         <Label info={admin && <InfoTip text={LOGIC.hostVideo} />}
@@ -656,6 +663,27 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
           />
         </div>
       )}
+
+      {/* The removal-rate ring, moved here out of the KPI rail.
+
+          Two things were wrong with it there. It made the rail taller than the
+          column beside it, and the rail is sticky and `items-start` — so on the
+          All Platforms tab the page ended with a large empty region to the left
+          of the ring, which is the gap in the layout rather than a spacing bug.
+          And it is the same KIND of thing as the cards in this row: a summary
+          of how enforcement ended, not a headline count. It belongs with them. */}
+      <div className="flex flex-col">
+        <Label info={admin && <InfoTip text={LOGIC.removalRate} />}>Removal rate</Label>
+        <Card className="mt-1 flex-1 p-4 flex flex-col items-center justify-center">
+          <div className="w-[88px] h-[88px] rounded-full grid place-items-center"
+            style={{ background: `conic-gradient(${ORANGE} ${removalRate}%, #f1f4f8 0)` }}>
+            <div className="w-[62px] h-[62px] rounded-full bg-white dark:bg-[#1a2d55] grid place-items-center">
+              <span className="text-lg font-extrabold" style={{ color: ORANGE }}>{removalRate}%</span>
+            </div>
+          </div>
+          <div className="text-[11px] text-gray-400 mt-2 text-center">of identified removed</div>
+        </Card>
+      </div>
     </div>
   )
 
@@ -716,8 +744,33 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
               Platform
             </Label>
             <div className="flex gap-2 overflow-x-auto pb-1">
+              {/* All Platforms is BOTH the "no platform filter" tab and the
+                  control that opens the per-platform strip.
+
+                  It used to be a tab plus a dashed "Show Platforms" button
+                  beside it, which put two controls on one decision: the button
+                  could hide a strip while a platform was still selected, so it
+                  also had to clear the selection to stay honest. Folding it into
+                  the tab removes that case — going back to All Platforms and
+                  closing the strip are the same act, which is how it reads
+                  anyway.
+
+                  The chevron is what keeps it discoverable: without it a tile
+                  that expands something looks exactly like one that does not. */}
               <button
-                onClick={() => selectPlatform(activePlatform)}
+                onClick={() => {
+                  /* On a platform: return to All and close. On All already:
+                     open or close. One control, and the state it leaves behind
+                     always matches what is selected. */
+                  if (activePlatform) {
+                    selectPlatform(activePlatform)
+                    setShowPlatforms(false)
+                  } else {
+                    setShowPlatforms(v => !v)
+                  }
+                }}
+                aria-expanded={platformsOpen}
+                title={platformsOpen ? 'Hide the individual platforms' : 'Show the individual platforms'}
                 className={`flex-shrink-0 text-left rounded-xl border-2 p-3 transition-all ${
                   !activePlatform
                     ? 'border-[#14254A] bg-[#14254A]/5'
@@ -728,6 +781,12 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
                     <IconGrid />
                   </span>
                   <span className="text-xs font-bold text-[#14254A] whitespace-nowrap">All Platforms</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    strokeWidth={3} strokeLinecap="round" strokeLinejoin="round"
+                    className={`text-gray-400 flex-shrink-0 transition-transform duration-200 ${
+                      platformsOpen ? 'rotate-90' : ''}`} aria-hidden>
+                    <path d="m9 18 6-6-6-6" />
+                  </svg>
                 </div>
                 <div className="flex gap-3">
                   <Stat n={compact(view.summary.identified)} label="Total" tone="navy" />
@@ -735,23 +794,7 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
                 </div>
               </button>
 
-              {/* Show/Hide toggle for the per-platform pills. Hiding while a
-                  platform is selected also clears that selection — the pills
-                  are forced visible whenever a platform filter is active. */}
-              <button
-                onClick={() => {
-                  if (showPlatforms || activePlatform) {
-                    if (activePlatform) selectPlatform(activePlatform)
-                    setShowPlatforms(false)
-                  } else {
-                    setShowPlatforms(true)
-                  }
-                }}
-                className="flex-shrink-0 self-stretch rounded-xl border-2 border-dashed border-gray-200 px-3 text-[11px] font-bold text-gray-500 hover:border-[#FC934C]/50 hover:text-[#FC934C] transition-all whitespace-nowrap">
-                {(showPlatforms || activePlatform) ? '‹ Hide Platforms' : 'Show Platforms ›'}
-              </button>
-
-              {(showPlatforms || !!activePlatform) && view.platforms.filter(p => p.available).map(p => {
+              {platformsOpen && view.platforms.filter(p => p.available).map(p => {
                 const rate    = p.totals.identified > 0 ? Math.round((p.totals.removed / p.totals.identified) * 100) : 0
                 const isActive = activePlatform === p.platform
                 return (
@@ -888,19 +931,6 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
             </>
           )}
 
-          {/* Removal rate ring */}
-          <div className="mt-1 bg-white rounded-2xl shadow-card border border-gray-100 p-4 flex flex-col items-center">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-3 self-start flex items-center gap-1.5">
-              Removal rate{admin && <InfoTip text={LOGIC.removalRate} />}
-            </div>
-            <div className="w-[88px] h-[88px] rounded-full grid place-items-center"
-              style={{ background: `conic-gradient(${ORANGE} ${removalRate}%, #f1f4f8 0)` }}>
-              <div className="w-[62px] h-[62px] rounded-full bg-white dark:bg-[#1a2d55] grid place-items-center">
-                <span className="text-lg font-extrabold" style={{ color: ORANGE }}>{removalRate}%</span>
-              </div>
-            </div>
-            <div className="text-[11px] text-gray-400 mt-2 text-center">of identified removed</div>
-          </div>
         </div>
 
       </div>

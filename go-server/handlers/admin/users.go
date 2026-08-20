@@ -40,6 +40,41 @@ const roleJoin = `LEFT JOIN dcp_super_admin sa
 		 = CONVERT(l.login_username USING utf8mb4) COLLATE utf8mb4_general_ci
 		AND sa.is_active = 1`
 
+/*
+staffFilter hides IP House's own accounts from the client-account screens.
+
+Users, Registrations, Module Permissions and Client Admins all administer CLIENT
+logins. Staff — Admin and Super Admin — appear in the same tables because they
+are rows in dcp_user_login like anyone else, which puts colleagues' accounts in
+a list whose every action is about a client's, and invites editing one by
+mistake.
+
+Written as SQL rather than a filter over the results, so a page of twenty-five
+is twenty-five CLIENT rows: dropping staff after the fact would silently shorten
+pages and make the total counts wrong.
+
+The expression is roleSelect's, repeated rather than referenced — MySQL does not
+allow a select alias in WHERE, and computing it twice is cheaper than the
+subquery that would avoid it. It needs roleJoin in the FROM clause; every query
+using this already has one, and adding this without it fails loudly at query
+time rather than quietly matching nothing.
+*/
+const staffFilter = " AND COALESCE(CASE sa.role WHEN 'SuperAdmin' THEN 2 WHEN 'Admin' THEN 1 END, u.role, 0) = 0"
+
+/*
+staffFilterHaving is the same rule for a GROUPED query.
+
+Registrations lists one row per shared login, which may span several client
+companies, so the test has to run after the grouping rather than before it — a
+WHERE would drop the staff ROWS while leaving the login itself in the result,
+assembled from whichever companies happened not to match.
+
+MAX over the role string is lexicographic, and 'SuperAdmin' sorts above 'Admin',
+which is only ever asked here as "is any of this staff" — so the ordering does
+not have to mean anything beyond non-null.
+*/
+const staffFilterHaving = " HAVING COALESCE(CASE MAX(sa.role) WHEN 'SuperAdmin' THEN 2 WHEN 'Admin' THEN 1 END, MAX(u.role), 0) = 0"
+
 func usersList(w http.ResponseWriter, r *http.Request) {
 	uid := r.URL.Query().Get("userId")
 	var rows []map[string]any
@@ -49,13 +84,13 @@ func usersList(w http.ResponseWriter, r *http.Request) {
 			l.login_type, l.is_active, l.created_at, l.updated_at, u.name AS user_name, u.email AS user_email, `+roleSelect+`
 			FROM dcp_user_login l INNER JOIN dcp_user u ON u.userId = l.userId
 			`+roleJoin+`
-			WHERE u.deleted = 0 AND l.userId = ? ORDER BY l.loginId DESC`, uid)
+			WHERE u.deleted = 0`+staffFilter+` AND l.userId = ? ORDER BY l.loginId DESC`, uid)
 	} else {
 		rows, err = db.Query(`SELECT l.loginId, l.userId, l.first_name, l.last_name, l.login_username,
 			l.login_type, l.is_active, l.created_at, l.updated_at, u.name AS user_name, u.email AS user_email, ` + roleSelect + `
 			FROM dcp_user_login l INNER JOIN dcp_user u ON u.userId = l.userId
 			` + roleJoin + `
-			WHERE u.deleted = 0 ORDER BY l.loginId DESC`)
+			WHERE u.deleted = 0` + staffFilter + ` ORDER BY l.loginId DESC`)
 	}
 	if err != nil {
 		log.Printf("[users] list query error: %v", err)

@@ -224,13 +224,15 @@ func UserModulePermissions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Full list: users + modules for page load
+		// roleJoin is needed for staffFilter, which reads sa.role — see users.go.
 		users, _ := db.Query(`
 			SELECT u.userId, l.loginId, u.name AS clientName,
 			       CONCAT(IFNULL(l.first_name,''),' ',IFNULL(l.last_name,'')) AS name,
 			       l.login_username AS username, l.is_active
 			FROM dcp_user_login l
 			INNER JOIN dcp_user u ON u.userId = l.userId
-			WHERE l.is_active = 1 AND u.deleted = 0
+			` + roleJoin + `
+			WHERE l.is_active = 1 AND u.deleted = 0` + staffFilter + `
 			ORDER BY u.name, l.login_username`)
 		modules, _ := db.Query(`SELECT Id, ModuleName, pageName, status FROM module_permission WHERE status = 0 ORDER BY Id ASC`)
 		if users == nil {

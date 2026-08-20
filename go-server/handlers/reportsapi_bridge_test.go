@@ -72,7 +72,7 @@ func TestBridgeRunSpec(t *testing.T) {
 		"clientId": client,
 		"from":     from.Format("2006-01-02"),
 		"to":       to.Format("2006-01-02"),
-	})
+	}, false)
 
 	if w, ok := out["queryWarning"].(string); ok && w != "" {
 		t.Fatalf("bridge reported failures: %s", w)
@@ -149,26 +149,65 @@ func TestBridgeOptions(t *testing.T) {
 	for param, col := range spec.Filters {
 		t.Logf("spec filter %-18s → column %s", param, col)
 	}
-	opts := mergeSpecOptionsViaAPI([]reportSpec{spec}, client)
+	/* Listed under the same scope a report runs under. The window matters to
+	   what comes back — that is the point of passing it — so this asks for one
+	   rather than for everything the client has ever had. */
+	to := time.Now().UTC()
+	from := to.AddDate(0, 0, -30)
+	opts := mergeSpecOptionsViaAPI([]reportSpec{spec}, client, map[string]string{
+		"clientId": client,
+		"from":     from.Format("2006-01-02"),
+		"to":       to.Format("2006-01-02"),
+	})
 
 	/* Every filter the spec declares must come back under its OWN parameter
 	   name — that is the key the page reads. A pluralised or prettified key
 	   renders as an empty slicer with nothing to explain it, which is why this
-	   is checked per parameter rather than by counting the response. */
+	   is checked per parameter rather than by counting the response.
+
+	   A parameter with no values is NOT an error here any more: scoped to a
+	   window, a slicer whose values all fall outside it is correctly empty. What
+	   would be an error is the key going missing, or a value arriving without
+	   the name a reader picks it by. */
 	for param := range spec.Filters {
 		v, present := opts[param]
 		if !present {
 			t.Errorf("filter %q produced no options key", param)
 			continue
 		}
-		vals, _ := v.([]string)
+		vals, _ := v.([]map[string]any)
 		if len(vals) == 0 {
-			t.Errorf("filter %q came back with no values", param)
+			t.Logf("option %-18s no values in this window", param)
 			continue
 		}
-		t.Logf("option %-18s %3d values (e.g. %q)", param, len(vals), vals[0])
+		for _, o := range vals {
+			if strFromAny(o["id"]) == "" {
+				t.Errorf("filter %q has an option with no id: %v", param, o)
+				break
+			}
+			if strFromAny(o["name"]) == "" {
+				t.Errorf("filter %q has an option with no name: %v", param, o)
+				break
+			}
+		}
+		t.Logf("option %-18s %3d values (e.g. %q → %q)",
+			param, len(vals), strFromAny(vals[0]["id"]), strFromAny(vals[0]["name"]))
 	}
 	if _, ok := opts["clients"]; !ok {
 		t.Error("no clients key")
+	}
+}
+
+/*
+The asset lookup must resolve to a master reports_api actually serves.
+
+It is spelled "assets", and an earlier fix asked for "asset" — which is not an
+error anyone sees: MasterNames returns "no such master", the caller moves on,
+and the slicer renders exactly as it did before. Pinning the table→key hop here
+means a wrong name fails loudly instead of silently doing nothing.
+*/
+func TestAssetMasterTableIsSpelledAsTheRegistryHasIt(t *testing.T) {
+	if assetMasterTable != "mediascan.Asset" {
+		t.Errorf("asset master table is %q — dimensionCandidates declares mediascan.Asset", assetMasterTable)
 	}
 }

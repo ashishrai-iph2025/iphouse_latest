@@ -12,9 +12,18 @@ export interface ConfigModule {
   title: string
   desc:  string
   color: string
+  /** Kept out of the /admin/configuration card grid, but still a real module:
+   *  the access toggle and the server-side grant check both continue to use it.
+   *  For pages the sidebar already links to, where a card is a second door to
+   *  the same room rather than the only one. */
+  hideCard?: boolean
 }
 
 export const CONFIG_MODULES: ConfigModule[] = [
+  /* Deliberately first: it is the card that explains the others. Someone who
+     does not yet know which three screens a task spans is exactly the reader
+     scanning this grid. */
+  { key: 'guidelines',            href: '/admin/guidelines',            icon: '📘', title: 'Setup Guidelines',           desc: 'Step-by-step: enabling API modules, Reports, the Dashboard, and editing email templates.', color: '#0891B2' },
   { key: 'modules',               href: '/admin/modules',               icon: '🔐', title: 'API Modules',                desc: 'Create, update and delete API modules.',                                          color: '#0078D4' },
   { key: 'api-credentials',       href: '/admin/api-credentials',       icon: '🔑', title: 'Manage API Credentials',     desc: 'Manage API credentials to access real-time data for clients.',                    color: '#7C3AED' },
   { key: 'dashboard-modules',     href: '/admin/dashboard-modules',     icon: '📊', title: 'PowerBI Dashboard Modules',  desc: 'Manage dashboards like Open Web, Social Media, Telegram etc.',                     color: '#F59E0B' },
@@ -23,14 +32,13 @@ export const CONFIG_MODULES: ConfigModule[] = [
   { key: 'powerbi-workspace',     href: '/admin/powerbi-workspace',     icon: '🗃️', title: 'PowerBI Workspace',          desc: 'View reports, datasets, refresh schedules and refresh history from your PowerBI workspace.', color: '#F59E0B' },
   { key: 'settings',              href: '/admin/settings',              icon: '📧', title: 'Email Credentials',          desc: 'Manage SMTP/email credentials and configuration.',                                color: '#0078D4' },
   { key: 'idle-timeout',          href: '/admin/idle-timeout',          icon: '⏱️', title: "Client's Session Timeout",   desc: 'Manage client-wise idle timeout and auto-logout settings.',                       color: '#6366F1' },
-  { key: 'registration-requests', href: '/admin/registration-requests', icon: '📋', title: 'User Registration Requests', desc: 'Review and approve user registration requests.',                                  color: '#14B8A6' },
+  { key: 'registration-requests', href: '/admin/registration-requests', icon: '📋', title: 'User Registration Requests', desc: 'Review and approve user registration requests.',                                  color: '#14B8A6', hideCard: true },
   { key: 'tracking',              href: '/admin/tracking',              icon: '📡', title: 'Tracking Report',            desc: 'Application tracking and activity monitoring.',                                    color: '#8B5CF6' },
   { key: 'asset-access',          href: '/admin/asset-access',          icon: '🗂️', title: 'Asset Based Access',         desc: 'Manage access based on required asset permissions.',                              color: '#EF4444' },
   { key: 'war-room-assets',       href: '/admin/war-room-assets',       icon: '⚔️', title: 'War Room Assets',            desc: 'Per-client War Room settings — enable or disable the Asset Comparison tab.',      color: '#FC934C' },
   { key: 'report-config',          href: '/admin/report-config',          icon: '🧭', title: 'Report Configuration',      desc: 'Map platform reports to warehouse tables and control who can see them.', color: '#2763C4' },
   { key: 'email-templates',       href: '/admin/email-templates',       icon: '✉️', title: 'Email Templates',            desc: 'Manage and customise system email templates.',                                    color: '#0891B2' },
   { key: 'email-event-types',     href: '/admin/email-event-types',     icon: '🔔', title: 'Email Event Types',          desc: 'Configure the event types that trigger system emails and manage their variables.', color: '#0891B2' },
-  { key: 'api-playground',        href: '/admin/api-playground',        icon: '🧪', title: 'API Playground',             desc: 'Browse and test every API endpoint used across the platform.',                    color: '#14254A' },
   { key: 'client-admins',         href: '/admin/client-admins',         icon: '👥', title: 'Client Admins',              desc: 'Let a client user govern Account Access for their own company — view its users and grant or revoke their sign-in.', color: '#7C3AED' },
 ]
 

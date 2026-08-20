@@ -264,6 +264,13 @@ func ReportConfigSave(w http.ResponseWriter, r *http.Request) {
 	offers real choices instead of a free-text field.
 */
 func ReportConfigTables(w http.ResponseWriter, r *http.Request) {
+	/* The whole point of this endpoint is to name every table the warehouse
+	   will answer for, and then every column of one. There is no aliased form
+	   of that worth serving — a picker you cannot read is not a picker — so it
+	   is Super Admin only outright. */
+	if !requireWarehouseNames(w, r) {
+		return
+	}
 	table := strings.TrimSpace(r.URL.Query().Get("table"))
 
 	/* In API mode the choices come from reports_api's catalogue rather than
@@ -273,7 +280,10 @@ func ReportConfigTables(w http.ResponseWriter, r *http.Request) {
 	   endpoint that never asked one. */
 	if reportsViaAPI() {
 		if table == "" {
-			tables, err := apiTableList()
+			// The curated WAREHOUSE list — see pickerTables. Not the dataset
+			// catalogue, which is a dozen tables out of several hundred and is
+			// not the set the Warehouse tab governs.
+			tables, err := pickerTables(r.Context())
 			if err != nil {
 				reportsUnavailable(w, err)
 				return
@@ -305,7 +315,17 @@ func ReportConfigTables(w http.ResponseWriter, r *http.Request) {
 			reportsUnavailable(w, err)
 			return
 		}
-		OK(w, map[string]any{"success": true, "tables": rows})
+		// Same curation as the API path — a table hidden on the Warehouse tab is
+		// hidden from the picker whichever backend enumerated it.
+		hidden := hiddenTables()
+		kept := make([]map[string]any, 0, len(rows))
+		for _, t := range rows {
+			if hidden[strings.ToLower(strFromAny(t["name"]))] {
+				continue
+			}
+			kept = append(kept, t)
+		}
+		OK(w, map[string]any{"success": true, "tables": kept})
 		return
 	}
 
@@ -333,10 +353,38 @@ func ReportConfigTables(w http.ResponseWriter, r *http.Request) {
 	"is this platform wired to real data?" without opening a SQL client.
 */
 func ReportConfigInventory(w http.ResponseWriter, r *http.Request) {
-	if !db.ReportsConfigured() {
-		reportsUnavailable(w, fmt.Errorf("reports database is not configured"))
+	/* The Database report tab: every mapped table, its row counts and its
+	   columns. It is a more complete disclosure than the Data sources tab it
+	   sits beside, so restricting one and not the other would restrict nothing.
+	   Same gate, same reason. */
+	if !requireWarehouseNames(w, r) {
 		return
 	}
+	/* Readable through EITHER backend.
+
+	   This used to refuse unless the portal held warehouse credentials of its
+	   own — which, since the reports moved behind reports_api, is never. The tab
+	   showed "reports database is not configured" and an empty table on every
+	   install that had been migrated, so the one screen that says whether a
+	   platform's tables are understood was dark exactly where it was needed.
+
+	   Most of what it reports does not need a database connection at all: the
+	   table, whether it resolves, and the columns the engine derived from it all
+	   come from the catalogue. Only the row/client/date profile is a query, and
+	   that is now skipped rather than fatal. */
+	if !reportsBackendReady() {
+		reportsUnavailable(w, fmt.Errorf("no report backend is configured"))
+		return
+	}
+	/* The profile needs a warehouse connection: reports_api scopes every
+	   aggregate to one client, and this column is asking about the table as a
+	   whole. Reported as absent rather than as zero — a row count of 0 beside a
+	   table that plainly has data is worse than an empty cell. */
+	canProfile := db.ReportsConfigured()
+	// Same rule as the Data sources tab: the real names are shown only when
+	// asked for, not merely because the reader is entitled to them.
+	reveal := r.URL.Query().Get("reveal") == "1"
+
 	out := []map[string]any{}
 	for _, p := range loadPlatforms() {
 		if len(p.Tables) == 0 {
@@ -346,9 +394,14 @@ func ReportConfigInventory(w http.ResponseWriter, r *http.Request) {
 			})
 			continue
 		}
-		for _, table := range p.Tables {
+		for i, table := range p.Tables {
+			alias := sourceAlias(p.Label, i, len(p.Tables), roleLabelFor(p, table))
 			item := map[string]any{
-				"key": p.Key, "label": p.Label, "table": table, "enabled": p.Enabled,
+				"key": p.Key, "label": p.Label, "enabled": p.Enabled,
+				"alias": alias, "ref": sourceRef(table),
+			}
+			if reveal {
+				item["table"] = table
 			}
 			shape := tableShapeOf(table)
 			if shape.Err != "" {
@@ -373,26 +426,38 @@ func ReportConfigInventory(w http.ResponseWriter, r *http.Request) {
 			item["dateCol"] = spec.DateCol
 			item["identExpr"] = spec.IdentExpr
 
+			// How much of the report this table can actually fill — available
+			// from the catalogue alone, so it is reported in both modes.
+			item["dimensions"] = len(spec.Dimensions)
+
 			// Cheap profile: rows, distinct clients, and the span of the date
 			// column. Everything here is inferred from the table itself, so a
 			// missing column cannot make this query fail.
-			if row, err := db.ReportsQueryOne(fmt.Sprintf(
-				`SELECT COUNT(*) AS rows_total,
-				        COUNT(DISTINCT %s) AS clients,
-				        MIN(DATE(%s)) AS first_date,
-				        MAX(DATE(%s)) AS last_date
-				   FROM %s`, spec.ClientCol, spec.DateCol, spec.DateCol, table)); err == nil && row != nil {
-				item["rows"] = numOf(row["rows_total"])
-				item["clients"] = numOf(row["clients"])
-				item["firstDate"] = isoDay(row["first_date"])
-				item["lastDate"] = isoDay(row["last_date"])
-			} else if err != nil {
-				item["error"] = err.Error()
+			if canProfile {
+				if row, err := db.ReportsQueryOne(fmt.Sprintf(
+					`SELECT COUNT(*) AS rows_total,
+					        COUNT(DISTINCT %s) AS clients,
+					        MIN(DATE(%s)) AS first_date,
+					        MAX(DATE(%s)) AS last_date
+					   FROM %s`, spec.ClientCol, spec.DateCol, spec.DateCol, table)); err == nil && row != nil {
+					item["rows"] = numOf(row["rows_total"])
+					item["clients"] = numOf(row["clients"])
+					item["firstDate"] = isoDay(row["first_date"])
+					item["lastDate"] = isoDay(row["last_date"])
+				} else if err != nil {
+					item["error"] = err.Error()
+				}
 			}
 			out = append(out, item)
 		}
 	}
-	OK(w, map[string]any{"success": true, "reports": out})
+	OK(w, map[string]any{
+		"success": true, "reports": out,
+		// So the page can explain the empty columns instead of leaving them to
+		// be read as "this table has no rows".
+		"profiled": canProfile,
+		"revealed": reveal,
+	})
 }
 
 /* ── User → platform access ───────────────────────────────────────────────── */

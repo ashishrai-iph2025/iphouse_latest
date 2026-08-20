@@ -58,22 +58,59 @@ func ReportsSections(w http.ResponseWriter, r *http.Request) {
 		// panel is offered when at least one of its tables can produce it.
 		specs, _ := specsForPlatform(p)
 		dims := sectionDimensions(p)
-		filterSeen := map[string]bool{}
+		params := filterParamsFor(p)
 		extraSeen := map[string]bool{}
 		for _, sp := range specs {
-			for param := range sp.Filters {
-				filterSeen[param] = true
-			}
 			for k := range sp.ExtraKPI {
 				extraSeen[k] = true
 			}
 		}
 
-		filters := make([]string, 0, len(filterSeen))
-		for k := range filterSeen {
+		/* A slicer follows its PANEL out of the report.
+
+		   Hiding a breakdown in Report Configuration used to leave its dropdown
+		   in the rail: a Genre filter on a report with no Genre chart, whose only
+		   visible effect was to empty every other panel. Whatever the layout
+		   switches off is off everywhere.
+
+		   A slicer several panels share survives while any of them is visible —
+		   Open Web's domain filter serves both the linking and the hosting
+		   panel, and hiding one must not take the other's control with it. */
+		hidden := hiddenDimsFor(p.Key, clientID, dims, rolesForPlatform(p),
+			kpiTilesFor(platformExtraKPIs(p)))
+		stillShown := map[string]bool{}
+		for _, d := range dims {
+			key := strFromAny(d["key"])
+			if hidden[key] {
+				continue
+			}
+			if param := DIMFilterParam(key); param != "" {
+				stillShown[param] = true
+			}
+		}
+
+		/* The filter pane, as configured for this platform and this client:
+		   which slicers get a control, and in what order down the rail. Hiding
+		   a chart still takes its slicer with it — that is the DEFAULT the pane
+		   starts from — but it is a default now, and Report Configuration can
+		   say otherwise in either direction. */
+		slicers := sectionSlicers(p.Key, clientID, params, stillShown)
+		inPane := map[string]bool{}
+		for _, k := range slicers {
+			inPane[k] = true
+		}
+
+		filters := make([]string, 0, len(params))
+		for _, k := range params {
+			// A parameter no visible breakdown maps to is kept: the date, the
+			// client, and any filter that never had a panel of its own. So is one
+			// whose slicer is in the pane whatever became of its chart — the
+			// control is on the page, so the report has to honour it.
+			if hasPanel := dimFilterParamHasPanel(k); hasPanel && !stillShown[k] && !inPane[k] {
+				continue
+			}
 			filters = append(filters, k)
 		}
-		sort.Strings(filters)
 		extras := make([]string, 0, len(extraSeen))
 		for k := range extraSeen {
 			extras = append(extras, k)
@@ -83,7 +120,21 @@ func ReportsSections(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{
 			"key": p.Key, "label": p.Label,
 			"dimensions": dims, "filters": filters, "extraKpi": extras,
-			"tables": p.Tables,
+			/* `filters` is what the section UNDERSTANDS — every parameter a click
+			   on a panel may set. `slicers` is the subset that gets a dropdown in
+			   the rail, in the order it is drawn. The two are not the same list:
+			   turnaround is picked off its own bar and has no dropdown unless one
+			   is asked for, and hiding a slicer must not stop the panel beneath
+			   it cross-filtering the page. */
+			"slicers": slicers,
+			/* The table list is NOT published here.
+
+			   This endpoint is served to every authenticated login, client
+			   logins included, and nothing on the page reads it — so it was the
+			   warehouse's table names handed to every reader of a report, for
+			   no purpose. Where the sources genuinely need naming, that is
+			   Report Configuration, and it is Super Admin only: see
+			   reportsources.go. */
 			// The page draws `panels`, not `dimensions` — the visuals in the order
 			// and at the widths this platform is configured for. `dimensions` is
 			// still here because the panel list references it by key.
@@ -140,6 +191,29 @@ func sectionDimensions(p platformDef) []map[string]any {
 	sort.SliceStable(dims, func(i, j int) bool {
 		return rankOfDim(strFromAny(dims[i]["key"])) < rankOfDim(strFromAny(dims[j]["key"]))
 	})
+
+	/* How the CHANNELS compare, where a platform covers more than one.
+
+	   Summary - Sports adds up the open web, social media, Telegram and the app
+	   stores, and the first question anyone asks of it is which of those the
+	   infringements are in. Nothing else on the page answers that: every other
+	   panel is the merged total, so the split the report exists to summarise is
+	   the one thing it did not show.
+
+	   Synthetic — there is no column to GROUP BY. Each row is one channel's own
+	   identified and removed figures, which runPlatform already computes per
+	   table on its way to the merged KPI band, so the panel costs no extra query.
+
+	   Only with two or more channels: on a single-channel platform it would be
+	   one bar equal to the KPI tile above it. Placed FIRST among the breakdowns
+	   because it is the panel the rest are read through. */
+	if len(sourceChannelsFor(p)) > 1 {
+		dims = append([]map[string]any{{
+			"key":   dimSourcePlatform,
+			"label": "Identification & Removal basis Platform",
+			"viz":   "column",
+		}}, dims...)
+	}
 	return dims
 }
 
@@ -190,6 +264,13 @@ func lookupReport(sp reportSpec) []map[string]any {
 	columns that do not exist, which turns "empty panel" into a specific fix.
 */
 func ReportsSpecCheck(w http.ResponseWriter, r *http.Request) {
+	/* This is the diagnostic that names every table behind a report and every
+	   column the engine looked for in it. It is the most complete disclosure of
+	   the warehouse's shape the portal can make, so it goes no further than the
+	   people who may see that shape at all. */
+	if !requireWarehouseNames(w, r) {
+		return
+	}
 	key := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
 	p, ok := platformByKey(key)
 	if !ok && key == summaryKey && summaryIsBuiltIn() {
@@ -317,13 +398,13 @@ func specHonoursFilters(s reportSpec, q map[string]string) bool {
 }
 
 // runSpec executes one section and returns the payload the page renders.
-func runSpec(s reportSpec, q map[string]string) map[string]any {
+func runSpec(s reportSpec, q map[string]string, bg bool) map[string]any {
 	/* Same section, same returned shape, different source. Everything above
 	   this — the merging in runPlatform, the summary, the layout — reads the
 	   map this returns and cannot tell which path produced it. See
 	   reportsapi_bridge.go. */
 	if reportsViaAPI() {
-		return runSpecViaAPI(s, q)
+		return runSpecViaAPI(s, q, bg)
 	}
 
 	where, args := specWhere(s, q)
@@ -484,7 +565,7 @@ func runSpec(s reportSpec, q map[string]string) map[string]any {
 				d.LookupTable, d.LookupIDCol, d.Column,
 				w, d.Column, d.Column,
 				d.Column, limit))
-			breakdowns[d.Key] = mapRows(rows, "label", "value", "urls", "removed")
+			breakdowns[d.Key] = sortedDimRows(d.Key, rows)
 			continue
 		}
 
@@ -500,7 +581,7 @@ func runSpec(s reportSpec, q map[string]string) map[string]any {
 			  GROUP BY %s ORDER BY urls DESC%s`,
 			d.Column, d.Column, identExpr, removedExpr,
 			s.Table, where, d.Column, d.Column, d.Column, limit))
-		breakdowns[d.Key] = mapRows(rows, "label", "value", "urls", "removed")
+		breakdowns[d.Key] = sortedDimRows(d.Key, rows)
 	}
 
 	out := map[string]any{
@@ -527,11 +608,14 @@ func runSpec(s reportSpec, q map[string]string) map[string]any {
 // both need the union: a value belongs in a slicer if ANY table in scope has it,
 // and the client list is keyed by id with the first readable name winning — one
 // table may carry ClientName while another holds only the id.
-func mergeSpecOptions(specs []reportSpec, clientID string) map[string]any {
+// q carries the scope the slicers are listed under — the window and the other
+// active filters, exactly as the report itself is run — so a value with nothing
+// behind it never reaches the dropdown.
+func mergeSpecOptions(specs []reportSpec, clientID string, q map[string]string) map[string]any {
 	// The slicer values, from breakdowns rather than DISTINCT queries — see
 	// mergeSpecOptionsViaAPI for why that is the same question.
 	if reportsViaAPI() {
-		return mergeSpecOptionsViaAPI(specs, clientID)
+		return mergeSpecOptionsViaAPI(specs, clientID, q)
 	}
 
 	out := map[string]any{"ok": true, "available": true}
@@ -539,7 +623,7 @@ func mergeSpecOptions(specs []reportSpec, clientID string) map[string]any {
 	merged := map[string]map[string]bool{}
 
 	for _, sp := range specs {
-		part := optionsForSpec(sp, clientID)
+		part := optionsForSpec(sp, clientID, q)
 		for _, c := range asRows(part["clients"]) {
 			id := strFromAny(c["id"])
 			if id == "" {
@@ -595,17 +679,55 @@ func mergeSpecOptions(specs []reportSpec, clientID string) map[string]any {
 }
 
 // optionsForSpec lists the distinct values behind each of a section's slicers.
-func optionsForSpec(s reportSpec, clientID string) map[string]any {
+/*
+optionScope is the WHERE a slicer's values are listed under, as a suffix.
+
+The same scope the REPORT runs under — client, window and every other active
+slicer — because a value that yields nothing is not a value worth offering: pick
+it and the page empties, with nothing on it to say the choice was never
+available. `except` leaves this parameter's own value out, so choosing one does
+not reduce its own list to the one already chosen.
+
+`prefix` qualifies the columns ("t.") for the queries that join a lookup, where
+a bare column name can be ambiguous.
+*/
+func optionScope(s reportSpec, q map[string]string, except, prefix string) (string, []any) {
+	conds := []string{}
+	args := []any{}
+
+	if c := strings.TrimSpace(q["clientId"]); c != "" {
+		conds = append(conds, prefix+s.ClientCol+" = ?")
+		args = append(args, c)
+	}
+	if from, to := strings.TrimSpace(q["from"]), strings.TrimSpace(q["to"]); from != "" && to != "" {
+		conds = append(conds, fmt.Sprintf("DATE(%s%s) BETWEEN ? AND ?", prefix, s.DateCol))
+		args = append(args, from, to)
+	}
+
+	params := make([]string, 0, len(s.Filters))
+	for param := range s.Filters {
+		params = append(params, param)
+	}
+	sort.Strings(params)
+	for _, param := range params {
+		if param == except {
+			continue
+		}
+		if v := strings.TrimSpace(q[param]); v != "" {
+			conds = append(conds, prefix+s.Filters[param]+" = ?")
+			args = append(args, v)
+		}
+	}
+	if len(conds) == 0 {
+		return "", nil
+	}
+	return " AND " + strings.Join(conds, " AND "), args
+}
+
+func optionsForSpec(s reportSpec, clientID string, q map[string]string) map[string]any {
 	out := map[string]any{}
 
 	out["clients"] = idNamePairs(clientOptions(s))
-
-	scope := ""
-	scopeArgs := []any{}
-	if clientID != "" {
-		scope = " AND " + s.ClientCol + " = ?"
-		scopeArgs = append(scopeArgs, clientID)
-	}
 
 	// Slicers whose column is an id have a readable name somewhere, and the
 	// dimension that draws the same column has already said where: its lookup
@@ -620,8 +742,6 @@ func optionsForSpec(s reportSpec, clientID string) map[string]any {
 			lookups[p] = d
 		}
 	}
-	// The WHERE was built against unqualified columns; a join needs it aliased.
-	scopeT := strings.ReplaceAll(scope, s.ClientCol, "t."+s.ClientCol)
 
 	params := make([]string, 0, len(s.Filters))
 	for param := range s.Filters {
@@ -630,6 +750,13 @@ func optionsForSpec(s reportSpec, clientID string) map[string]any {
 	sort.Strings(params)
 	for _, param := range params {
 		col := s.Filters[param]
+
+		// Rebuilt per parameter: each list is scoped by every filter EXCEPT its
+		// own, so the scope is not one value shared across the loop.
+		// Identical values in identical order; only the column prefix differs,
+		// so the one set of arguments serves both forms.
+		scope, scopeArgs := optionScope(s, q, param, "")
+		scopeT, _ := optionScope(s, q, param, "t.")
 
 		if d, ok := lookups[param]; ok {
 			rows, err := db.ReportsQuery(fmt.Sprintf(

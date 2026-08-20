@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/ip-house/iphouse-api/db"
+	"github.com/ip-house/iphouse-api/reportsapi"
 )
 
 // Platforms as data: a platform is a name plus the warehouse tables it reads.
@@ -181,6 +183,16 @@ var (
 		// Ident/Removed override the section's own measures for this panel alone;
 		// Needs is a second column the panel requires beyond the grouping one.
 		Ident, Removed, Needs string
+		// Other spellings of Needs. Where one is found it is substituted into
+		// Ident, which is then a %s template rather than a finished expression —
+		// the column the panel counts and the column it requires are the same
+		// one, and writing it twice is how they come to disagree.
+		NeedsAlts []string
+		// The reports_api measure this panel reads instead of the section's own.
+		// The API is asked for a named measure, not an expression, so a panel
+		// that counts something else needs to say which — otherwise it silently
+		// draws the section's identified count under a title promising notices.
+		APIMeasure string
 	}{
 		// ORDER IS THE READING ORDER of the panels on the page — where in the
 		// world, against which titles, on which sites, delivered how, found by
@@ -188,6 +200,12 @@ var (
 		// the PowerBI sheet finds the same cards in the same sequence.
 		{Key: "byCountry", Column: "CountryName", Alts: []string{"Country"},
 			Label: "Infringements Breakdown - Country", Viz: "map"},
+		// The id form, for the tables that record a country and no name for it —
+		// the social dashboard has CountryId and nothing else, so without this
+		// there was no country candidate it could match at all and the panel was
+		// simply absent from every report built on it.
+		{Key: "byCountryId", Column: "CountryId", Label: "Infringements Breakdown - Country", Viz: "map",
+			LookupTable: "mediascan.Countries", LookupID: "Id", Name: "Name"},
 		/* NAME BEFORE ID, always.
 		   Several warehouse tables carry both — SocialMedia_Sports_Raw has
 		   AssetId and AssetName, GenreId and GenreName, and so on. When the name
@@ -201,6 +219,49 @@ var (
 		{Key: "byAssetName", Column: "AssetName", Label: "Identification & Removal - Top 10 Assets", Viz: "hbar"},
 		{Key: "byAsset", Column: "AssetId", Label: "Identification & Removal - Top 10 Assets", Viz: "hbar",
 			LookupTable: "mediascan.Asset", LookupID: "Id", Name: "AssetName"},
+		/* ── What the asset IS, rather than which asset it is ─────────────────
+		   A franchise and a match day are properties of the TITLE, recorded once
+		   on mediascan.Asset and never repeated on the fact rows — so these are
+		   columns the reports API produces by joining the master (see
+		   internal/api/assetattrs.go in that service), offered on the four
+		   sports tables and on nothing else.
+
+		   Which is exactly why they need no special handling here: a table that
+		   does not carry them matches no candidate, and a report that is not
+		   about sport shows no such panel rather than an empty one. They sit
+		   beside the asset panels because they answer the next question a reader
+		   asks of one — this title, and then the fixture it belongs to. */
+		{Key: "byFranchise", Column: "FranchiseName",
+			Label: "Franchise - Identification & Removal", Viz: "column"},
+		{Key: "byMatchDay", Column: "MatchDay",
+			Label: "Match Day - Identification & Removal", Viz: "column"},
+		/* ── The OPERATOR, before the hostnames it runs ───────────────────────
+		   A Top 10 of hostnames counts mirrors, not sites: one operator running
+		   livetv.sx, livetv901.me and cdn.livetv872.me appears three times, each
+		   a third of its real size, while a single-domain site beside it looks
+		   more important than it is. Measured on the live warehouse, "livetv" is
+		   131,333 infringements across 28 hostnames — where the hostname panel
+		   showed 57,000 and gave no way to find the other 27.
+
+		   So the brand reads FIRST and the hostname panel keeps its place below,
+		   which is also the order the question is asked in: which operator, then
+		   which of its hosts. Both columns are computed by reports_api from the
+		   hostname (see internal/api/domainroot.go in that service), ported from
+		   the Power BI model's `Domain Root Brand` and `Domain Mirror Type` so
+		   the two reports cannot disagree.
+
+		   Three panels rather than one, because "131,333 infringements" and "28
+		   hostnames" are four orders of magnitude apart and a single chart
+		   carrying both would need two y-axes — which is the one thing a chart
+		   may never have. Same grouping, same cross-filter, one measure each. */
+		{Key: "byDomainRoot", Column: "InfringingDomain",
+			Alts:  []string{"SourceDomain", "DomainURL", "Domain"},
+			Label: "Root Domain - Identification & Removal", Viz: "hbar"},
+		// The mirror COUNT per brand: how many hostnames the operator is
+		// currently running. One measure, so single-series bars.
+		{Key: "byDomainRootMirrors", Column: "InfringingDomain",
+			Alts:  []string{"SourceDomain", "DomainURL", "Domain"},
+			Label: "Root Domain - Mirror Hostnames", Viz: "value"},
 		// "Linking" and "Host" rather than "Infringing" and "Source": a platform
 		// that reads both tables shows both panels, and the pair only makes sense
 		// named for what each side of the enforcement actually is.
@@ -220,7 +281,9 @@ var (
 		// few million links.
 		{Key: "bySearchEngineNotices", Column: "SearchEngineName", Viz: "value",
 			Label: "Search Engine - Enforcement Notification",
-			Ident: "SUM(NoticeCount)", Removed: "0", Needs: "NoticeCount"},
+			Ident: "SUM(%s)", Removed: "0",
+			Needs: "NoticeSentCount", NeedsAlts: []string{"NoticeCount", "EnforcementCount"},
+			APIMeasure: "notices"},
 		// The search terms the infringing pages were found under. A long tail cut
 		// to ten; the full list is behind the panel's table view.
 		{Key: "byKeyword", Column: "Keyword", Alts: []string{"KeywordName"},
@@ -243,7 +306,12 @@ var (
 			LookupTable: "mediascan.QualityOfPrint", LookupID: "Id", Name: "Name"},
 		{Key: "byInfringementType", Column: "InfringementTypeName", Alts: []string{"InfringementType"},
 			Label: "Nature of Infringements", Viz: "bars"},
-		{Key: "byInfringementTypeId", Column: "InfringementTypeId", Label: "Nature of Infringements", Viz: "bars",
+		/* `InfringmentTypeId` — without the second `e` — is how the mobile-apps
+		   table spells it, matching mediascan.InfringmentType itself. Accepted
+		   as an alternate rather than corrected, because the correct spelling
+		   names a column that does not exist on that table. */
+		{Key: "byInfringementTypeId", Column: "InfringementTypeId", Alts: []string{"InfringmentTypeId"},
+			Label: "Nature of Infringements", Viz: "bars",
 			LookupTable: "mediascan.InfringmentType", LookupID: "Id", Name: "Name"},
 		{Key: "byGroupType", Column: "GroupType", Label: "Group Type", Viz: "bars"},
 		// Turnaround buckets are ordered and every row in one has, by
@@ -251,6 +319,41 @@ var (
 		// nothing here. What the reader wants is the share that landed in each
 		// bucket, on a ramp that shows the ordering.
 		{Key: "byTAT", Column: "TATBucket", Label: "Turnaround", Viz: "share"},
+
+		/* ── Mobile apps ────────────────────────────────────────────────────
+		   A store listing is a different kind of infringement from a link: it
+		   has a publisher, a category, a rating and a store it lives in, and
+		   none of the dimensions above describe any of that.
+
+		   Every column named here is one reports_api will actually GROUP BY —
+		   checked against the mobile-apps dataset's own filter list. A candidate
+		   naming a column that exists but is not groupable produces a panel that
+		   is permanently and inexplicably empty, which is worse than no panel. */
+
+		// Which of the four feeds the row came from — an app store, or a
+		// third-party download site. First among these because most of the
+		// metadata below is populated by only some of them, so it is the
+		// slicer the rest of this report is usually read through.
+		{Key: "bySourceFeed", Column: "SourceTable", Label: "Source Feed", Viz: "donut"},
+		// Horizontal: app titles are long, and a column chart angles and cuts
+		// the very label being read.
+		{Key: "byApp", Column: "AppName", Label: "Top 10 Apps", Viz: "hbar"},
+		{Key: "byCategory", Column: "CategoryName", Label: "App Categories", Viz: "column"},
+		// Only the two store feeds record a publisher, so this is thin unless
+		// the Source Feed slicer is set to one of them.
+		{Key: "byDeveloper", Column: "CompanyName", Label: "Top 10 Developers", Viz: "hbar"},
+		{Key: "byStoreType", Column: "WrapperType", Label: "Listing Type", Viz: "bars"},
+		{Key: "byContentRating", Column: "TrackContentRating", Label: "Content Rating", Viz: "bars"},
+		/* The infringing side first: on this table the "source" is the store
+		   page and the "infringing" side is the download it leads to, and a
+		   removal status that means the listing came down is the one the report
+		   is about. */
+		{Key: "byRemovalStatus", Column: "InfringingRemovalStatus",
+			Alts:  []string{"SourceRemovalStatus", "RemovalStatus"},
+			Label: "Removal Status", Viz: "bars"},
+		// The id form, for tables that carry no SearchEngineName beside it.
+		{Key: "bySearchEngineId", Column: "SearchEngineId", Label: "Search Engine", Viz: "stacked",
+			LookupTable: "mediascan.SearchEngine", LookupID: "Id", Name: "Name"},
 	}
 
 	// Extra KPIs, when the column is there.
@@ -263,7 +366,14 @@ var (
 		{"impactedSubscribers", "SUM(Subscribers)", "Subscribers"},
 		{"likes", "SUM(TotalLikes)", "TotalLikes"},
 		{"crawled", "SUM(CrawledCount)", "CrawledCount"},
+		{"crawled", "SUM(URLCrawledCount)", "URLCrawledCount"},
+		// An enforcement notification, spelled three ways. NoticeSentCount is
+		// the search-engine table's name for it and EnforcementCount the unified
+		// table's; without both, the notices figure — and the two Enforcement
+		// Notification cards that read it — never appears at all.
 		{"notices", "SUM(NoticeCount)", "NoticeCount"},
+		{"notices", "SUM(NoticeSentCount)", "NoticeSentCount"},
+		{"notices", "SUM(EnforcementCount)", "EnforcementCount"},
 		{"googleDelisted", "COUNT(CASE WHEN IsGoogleDelisted=1 THEN 1 END)", "IsGoogleDelisted"},
 		{"bingDelisted", "COUNT(CASE WHEN IsBingDelisted=1 THEN 1 END)", "IsBingDelisted"},
 		// The audience the infringing pages were reaching — the Open Web
@@ -271,6 +381,33 @@ var (
 		{"impactedTraffic", "SUM(ImpactedTraffic)", "ImpactedTraffic"},
 		{"impactedTraffic", "SUM(Traffic)", "Traffic"},
 		{"impactedTraffic", "SUM(MonthlyVisits)", "MonthlyVisits"},
+
+		/* ── Mobile apps ────────────────────────────────────────────────────
+		   The figures a store listing has and a link does not. Counted over
+		   NAMES rather than ids: no id column identifies an app across all four
+		   feeds — AppId is null on the third-party ones and PackageId repeats
+		   across thousands of rows — so COUNT(DISTINCT AppId) would report the
+		   store apps and label them the whole table. */
+		{"totalApps", "COUNT(DISTINCT AppName)", "AppName"},
+		{"totalCategories", "COUNT(DISTINCT CategoryName)", "CategoryName"},
+		{"totalDevelopers", "COUNT(DISTINCT CompanyName)", "CompanyName"},
+		{"installs", "SUM(InstallCount)", "InstallCount"},
+		{"ratings", "SUM(RateCount)", "RateCount"},
+		{"reviews", "SUM(ReviewCount)", "ReviewCount"},
+		/* Averaged over RATED listings only. Zero means never rated, and a few
+		   store rows carry a rating COUNT in this column — an unwindowed mean
+		   over those reports thousands of stars out of five. */
+		{"avgStars", "AVG(CASE WHEN StarsCount > 0 AND StarsCount <= 5 THEN StarsCount END)", "StarsCount"},
+		/* Enforcement on any side, counted once. A listing enforced on both its
+		   store page and its download counts as one enforced listing; adding the
+		   columns counts it twice. */
+		{"enforced", "COUNT(CASE WHEN EnforcementDoneAt IS NOT NULL " +
+			"OR SourceEnforcementDoneAt IS NOT NULL " +
+			"OR InfringingEnforcementDoneAt IS NOT NULL THEN 1 END)", "EnforcementDoneAt"},
+		// The two sides separately: which one came down is the difference
+		// between a delisted app and a dead download link.
+		{"sourceRemoved", "COUNT(CASE WHEN SourceRemovalTime IS NOT NULL THEN 1 END)", "SourceRemovalTime"},
+		{"infringingRemoved", "COUNT(CASE WHEN InfringingRemovalTime IS NOT NULL THEN 1 END)", "InfringingRemovalTime"},
 	}
 
 	// Sites taken offline entirely, as opposed to individual URLs removed. The
@@ -508,6 +645,25 @@ var dimensionRank = func() map[string]int {
 	return out
 }()
 
+/*
+closedSetDims names the panels whose rows are a FIXED list rather than a long
+tail, so merging several tables into one platform keeps all of them instead of
+cutting to a top 15.
+
+The cut is right for domains, channels and assets, where the fifteenth row is
+the fifteenth most infringed of thousands and the rest is a tail nobody reads.
+It is wrong for a distribution: a turnaround bucket, a print quality or a match
+day that fell off the end is a HOLE in the panel, and the reader has no way to
+tell a bucket with no rows from a bucket that was truncated.
+*/
+var closedSetDims = map[string]bool{
+	"byTAT": true, "byGroupType": true, "byQuality": true,
+	"byFranchise": true, "byMatchDay": true,
+	// One row per channel the platform reads — four of them, and the point is
+	// the comparison, so none may be cut.
+	dimSourcePlatform: true,
+}
+
 // rankOfDim orders a dimension key; anything unrecognised sorts last, in the
 // order it arrived.
 func rankOfDim(key string) int {
@@ -622,8 +778,20 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 		if col == "" {
 			continue
 		}
-		if d.Needs != "" && !shape.has(d.Needs) {
-			continue
+		/* The column this panel MEASURES, as opposed to the one it groups by.
+		   Where the candidate declares alternates, Ident is a template and the
+		   spelling this table happens to use is filled into it — so the panel
+		   counts the column it just proved exists rather than a differently
+		   spelled one that does not. */
+		ident := d.Ident
+		if d.Needs != "" {
+			needed := shape.firstOf(append([]string{d.Needs}, d.NeedsAlts...))
+			if needed == "" {
+				continue
+			}
+			if strings.Contains(ident, "%s") {
+				ident = fmt.Sprintf(ident, needed)
+			}
 		}
 
 		/* An id column is only a dimension if something can turn it into a name.
@@ -646,23 +814,36 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 		switch d.Key {
 		// Closed sets — every value is a panel row, so no cut-off.
 		case "byTAT", "byGroupType", "byQuality", "bySearchEngine", "byPlatform",
-			"byDeliveryType", "byGenre", "byGenreId", "bySearchEngineNotices":
+			"byDeliveryType", "byGenre", "byGenreId", "bySearchEngineNotices",
+			// A season's fixtures and a league's franchises are both closed
+			// lists, and a report asked for "removal per match day" means every
+			// match day — a top 15 would silently drop the rest of the season.
+			"byFranchise", "byMatchDay":
 			limit = 0
 		// A long tail where the head is the report: the panels say "Top 10" and
 		// mean it.
 		case "byAsset", "byAssetName", "byKeyword",
-			"byDomain", "byDomainSource", "byChannel":
+			"byDomain", "byDomainSource", "byChannel",
+			// Brands are a long tail too — thousands of them, and the panel
+			// says "Top 10" by being one.
+			"byDomainRoot", "byDomainRootMirrors":
 			limit = 10
 		}
 		s.Dimensions = append(s.Dimensions, dimension{
 			Key: d.Key, Column: col, Label: d.Label, Limit: limit, Viz: d.Viz,
 			LookupTable: lkTable, LookupIDCol: lkID, LookupName: lkName,
-			IdentOverride: d.Ident, RemovedOverride: d.Removed,
+			IdentOverride: ident, RemovedOverride: d.Removed,
+			APIMeasure: d.APIMeasure,
 		})
-		// First candidate to claim a slicer keeps it — so "language" filters on
-		// LanguageName rather than being overwritten by LanguageId further down
-		// the list, which is what made the dropdown list ids.
-		if param := DIMFilterParam(d.Key); param != "" {
+		/* First candidate to claim a slicer keeps it — so "language" filters on
+		   LanguageName rather than being overwritten by LanguageId further down
+		   the list, which is what made the dropdown list ids.
+
+		   And only where the source can actually group by it. A filter the
+		   backend will not answer is a control that renders empty forever, which
+		   is worse than an absent one: the reader cannot tell it from a filter
+		   whose values happen to be missing today. */
+		if param := DIMFilterParam(d.Key); param != "" && apiCanGroupBy(table, col) {
 			if _, taken := s.Filters[param]; !taken {
 				s.Filters[param] = col
 			}
@@ -689,9 +870,9 @@ func DIMFilterParam(dimKey string) string {
 		return "assetId"
 	case "byLanguage", "byLanguageId":
 		return "language"
-	case "byCountry":
+	case "byCountry", "byCountryId":
 		return "country"
-	case "bySearchEngine", "bySearchEngineNotices":
+	case "bySearchEngine", "bySearchEngineNotices", "bySearchEngineId":
 		return "searchEngine"
 	case "byGenre", "byGenreId":
 		return "genre"
@@ -716,6 +897,30 @@ func DIMFilterParam(dimKey string) string {
 		return "quality"
 	case "byInfringementType", "byInfringementTypeId":
 		return "infringementType"
+
+	// ── Mobile apps ──────────────────────────────────────────────────────
+	case "bySourceFeed":
+		return "sourceFeed"
+	case "byApp":
+		return "appName"
+	case "byCategory":
+		return "category"
+	case "byDeveloper":
+		return "developer"
+	case "byStoreType":
+		return "storeType"
+	case "byContentRating":
+		return "contentRating"
+	case "byRemovalStatus":
+		return "removalStatus"
+
+	// ── Sports: the asset's own attributes ───────────────────────────────
+	// Named as the reports API names its dimensions, so the bridge's
+	// column-to-dimension lookup resolves them without a second mapping.
+	case "byFranchise":
+		return "franchiseName"
+	case "byMatchDay":
+		return "matchDay"
 	}
 	return ""
 }
@@ -785,13 +990,40 @@ func ReportPlatformsList(w http.ResponseWriter, r *http.Request) {
 	ensurePlatformSchema()
 	withShape := r.URL.Query().Get("shape") == "1" && reportsBackendReady()
 
+	/* Real names are Super Admin only AND asked for explicitly.
+
+	   Two conditions, not one. Being a Super Admin is permission to see them;
+	   it is not a reason to be shown them on every visit. The default view of
+	   this screen is the aliased one for everybody, and a name appears only when
+	   somebody has said they want it — which is the same shape as revealing an
+	   API key, and for the same reason: the routine act (rename a report, hide
+	   one from the sidebar) does not need the sensitive value, so it should not
+	   put it on screen where it can be read over a shoulder or captured in a
+	   screen share.
+
+	   Decided HERE rather than in the page, because a payload the browser is
+	   trusted to hide is a payload that was still sent: the names would be in
+	   the response, in the network tab, and in anything that logs one. */
+	canReveal := maySeeWarehouseNames(r)
+	reveal := canReveal && r.URL.Query().Get("reveal") == "1"
+
 	out := []map[string]any{}
 	for _, p := range loadPlatforms() {
 		item := map[string]any{
 			"key": p.Key, "label": p.Label, "order": p.Order,
-			"enabled": p.Enabled, "tables": p.Tables,
+			"enabled": p.Enabled,
+			// Always. The aliased view is the default one, whoever is looking.
+			"tableCount": len(p.Tables),
+			"sources":    sourceSummaryFor(p),
 		}
-		if withShape {
+		/* `tables` is what the page saves back, so it is present only when the
+		   real names are — a list of aliases here would be a list of aliases
+		   written into the platform's configuration the next time anyone
+		   renamed it. */
+		if reveal {
+			item["tables"] = p.Tables
+		}
+		if withShape && reveal {
 			tables := []map[string]any{}
 			for _, t := range p.Tables {
 				entry := map[string]any{"table": t}
@@ -819,7 +1051,16 @@ func ReportPlatformsList(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, item)
 	}
-	OK(w, map[string]any{"success": true, "platforms": out, "configured": reportsBackendReady()})
+	OK(w, map[string]any{
+		"success": true, "platforms": out, "configured": reportsBackendReady(),
+		// What the page may offer, decided by the server. A screen that works
+		// out its own permissions works them out from what it was sent, and
+		// what it was sent is the thing being restricted.
+		"canEditSources": canReveal,
+		// Whether this response actually carries them, so the page never has to
+		// guess which of the two shapes it is holding.
+		"revealed": reveal,
+	})
 }
 
 // PUT — create or update. Body: { key, label, tables[], enabled, order }
@@ -863,6 +1104,27 @@ func ReportPlatformSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		clean = append(clean, t)
+	}
+
+	/* An admin who may not SEE the sources may not change them either.
+	   Renaming a platform, hiding it from the sidebar and reordering it all
+	   stay open — they are what the report-config grant is for — but the table
+	   list is carried over from what is stored rather than taken from the
+	   request, because the request could not have known it.
+
+	   Silently ignoring the field would be worse than refusing: the page would
+	   report a successful save of something it did not save. */
+	if !maySeeWarehouseNames(r) {
+		stored := storedTablesFor(key)
+		if len(stored) == 0 {
+			Fail(w, 403, "Only a Super Admin may create a report platform, because it has to name the warehouse sources behind it")
+			return
+		}
+		if len(clean) > 0 && !sameStrings(clean, stored) {
+			Fail(w, 403, "Only a Super Admin may change the warehouse sources behind a report")
+			return
+		}
+		clean = stored
 	}
 
 	enabled := 1
@@ -924,6 +1186,13 @@ func ReportPlatformSave(w http.ResponseWriter, r *http.Request) {
 
 // DELETE /api/admin/report-platforms?key=
 func ReportPlatformDelete(w http.ResponseWriter, r *http.Request) {
+	/* Deleting a platform discards the mapping to its warehouse sources, and
+	   putting it back means naming them again — which only a Super Admin can
+	   do. Leaving delete open to everyone else would let a change be made that
+	   only somebody else can undo. */
+	if !requireWarehouseNames(w, r) {
+		return
+	}
 	ensurePlatformSchema()
 	key := strings.TrimSpace(r.URL.Query().Get("key"))
 	if key == "" {
@@ -953,7 +1222,7 @@ func ReportPlatformDelete(w http.ResponseWriter, r *http.Request) {
 // them up loses the distinction the report is built on, so the per-source
 // figures are carried alongside the merged ones (`sources`, `dailyBySource`) and
 // the page draws a trend for each. Tables with no role merge as before.
-func runPlatform(p platformDef, q map[string]string) map[string]any {
+func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	specs, skipped := specsForPlatform(p)
 	if len(specs) == 0 {
 		return map[string]any{
@@ -979,22 +1248,69 @@ func runPlatform(p platformDef, q map[string]string) map[string]any {
 	dimValues := map[string]map[string]string{}
 	dimLabels := map[string]string{}
 	warnings := []string{}
+	// Caveats: things a reader should know about a panel that DID load.
+	notices := []string{}
+	// Per-channel totals for the synthetic comparison panel — see
+	// sourceChannelName. Order is the platform's own table order, kept so a
+	// channel with no rows still reads in a predictable place.
+	channelKPI := map[string]map[string]int64{}
+	channelOrder := []string{}
 	ran := 0
 	// Per-source, for platforms whose tables are not the same kind of thing.
 	roleKPI := map[string]map[string]int64{}
 	roleDaily := map[string]map[string]map[string]int64{}
 	roleLabels := map[string]string{}
 
-	for _, s := range specs {
+	/* ── The platform's tables, together ──────────────────────────────────
+	   A platform reading two tables ran them one after the other, so Open Web
+	   Sports paid twice the latency of either — on every drill-down, which is
+	   not cacheable and therefore pays it every click. The tables are
+	   independent reads; only the MERGE below has to be ordered, and it still
+	   is, because the parts are collected into a slice indexed by spec and
+	   folded together afterwards.
+
+	   The same shape runSummary already uses for platforms. Concurrency is
+	   bounded there by summaryConcurrency; here the count is the number of
+	   tables a platform reads, which is one or two. */
+	parts := make([]map[string]any, len(specs))
+	var specWG sync.WaitGroup
+	/* Bounded. Each spec runs its own panels concurrently, so unbounded here
+	   multiplies: the sports summary reads FIVE tables of thirty-one panels,
+	   which would be forty concurrent aggregates from one page load — and the
+	   warehouse is shared with every other reader. */
+	specGate := make(chan struct{}, 3)
+	for i, sp := range specs {
 		// A table that cannot apply an active slicer is left out entirely rather
 		// than contributing its unfiltered total to a filtered figure.
-		if !specHonoursFilters(s, q) {
+		if !specHonoursFilters(sp, q) {
+			continue
+		}
+		specWG.Add(1)
+		go func(i int, sp reportSpec) {
+			defer specWG.Done()
+			specGate <- struct{}{}
+			defer func() { <-specGate }()
+			parts[i] = runSpec(sp, q, bg)
+		}(i, sp)
+	}
+	specWG.Wait()
+
+	for i, s := range specs {
+		part := parts[i]
+		if part == nil {
 			continue
 		}
 		ran++
-		part := runSpec(s, q)
 		if wv, ok := part["queryWarning"].(string); ok && wv != "" {
 			warnings = append(warnings, wv)
+		}
+		/* Deduped across the platform's tables. A caveat about a panel is about
+		   the PANEL, and a platform reading two tables would otherwise say the
+		   same sentence twice. */
+		for _, n := range asStrings(part["notices"]) {
+			if !containsString(notices, n) {
+				notices = append(notices, n)
+			}
 		}
 		role := s.Role
 		if role != "" {
@@ -1018,6 +1334,16 @@ func runPlatform(p platformDef, q map[string]string) map[string]any {
 					roleKPI[role][k] += numOf(v)
 				}
 			}
+			/* This source's own share, kept before it is added into the total.
+			   Identical channel names merge, which is what folds the linking and
+			   hosting halves of the open web into one bar. */
+			ch := sourceChannelName(s.Table)
+			if channelKPI[ch] == nil {
+				channelKPI[ch] = map[string]int64{}
+				channelOrder = append(channelOrder, ch)
+			}
+			channelKPI[ch]["identified"] += numOf(pk["identified"])
+			channelKPI[ch]["removed"] += numOf(pk["removed"])
 		}
 		if pp, ok := part["kpiPrev"].(map[string]any); ok {
 			havePrev = true
@@ -1135,10 +1461,33 @@ func runPlatform(p platformDef, q map[string]string) map[string]any {
 			rows = append(rows, row)
 		}
 		sort.Slice(rows, func(i, j int) bool { return numOf(rows[i]["urls"]) > numOf(rows[j]["urls"]) })
-		if len(rows) > 15 && key != "byTAT" && key != "byGroupType" && key != "byQuality" {
+		if len(rows) > 15 && !closedSetDims[key] {
 			rows = rows[:15]
 		}
 		bdOut[key] = rows
+	}
+
+	/* The channel comparison, assembled rather than queried.
+
+	   Ranked by volume like every other breakdown, and every channel is kept
+	   however small: four bars where one is short is the comparison. A channel
+	   that contributed nothing still appears, at zero, because "Telegram found
+	   nothing this month" is an answer and an absent bar is not. */
+	if len(channelOrder) > 1 {
+		rows := make([]map[string]any, 0, len(channelOrder))
+		for _, ch := range channelOrder {
+			rows = append(rows, map[string]any{
+				"label": ch,
+				// No `value`: a channel is not a column, so there is nothing a
+				// click could filter on.
+				"urls":    channelKPI[ch]["identified"],
+				"removed": channelKPI[ch]["removed"],
+			})
+		}
+		sort.SliceStable(rows, func(i, j int) bool {
+			return numOf(rows[i]["urls"]) > numOf(rows[j]["urls"])
+		})
+		bdOut[dimSourcePlatform] = rows
 	}
 
 	/* ── Per-source figures ───────────────────────────────────────────────────
@@ -1228,6 +1577,9 @@ func runPlatform(p platformDef, q map[string]string) map[string]any {
 	}
 	if len(warnings) > 0 {
 		merged["queryWarning"] = strings.Join(warnings, " · ")
+	}
+	if len(notices) > 0 {
+		merged["notices"] = notices
 	}
 	return merged
 }
@@ -1333,3 +1685,109 @@ func ReportPlatformReorder(w http.ResponseWriter, r *http.Request) {
 	}
 	OK(w, map[string]any{"success": true})
 }
+
+// containsString is the membership test the notice merge needs; a platform
+// reading two tables must not say the same caveat twice.
+func containsString(list []string, want string) bool {
+	for _, v := range list {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+/*
+dimFilterParamHasPanel says whether any dimension in the registry maps to this
+slicer parameter.
+
+It is what lets a slicer follow its panel out of a report without taking the
+ones that never had a panel with it: a parameter no dimension names — nothing
+in the layout can hide it, so nothing should.
+*/
+func dimFilterParamHasPanel(param string) bool {
+	for _, d := range dimensionCandidates {
+		if DIMFilterParam(d.Key) == param {
+			return true
+		}
+	}
+	return false
+}
+
+/*
+── Which CHANNEL a table represents ─────────────────────────────────────────
+
+	A platform that reads several tables reads several kinds of place: Summary -
+	Sports covers the open web, social media, Telegram and the app stores, and
+	the first question anyone asks of it is how the four compare. Nothing in the
+	merged report answers that — the tables are added together and the split is
+	gone.
+
+	So each source is given the name of the channel it describes, and identical
+	names merge. That last part is the point: the open web arrives as TWO tables,
+	the pages that link to infringing content and the ones that host it, and they
+	are one channel to a reader comparing the open web against Telegram.
+
+	Matched on the table name, in order, because the warehouse encodes the
+	channel there and nowhere else — there is no column on the row and no field
+	in the platform configuration that says "this is the Telegram table". The
+	specific names are tested before the general one: a mobile-apps table also
+	contains "url" columns, and "Sports" appears in all of them.
+
+	A table matching nothing falls back to the label reports_api gives its
+	dataset, and then to the table's own name. Both are worse than a channel name
+	and neither is wrong — an unrecognised source is shown as itself rather than
+	folded into a neighbour or dropped.
+*/
+var sourceChannelNames = []struct{ Fragment, Name string }{
+	{"telegram", "Telegram"},
+	{"socialmedia", "Social Media / UGC"},
+	{"mobileapps", "Mobile Apps"},
+	{"youtube", "YouTube"},
+	{"searchengine", "Search Engine"},
+	// Last: the URL tables are the open web, and every other table above also
+	// holds URLs.
+	{"url", "Open Web"},
+}
+
+func sourceChannelName(table string) string {
+	t := strings.ToLower(table)
+	for _, c := range sourceChannelNames {
+		if strings.Contains(t, c.Fragment) {
+			return c.Name
+		}
+	}
+	if reportsViaAPI() {
+		if ds, ok := reportsapi.Get().ByTable(context.Background(), table); ok && ds.Label != "" {
+			return ds.Label
+		}
+	}
+	// The bare name, minus the schema, so the panel says something rather than
+	// nothing.
+	if i := strings.LastIndex(table, "."); i >= 0 && i+1 < len(table) {
+		return table[i+1:]
+	}
+	return table
+}
+
+// sourceChannelsFor is the distinct channels a platform covers, in reading
+// order. Two or more is what makes the per-channel comparison meaningful — for a
+// single-channel platform the panel would be one bar equal to the KPI band.
+func sourceChannelsFor(p platformDef) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, t := range p.Tables {
+		n := sourceChannelName(t)
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	return out
+}
+
+// dimSourcePlatform is the synthetic panel key. Synthetic because there is no
+// column to GROUP BY: the rows are each source's own totals, which the merge
+// already has in hand.
+const dimSourcePlatform = "bySourcePlatform"

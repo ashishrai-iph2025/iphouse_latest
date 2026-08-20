@@ -59,6 +59,12 @@ var knownFilterParams = []string{
 	"assetId", "language", "country", "searchEngine", "tatBucket",
 	"platform", "channel", "groupType", "quality", "genre", "infringementType",
 	"deliveryType", "keyword", "domain",
+	// Mobile apps.
+	"sourceFeed", "appName", "category", "developer", "storeType",
+	"contentRating", "removalStatus",
+	// Sports: attributes of the asset rather than of the row — see the
+	// candidates in reportplatforms.go.
+	"franchiseName", "matchDay",
 }
 
 /* ── Panels ───────────────────────────────────────────────────────────────────
@@ -84,30 +90,58 @@ var knownFilterParams = []string{
 // needs a column not every warehouse has; hand-set widths would then leave
 // Languages sitting on half a row with a hole beside it, where a group simply
 // gives it the whole row.
+// ROWS 1–7 ARE THE POWERBI SHEET, panel for panel and pair for pair. The sheet
+// is what the people reading this already know, so a card that sat beside
+// another one there sits beside it here: domains next to channels, suspensions
+// next to turnaround, the two enforcement-notification cards together. Anything
+// this portal can show that the sheet did not comes after, from row 8.
 var summaryDims = []struct {
 	Key, Label, Viz string
 	Row             int
 }{
 	{"byPlatformGroup", "Identification & Removal basis Platform", "hbar", 1},
-	// What was infringed, and what kind of thing it was.
+	// What was infringed, and against which titles.
 	{"byLanguage", "Infringements Breakdown - Languages", "bars", 2},
-	{"byGenre", "Genre", "column", 2},
 	// Horizontal: ten bars stacked down the card, so a full asset title fits in
 	// the label column instead of being angled and cut under a column.
-	{"byAsset", "Top 10 Assets - Identification & Removal", "hbar", 3},
-	{"byPlatform", "Top 10 Social Media Platforms - Identification & Removal", "column", 4},
-	// How the enforcement went: how fast, on what quality of copy, of what kind.
-	{"byTAT", "Overall Removal Turn Around Time (TAT)", "ordinal", 5},
-	{"byQuality", "Infringements Breakdown - Print Quality", "bars", 5},
-	{"byInfringementType", "Nature of Infringements", "bars", 5},
+	{"byAsset", "Top 10 Assets - Identification & Removal", "hbar", 2},
+	// What kind of thing it was, and on what quality of copy.
+	{"byInfringementType", "Nature of Infringements", "bars", 3},
+	{"byQuality", "Infringements Breakdown - Print Quality", "bars", 3},
+	// Where it was found — the open web on one side, social channels on the
+	// other. The pair is the comparison, which is why they share a row.
+	/* The OPERATOR beside the hostnames it runs. A Top 10 of hostnames counts
+	   mirrors — livetv.sx, livetv901.me and cdn.livetv872.me are one site — so
+	   the brand panel carries the real ranking and the hostname panel below
+	   shows what it is made of. They share a row because that is the comparison.
+	   The mirror count and the mirror type sit together on the next row: how
+	   many hosts each operator is running, and by what trick. */
+	{"byDomainRoot", "Top 10 Open Web Root Domains - Identification & Removal", "hbar", 4},
+	{"byDomain", "Top 10 Open Web Domains - Infringements", "hbar", 4},
+	{"byDomainRootMirrors", "Mirror Hostnames per Root Domain", "value", 5},
+	{"byChannel", "Top 10 Social Media Channels - Infringements", "hbar", 4},
+	{"byPlatform", "Top 10 Social Media Platforms - Identification & Removal", "column", 5},
+	// How the enforcement went: what came off entirely, and how fast the rest
+	// came down.
 	{"bySuspensionPlatform", "Channel Suspension - Platform", "value", 6},
-	{"byDeliveryType", "Delivery Type", "value", 6},
-	{"byDomain", "Top 10 Open Web Domains - Infringements", "hbar", 7},
-	// Below the report's own panels: dimensions a platform may carry that the
-	// PowerBI sheet did not show. They keep their registry titles.
-	{"byDomainSource", "Top 10 Host Websites", "hbar", 8},
-	{"byCountry", "Infringements Breakdown - Country", "map", 9},
+	{"byTAT", "Overall Removal Turn Around Time (TAT - In Hours)", "ordinal", 6},
+	// What was sent, and to whom. Two cards because they are two audiences: the
+	// platforms that host the content, and the engines that index it.
+	{"byNoticePlatform", "Enforcement Notification across Social sites", "value", 7},
+	{"bySearchEngineNotices", "Enforcement Notification across Internet", "value", 7},
+	// Below the sheet's own panels: dimensions a platform may carry that the
+	// PowerBI report did not show. They keep their registry titles.
+	{"byGenre", "Genre", "column", 8},
+	{"byCountry", "Infringements Breakdown - Country", "map", 8},
+	{"byDeliveryType", "Delivery Type", "value", 9},
+	{"byDomainSource", "Top 10 Host Websites", "hbar", 9},
 	{"byKeyword", "Top 10 Keywords", "hbar", 10},
+	/* Sports. Present only where a platform reads one of the sports tables, so
+	   a client with no fixtures gets no empty pair of cards — and read together,
+	   because "which franchise" and "which match day" are the two halves of the
+	   same question about a season. */
+	{"byFranchise", "Franchise - Identification & Removal", "column", 11},
+	{"byMatchDay", "Match Day - Identification & Removal", "column", 11},
 }
 
 // spanForRowOf splits a six-column row evenly between the panels in it. Past
@@ -134,6 +168,8 @@ var summaryDimAlias = map[string]string{
 	"byInfringementTypeId": "byInfringementType",
 	"byGenreId":            "byGenre",
 	"byAssetName":          "byAsset",
+	"byCountryId":          "byCountry",
+	"byQualityId":          "byQuality",
 }
 
 // summaryDimKey resolves a dimension key to the one the summary shows it under.
@@ -251,6 +287,13 @@ func summarySection(platforms []platformDef, clientID string) (map[string]any, b
 	if extraSeen["channelsSuspended"] {
 		avail["bySuspensionPlatform"] = true
 	}
+	// Enforcement notices per platform, on the same axis as byPlatformGroup —
+	// which is why it is computed here rather than grouped: no single table
+	// carries a "platform" column spanning the sections, and the figure the card
+	// wants is each platform's own notice count set beside the others.
+	if extraSeen["notices"] {
+		avail["byNoticePlatform"] = true
+	}
 
 	// Deduped by title as well as by key: the warehouse spells the same thing two
 	// ways on different tables (InfringementType / InfringementTypeId), and both
@@ -283,6 +326,17 @@ func summarySection(platforms []platformDef, clientID string) (map[string]any, b
 	}
 	sort.Strings(filters)
 
+	/* Every slicer is a candidate for the summary's pane, whatever its panel list
+	   holds. The summary's panels are a fixed subset over several platforms, so a
+	   parameter with no chart here is the normal case rather than a decision to
+	   hide it — applying the follow-the-panel rule would strip most of the rail.
+	   What Report Configuration says about the pane still applies. */
+	paneCandidates := map[string]bool{}
+	for _, k := range filters {
+		paneCandidates[k] = true
+	}
+	slicers := sectionSlicers(summaryKey, clientID, filters, paneCandidates)
+
 	// Derived tiles the merge adds on top of what any one platform returns.
 	extraSeen["totalPlaces"] = extraSeen["totalDomains"] || extraSeen["totalChannels"]
 	extraSeen["savedRevenue"] = extraSeen["viewsSaved"]
@@ -309,18 +363,19 @@ func summarySection(platforms []platformDef, clientID string) (map[string]any, b
 		}
 	}
 
-	tables := []string{}
 	labels := make([]string, 0, len(platforms))
 	for _, p := range platforms {
-		tables = append(tables, p.Tables...)
 		labels = append(labels, p.Label)
 	}
 
 	return map[string]any{
 		"key": summaryKey, "label": summaryLabel,
 		"dimensions": dims, "filters": filters, "extraKpi": extras,
+		// The subset of `filters` that gets a dropdown in the rail — see the
+		// sections endpoint, which draws the same distinction.
+		"slicers":  slicers,
 		"kpiTiles": tiles,
-		"tables":   uniqueStrings(tables),
+		// No table list — same reason as the per-platform sections above.
 		// The summary has no source roles of its own — it never draws a linking
 		// trend against a hosting one — so it takes the single merged trend.
 		"panels": sectionPanels(summaryKey, clientID, dims, nil, tiles),
@@ -351,7 +406,12 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 			defer wg.Done()
 			gate <- struct{}{}
 			defer func() { <-gate }()
-			parts[i] = part{p: p, data: runPlatform(p, q)}
+			/* Through the cache, like the single-platform page — the summary
+			   IS those pages added up, and running them raw meant the slowest
+			   screen in the product was the one place the cache did nothing.
+			   Its own answer is not cached: which platforms it covers depends
+			   on the reader, so one entry could not serve two logins. */
+			parts[i] = part{p: p, data: cachedPlatformReport(p, q, false, false)}
 		}(i, p)
 	}
 	wg.Wait()
@@ -369,6 +429,7 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 	dimValues := map[string]map[string]string{}
 	platformRows := []map[string]any{}
 	suspensionRows := []map[string]any{}
+	noticeRows := []map[string]any{}
 	warnings := []string{}
 	skipped := []string{}
 	// Platforms that answered nothing because no table of theirs carries a column
@@ -432,6 +493,11 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 		})
 		if v, ok := pkpi["channelsSuspended"]; ok {
 			suspensionRows = append(suspensionRows, map[string]any{
+				"label": pt.p.Label, "value": pt.p.Key, "urls": numOf(v),
+			})
+		}
+		if v, ok := pkpi["notices"]; ok {
+			noticeRows = append(noticeRows, map[string]any{
 				"label": pt.p.Label, "value": pt.p.Key, "urls": numOf(v),
 			})
 		}
@@ -584,14 +650,28 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 		if len(rows) > 15 && !summaryClosedSet[key] {
 			rows = rows[:15]
 		}
+		/* Turnaround is read along its axis, not by volume — and it is a closed
+		   set, so the cut above never applies to it and re-ordering here cannot
+		   drop a bucket. Sorted AFTER the cut for every other reason: on an
+		   open-ended dimension the top-N has to be chosen by volume first. */
+		if key == dimTAT {
+			sortTATRows(rows)
+		}
 		bdOut[key] = rows
 	}
 
-	sort.Slice(platformRows, func(i, j int) bool { return numOf(platformRows[i]["urls"]) > numOf(platformRows[j]["urls"]) })
-	sort.Slice(suspensionRows, func(i, j int) bool { return numOf(suspensionRows[i]["urls"]) > numOf(suspensionRows[j]["urls"]) })
+	byVolume := func(rows []map[string]any) func(i, j int) bool {
+		return func(i, j int) bool { return numOf(rows[i]["urls"]) > numOf(rows[j]["urls"]) }
+	}
+	sort.Slice(platformRows, byVolume(platformRows))
+	sort.Slice(suspensionRows, byVolume(suspensionRows))
+	sort.Slice(noticeRows, byVolume(noticeRows))
 	bdOut["byPlatformGroup"] = platformRows
 	if len(suspensionRows) > 0 {
 		bdOut["bySuspensionPlatform"] = suspensionRows
+	}
+	if len(noticeRows) > 0 {
+		bdOut["byNoticePlatform"] = noticeRows
 	}
 
 	out := map[string]any{
@@ -632,6 +712,13 @@ var summaryClosedSet = map[string]bool{
 	"byTAT": true, "byGroupType": true, "byQuality": true,
 	"byPlatformGroup": true, "bySuspensionPlatform": true,
 	"byDeliveryType": true, "byDelistingStatus": true, "byGenre": true,
+	// One row per platform and one per search engine — both are short, fixed
+	// lists, and cutting either to a top 15 would drop a named recipient from a
+	// card whose whole point is to name every recipient.
+	"byNoticePlatform": true, "bySearchEngineNotices": true,
+	// A season's fixtures and a league's franchises: short, fixed lists, where a
+	// row cut off the end is a gap in the distribution rather than a tail.
+	"byFranchise": true, "byMatchDay": true,
 }
 
 // foldDim merges one dimension's rows into another's — used where the warehouse

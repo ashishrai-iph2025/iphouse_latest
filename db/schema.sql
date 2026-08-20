@@ -210,6 +210,8 @@ INSERT IGNORE INTO `dcp_email_event_types` (`key`, label, description, has_notif
 ('infringement_client_confirmation','Takedown – Client Confirmation',       'Confirms a takedown batch submission to the client email.',           0, '{{name}},{{platform}},{{asset_name}},{{remarks}},{{url_count}},{{urls_list}},{{date}}',      8,  1),
 ('infringement_user_notification',  'Takedown – User Notification',         'Notifies the logged-in dashboard user of their submission.',          0, '{{user_name}},{{platform}},{{asset_name}},{{url_count}},{{urls_list}},{{date}}',             9,  1),
 ('download_ready',                  'Download Request Ready',               'Sent when a requested data extraction finishes and can be downloaded.', 0, '{{user_name}},{{platform}},{{asset_name}},{{start_date}},{{end_date}},{{date_range}},{{date}}', 10, 1),
+('password_expiry_warning',         'Password Expiry Warning',              'Sent before a password expires, at each warning threshold in the security policy.', 0, '{{user_name}},{{email}},{{days_remaining}},{{days_label}},{{expiry_date}},{{login_url}}',    11, 1),
+('account_locked',                  'Account Locked',                       'Sent once when an account is locked after too many failed sign-in attempts.', 0, '{{user_name}},{{email}},{{lockout_hours}},{{unlock_at}},{{login_url}}',                      12, 1),
 ('custom',                          'Custom / Other',                       'Use for any custom or ad-hoc email template.',                        0, '{{custom_var_1}},{{custom_var_2}}',                                                          99, 1);
 
 -- ── Download requests ────────────────────────────────────────────────

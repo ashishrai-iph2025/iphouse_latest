@@ -14,6 +14,7 @@ import (
 	"github.com/ip-house/iphouse-api/handlers/admin"
 	"github.com/ip-house/iphouse-api/middleware"
 	"github.com/ip-house/iphouse-api/notify"
+	"github.com/ip-house/iphouse-api/reportsapi"
 	"github.com/ip-house/iphouse-api/store"
 )
 
@@ -38,6 +39,29 @@ func main() {
 	// Created up front so an admin can grant the module and map a client without
 	// having to open the report first to bring the tables into existence.
 	handlers.EnsureReportsAccess()
+
+	/* The reports API credentials come from the database first and the
+	   environment second — see handlers/admin/reportsapiconfig.go. Installed
+	   here, before anything serves, so no request can be made with the
+	   environment while the stored row is waiting to be read. */
+	reportsapi.SetSource(admin.ReportsAPISource)
+
+	/* Finished reports kept in Redis, and the background pass that keeps them
+	   fresh. Optional: with no Redis configured the cache reports itself off and
+	   every report computes exactly as it did. See reportcache/. */
+	/* The request pacing, BEFORE the cache: the warmer starts sending as soon as
+	   it is configured, and a pass that begins on the compiled-in default and
+	   picks up the stored ceiling a moment later has already decided how fast
+	   its first minute goes. */
+	admin.ApplyReportsAPIBudget()
+
+	handlers.StartReportCache()
+	admin.ApplyReportCacheSettings()
+
+	/* The password-expiry sweep. Hourly and idempotent — see
+	   handlers/passwordexpiry.go — so a restart cannot make it miss a
+	   threshold, and running it twice sends nothing twice. */
+	handlers.StartPasswordExpiryWatcher()
 
 	// ── Startup assertions: security hardening ────────────────────────────────
 	// Assert: new client accounts are always created with role=0 (lowest privilege)
@@ -96,6 +120,9 @@ func main() {
 	mux.Handle("GET /api/geo/country", auth(handlers.GeoCountry))
 
 	mux.Handle("GET /api/auth/session", auth(handlers.Session))
+	// Where the signed-in account's password stands. Re-asked after a change so
+	// the banner clears without a new token.
+	mux.Handle("GET /api/auth/password-status", auth(handlers.PasswordStatus_))
 	mux.Handle("GET /api/auth/switch-account", auth(handlers.SwitchAccount))
 	mux.Handle("POST /api/auth/switch-account", auth(handlers.SwitchAccount))
 
@@ -106,6 +133,15 @@ func main() {
 	mux.Handle("POST /api/warroom", auth(handlers.WarRoom))
 	mux.Handle("POST /api/warroom/stream", auth(handlers.WarRoomStream))
 	mux.Handle("GET /api/warroom/assets", auth(handlers.WarRoomAssets))
+
+	/* The live discovery counts behind the Realtime card, for the War Room and
+	   for the sports reports. Behind `auth` and scoped to the caller's own
+	   client inside the handler — see handlers/realtime.go. */
+	mux.Handle("GET /api/realtime/{view}", auth(handlers.Realtime))
+	/* The War Room's own live counts, taken from MarkScan rather than the
+	   warehouse — the same source its report is built from. See
+	   handlers/warroomrealtime.go for why both sources are kept. */
+	mux.Handle("GET /api/warroom/realtime", auth(handlers.WarRoomRealtime))
 	mux.Handle("POST /api/search", auth(handlers.Search))
 	mux.Handle("GET /api/download", auth(handlers.DownloadList))
 	mux.Handle("POST /api/download", auth(handlers.DownloadTrigger))
@@ -323,6 +359,9 @@ func main() {
 	mux.Handle("GET /api/admin/registrations", adminAuth(admin.Registrations))
 	mux.Handle("PUT /api/admin/registrations", adminAuth(admin.Registrations))
 	mux.Handle("GET /api/admin/registration-requests", cfg("registration-requests", admin.RegistrationRequests))
+	// What the security policy currently says about one login — expiry dates,
+	// which warning emails went out, and any lock. Read-only.
+	mux.Handle("GET /api/admin/login-security", adminAuth(handlers.LoginSecurityDetail))
 	mux.Handle("GET /api/admin/shared-logins", adminAuth(admin.SharedLogins))
 	mux.Handle("POST /api/admin/shared-logins", adminAuth(admin.SharedLogins))
 
@@ -343,10 +382,48 @@ func main() {
 	mux.Handle("POST /api/admin/super-admin/details", saAuth(admin.SuperAdminDetails))
 	mux.Handle("POST /api/admin/maintenance", saAuth(handlers.MaintenanceUpdate))
 	mux.Handle("POST /api/admin/staff-otp", saAuth(handlers.StaffOTPSetting))
+
+	/* The security policy: password lifetime, warning thresholds and the
+	   lockout rules. Super Admin only — this is the one setting that governs
+	   whether anybody can sign in at all, so it does not travel with the
+	   Configuration grants. */
+	/* The warehouse itself: every table it holds, and which of them the platform
+	   picker is allowed to offer. Super Admin only — it enumerates the whole
+	   database, which is the fullest disclosure of the analytics estate the
+	   portal can make. */
+	mux.Handle("GET /api/admin/warehouse-tables", saAuth(handlers.WarehouseTablesList))
+	mux.Handle("PUT /api/admin/warehouse-tables", saAuth(handlers.WarehouseTablesSave))
+
+	mux.Handle("GET /api/admin/security-policy", saAuth(handlers.SecurityPolicyConfig))
+	mux.Handle("PUT /api/admin/security-policy", saAuth(handlers.SecurityPolicyConfig))
+	mux.Handle("GET /api/admin/security-policy/locked", saAuth(handlers.SecurityPolicyLocked))
+	mux.Handle("POST /api/admin/security-policy/unlock", saAuth(handlers.SecurityPolicyUnlock))
+	mux.Handle("POST /api/admin/security-policy/send-warnings", saAuth(handlers.SecurityPolicySendWarnings))
 	mux.Handle("POST /api/admin/backup/run", saAuth(handlers.RunBackup))
 	mux.Handle("GET /api/admin/backup/list", saAuth(handlers.ListBackups))
 	mux.Handle("GET /api/admin/backup/schedule", saAuth(handlers.BackupSchedule))
 	mux.Handle("POST /api/admin/backup/schedule", saAuth(handlers.BackupSchedule))
+	/* Where the portal's reports come from. The base URL is editable by anyone
+	   holding the report-config Configuration grant; REVEALING the key is Super
+	   Admin only, because reading a credential back is a different act from
+	   pointing the service at a host. */
+	// The Redis report cache: settings, what is in it, and the background pass.
+	mux.Handle("GET /api/admin/report-cache", cfg("report-config", admin.ReportCacheConfig))
+	mux.Handle("POST /api/admin/report-cache", cfg("report-config", admin.ReportCacheConfig))
+	mux.Handle("GET /api/admin/report-cache/entries", cfg("report-config", admin.ReportCacheEntries))
+	mux.Handle("POST /api/admin/report-cache/warm", cfg("report-config", admin.ReportCacheWarm))
+	// Cache a named client on demand, over a window someone picks — for the
+	// clients the scheduled pass does not cover because nothing maps to them yet.
+	mux.Handle("GET /api/admin/report-cache/clients", cfg("report-config", admin.ReportCacheClients))
+	mux.Handle("POST /api/admin/report-cache/warm-client", cfg("report-config", admin.ReportCacheWarmClient))
+	mux.Handle("POST /api/admin/report-cache/purge", cfg("report-config", admin.ReportCachePurge))
+	mux.Handle("POST /api/admin/report-cache/sweep", cfg("report-config", admin.ReportCacheSweep))
+
+	mux.Handle("GET /api/admin/reports-api-config", cfg("report-config", admin.ReportsAPIConfig))
+	mux.Handle("POST /api/admin/reports-api-config", cfg("report-config", admin.ReportsAPIConfig))
+	mux.Handle("POST /api/admin/reports-api-config/test", cfg("report-config", admin.ReportsAPIConfigTest))
+	mux.Handle("GET /api/admin/reports-api-config/reveal", saAuth(admin.ReportsAPIConfigReveal))
+
 	mux.Handle("GET /api/admin/aws-credentials", saAuth(admin.AWSCredentials))
 	mux.Handle("POST /api/admin/aws-credentials", saAuth(admin.AWSCredentials))
 	mux.Handle("GET /api/admin/aws-credentials/reveal", saAuth(admin.AWSCredentialsReveal))

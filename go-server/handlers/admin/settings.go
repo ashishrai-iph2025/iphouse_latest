@@ -1023,7 +1023,7 @@ func SharedLogins(w http.ResponseWriter, r *http.Request) {
 				 = CONVERT(ul.login_username USING utf8mb4) COLLATE utf8mb4_general_ci
 				AND sa.is_active = 1
 			WHERE ul.is_active = 1
-			GROUP BY ul.login_username
+			GROUP BY ul.login_username` + staffFilterHaving + `
 			ORDER BY loginId DESC`)
 		if err != nil {
 			log.Printf("[shared-logins] query failed: %v", err)

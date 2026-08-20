@@ -388,7 +388,7 @@ func fanOutFetch(ctx context.Context, token string, platforms []string, base map
 		if onProgress != nil {
 			onProgress(plat, "start", 0, nil)
 		}
-		if plat == "ugc and other social media" {
+		if plat == markscan.UGCUmbrellaKey {
 			// MarkScan's UGC endpoint returns only the platform named in the
 			// request body, so the umbrella key alone yields just the residual
 			// "other" bucket. Fan out over every named UGC platform value too
@@ -437,7 +437,7 @@ func fanOutFetch(ctx context.Context, token string, platforms []string, base map
 // logged and surfaced but doesn't discard the others' rows.
 func fetchUGCSubPlatforms(ctx context.Context, token string, base map[string]any, sem chan struct{}) ([]map[string]any, error) {
 	type sub struct{ key, label string }
-	subs := []sub{{"ugc and other social media", ""}} // residual bucket, tag via videoURL domain
+	subs := []sub{{markscan.UGCUmbrellaKey, ""}} // residual bucket, tag via videoURL domain
 	for _, s := range markscan.UGCSubPlatforms() {
 		subs = append(subs, sub{s.Key, s.Label})
 	}

@@ -24,7 +24,7 @@ type tokenEntry struct {
 }
 
 var (
-	tokenCache  = map[int64]tokenEntry{}
+	tokenCache   = map[int64]tokenEntry{}
 	tokenCacheMu sync.Mutex
 )
 
@@ -98,14 +98,14 @@ func loginOnce(apiUsername, apiPassword string) (string, error) {
 
 var infringementEndpoints = map[string]string{}
 var ugcPlatformMap = map[string]string{
-	"tiktok":                   "tiktok",
-	"chomikuj":                 "chomikuj",
-	"vk":                       "vk",
-	"ok":                       "ok",
-	"sharechat":                "sharechat",
-	"dailymotion":              "dailymotion",
-	"bilibili":                 "bilibili",
-	"ugc and other social media": "UGC And Other Social Media",
+	"tiktok":       "tiktok",
+	"chomikuj":     "chomikuj",
+	"vk":           "vk",
+	"ok":           "ok",
+	"sharechat":    "sharechat",
+	"dailymotion":  "dailymotion",
+	"bilibili":     "bilibili",
+	UGCUmbrellaKey: "UGC And Other Social Media",
 }
 
 func init() {
@@ -114,27 +114,27 @@ func init() {
 		base = "https://api.markscan.co.in"
 	}
 	infringementEndpoints = map[string]string{
-		"facebook":                 base + "/Facebook/Paged",
-		"internet":                 base + "/Internet/Paged",
-		"youtube":                  base + "/YouTube/Paged",
-		"instagram":                base + "/Instagram/Paged",
-		"twitter":                  base + "/Twitter/Paged",
-		"telegram":                 base + "/Telegram/Paged",
-		"tiktok":                   base + "/UGCPlatform/Paged",
-		"chomikuj":                 base + "/UGCPlatform/Paged",
-		"vk":                       base + "/UGCPlatform/Paged",
-		"ok":                       base + "/UGCPlatform/Paged",
-		"sharechat":                base + "/UGCPlatform/Paged",
-		"dailymotion":              base + "/UGCPlatform/Paged",
-		"bilibili":                 base + "/UGCPlatform/Paged",
-		"ugc and other social media": base + "/UGCPlatform/Paged",
-		"meta ads":                 base + "/MetaAds/Paged",
-		"marketplace":              base + "/Marketplace/Paged",
-		"i-tunes":                  base + "/GetInfringements/ItunesApiUrls",
-		"play store":               base + "/GetInfringements/GooglePlaystoreAPIurls",
-		"third party app":          base + "/GetInfringements/ThirdPartyAppAPIurls",
-		"third party mobile app":   base + "/GetInfringements/ThirdPartyMobileAppAPIurls",
-		"torrent":                  base + "/GetInfringements/Internet/Test",
+		"facebook":               base + "/Facebook/Paged",
+		"internet":               base + "/Internet/Paged",
+		"youtube":                base + "/YouTube/Paged",
+		"instagram":              base + "/Instagram/Paged",
+		"twitter":                base + "/Twitter/Paged",
+		"telegram":               base + "/Telegram/Paged",
+		"tiktok":                 base + "/UGCPlatform/Paged",
+		"chomikuj":               base + "/UGCPlatform/Paged",
+		"vk":                     base + "/UGCPlatform/Paged",
+		"ok":                     base + "/UGCPlatform/Paged",
+		"sharechat":              base + "/UGCPlatform/Paged",
+		"dailymotion":            base + "/UGCPlatform/Paged",
+		"bilibili":               base + "/UGCPlatform/Paged",
+		UGCUmbrellaKey:           base + "/UGCPlatform/Paged",
+		"meta ads":               base + "/MetaAds/Paged",
+		"marketplace":            base + "/Marketplace/Paged",
+		"i-tunes":                base + "/GetInfringements/ItunesApiUrls",
+		"play store":             base + "/GetInfringements/GooglePlaystoreAPIurls",
+		"third party app":        base + "/GetInfringements/ThirdPartyAppAPIurls",
+		"third party mobile app": base + "/GetInfringements/ThirdPartyMobileAppAPIurls",
+		"torrent":                base + "/GetInfringements/Internet/Test",
 	}
 }
 

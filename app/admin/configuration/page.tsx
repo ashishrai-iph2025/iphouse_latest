@@ -7,6 +7,8 @@ import { CONFIG_MODULES } from '@/lib/configModules'
 
 // Cards shown only to Super Admins — not part of the grant-based module system.
 const SUPER_ADMIN_CARDS = [
+  { key: 'security-policy', href: '/admin/security-policy', icon: '🛡️', title: 'Security Policy',
+    desc: 'Password lifetime and expiry warnings, and what happens after too many wrong sign-in attempts.', color: '#DC2626' },
   { key: 'aws-credentials', href: '/admin/aws-credentials', icon: '🔐', title: 'AWS Credentials',
     desc: 'Securely store the AWS keys used for S3 database backups (encrypted at rest).', color: '#F59E0B' },
   { key: 'database-backup', href: '/admin/database-backup', icon: '🗄️', title: 'Database Backup',
@@ -33,7 +35,7 @@ export default function ConfigurationPage() {
   }, [])
 
   // Grant-based cards (default deny), plus any Super-Admin-only cards.
-  const grantCards = granted ? CONFIG_MODULES.filter(c => granted.has(c.key)) : []
+  const grantCards = granted ? CONFIG_MODULES.filter(c => !c.hideCard && granted.has(c.key)) : []
   const cards = [
     ...grantCards,
     ...(role === 2 ? SUPER_ADMIN_CARDS : []),

@@ -1,9 +1,40 @@
 ﻿'use client'
 
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import AdminPageHeader from './AdminPageHeader'
 import ManageAccessModal from './ManageAccessModal'
+
+/*
+ * Modals go to document.body, not into the page.
+ *
+ * `position: fixed` resolves against the nearest ancestor carrying a transform,
+ * filter or containing-block property — not against the viewport — and an admin
+ * page is a deep tree of wrappers that can acquire one at any time. When that
+ * happens the overlay stops at the content area: the sidebar and header stay
+ * bright, the dialog sits boxed inside the body, and nothing in the modal's own
+ * markup explains why.
+ *
+ * Portalling makes the modal a child of <body>, where "fixed" means the screen.
+ * It is the same thing every other modal in this codebase does, and it holds
+ * regardless of what the page above it grows later.
+ */
+function Overlay({ children, onMouseDown }: {
+  children: React.ReactNode
+  onMouseDown?: (e: React.MouseEvent) => void
+}) {
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+  if (!mounted) return null
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+      onMouseDown={onMouseDown}>
+      {children}
+    </div>,
+    document.body,
+  )
+}
 
 interface ModuleRow {
   moduleId:   number
@@ -457,7 +488,7 @@ function AdminAccountsTab() {
 
       {/* Confirm modal */}
       {confirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
+        <Overlay>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl mb-4 ${confirm.action === 'revoke' ? 'bg-red-50' : 'bg-blue-50'}`}>
               {confirm.action === 'revoke' ? '⚠️' : '⬇'}
@@ -478,7 +509,7 @@ function AdminAccountsTab() {
               </button>
             </div>
           </div>
-        </div>
+        </Overlay>
       )}
 
       {/* Manage a person's role + assigned Configuration-module permissions */}
@@ -494,7 +525,7 @@ function AdminAccountsTab() {
 
       {/* Edit account details */}
       {editRow && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onMouseDown={() => !editBusy && setEditRow(null)}>
+        <Overlay onMouseDown={() => !editBusy && setEditRow(null)}>
           <form onSubmit={saveEdit} onMouseDown={e => e.stopPropagation()}
             className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
             <div className="flex items-center justify-between px-5 py-4" style={{ background: '#14254A' }}>
@@ -541,7 +572,7 @@ function AdminAccountsTab() {
               </button>
             </div>
           </form>
-        </div>
+        </Overlay>
       )}
     </>
   )
@@ -1145,7 +1176,7 @@ function ActiveSessionsTab() {
 
       {/* Confirm modal */}
       {confirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <Overlay>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
             <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl mb-4 bg-red-50">⏏️</div>
             <h3 className="font-bold text-[#14254A] text-base mb-1">Force Logout User</h3>
@@ -1163,7 +1194,7 @@ function ActiveSessionsTab() {
               </button>
             </div>
           </div>
-        </div>
+        </Overlay>
       )}
     </>
   )
