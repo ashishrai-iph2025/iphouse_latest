@@ -153,28 +153,7 @@ func UserNav(w http.ResponseWriter, r *http.Request) {
 		byName[strings.ToLower(name)] = row
 	}
 
-	modules := []map[string]any{}
-	for _, name := range effectiveNavModules(granted) {
-		row, ok := byName[strings.ToLower(name)]
-		if !ok {
-			/* Dashboard as the fallback: it has no grant row, because the rule
-			   grants it rather than the permissions screen. navOrder 0 keeps it
-			   first unless explicitly reordered. */
-			modules = append(modules, map[string]any{
-				"moduleId": 0, "moduleName": "Dashboard", "pageName": "dashboard",
-				"navOrder": 0, "dropdown": dropByParent["dashboard"],
-			})
-			continue
-		}
-		pageName := strFromAny(row["pageName"])
-		modules = append(modules, map[string]any{
-			"moduleId":   intFromAny(row["moduleId"]),
-			"moduleName": name,
-			"pageName":   pageName,
-			"navOrder":   intFromAny(row["navOrder"]),
-			"dropdown":   dropByParent[pageName],
-		})
-	}
+	modules := navEntries(granted, byName, dropByParent)
 
 	// Live API-token availability. The session's apiAccess claim is frozen at
 	// select-login time, so a transient Markscan failure there would lock the
@@ -656,6 +635,20 @@ func postJSONWithBearer(url, token string, payload any) (map[string]any, error) 
 
 	Everything else passes through in the order it was granted.
 */
+const (
+	// The module_permission ModuleName the exclusivity rule is written in, and
+	// the one the admin pickers compare against (lib/moduleExclusivity.ts).
+	dashboardModuleName = "Dashboard"
+
+	/* The identifier the nav keys on — NAV_ITEMS in lib/navItems.tsx.
+
+	   Deliberately not read from module_permission.pageName: the seeded row
+	   carries "DashboardAccess", and a nav item is matched by pageName, so
+	   letting the row supply it hides the tab. Pinned here so the two ends
+	   cannot drift again. */
+	dashboardPageName = "dashboard"
+)
+
 func effectiveNavModules(granted []string) []string {
 	out := make([]string, 0, len(granted)+1)
 	reports := ""
@@ -666,14 +659,85 @@ func effectiveNavModules(granted []string) []string {
 		}
 	}
 	if reports == "" {
-		// The fallback carries no grant row; UserNav synthesises it.
-		out = append(out, "Dashboard")
+		// UserNav emits this one itself — see the pinned pageName there.
+		out = append(out, dashboardModuleName)
 	}
 	for _, n := range granted {
-		if strings.EqualFold(n, "Dashboard") {
+		if strings.EqualFold(n, dashboardModuleName) {
 			continue // never taken from the grants — it is fallback or nothing
 		}
 		out = append(out, n)
 	}
 	return out
+}
+
+/*
+navEntries turns the resolved module NAMES into the nav payload.
+
+Split out of UserNav so it can be tested. The exclusivity rule had a test and
+this did not, which is precisely where the Dashboard tab went missing: the rule
+was choosing correctly and the assembly was mislabelling the answer.
+
+`byName` is the granted rows keyed by lower-cased ModuleName; `dropByParent` is
+the admin-configured dropdown children keyed by pageName.
+*/
+func navEntries(
+	granted []string,
+	byName map[string]map[string]any,
+	dropByParent map[string][]map[string]any,
+) []map[string]any {
+	modules := []map[string]any{}
+	for _, name := range effectiveNavModules(granted) {
+		/* Dashboard is the FALLBACK, and it is emitted with the pageName the
+		   nav keys on — never with whatever the module_permission row happens
+		   to carry.
+
+		   This used to be an `if !ok` on the lookup below, on the reasoning
+		   that the fallback "has no grant row". It has one here: the seeded
+		   Dashboard module is ModuleName "Dashboard" with pageName
+		   "DashboardAccess", a spelling that predates the nav keying on
+		   pageName and appears nowhere in the code. So the lookup HIT for any
+		   login actually granted Dashboard, and the tab went out identified as
+		   "DashboardAccess" — which no NAV_ITEM matches, so the client dropped
+		   it and the login was left with neither Dashboard nor Reports.
+
+		   Backwards, and invisibly so: the fallback worked only for the logins
+		   that did not have the grant. Decided by name, because that is what
+		   effectiveNavModules returns and what the exclusivity rule is written
+		   in; the identifier is pinned regardless of what the row says. */
+		if strings.EqualFold(name, dashboardModuleName) {
+			row := byName[strings.ToLower(dashboardModuleName)]
+			entry := map[string]any{
+				"moduleId": 0, "moduleName": dashboardModuleName,
+				"pageName": dashboardPageName, "navOrder": 0,
+				"dropdown": dropByParent[dashboardPageName],
+			}
+			/* Where a row does exist, its name and order still apply: renaming
+			   or reordering the module on /admin/modules must move this tab
+			   like any other. Only the pageName is not the row's to give. */
+			if row != nil {
+				if n := strFromAny(row["ModuleName"]); n != "" {
+					entry["moduleName"] = n
+				}
+				entry["moduleId"] = intFromAny(row["moduleId"])
+				entry["navOrder"] = intFromAny(row["navOrder"])
+			}
+			modules = append(modules, entry)
+			continue
+		}
+
+		row, ok := byName[strings.ToLower(name)]
+		if !ok {
+			continue // granted but no row to describe it — nothing to render
+		}
+		pageName := strFromAny(row["pageName"])
+		modules = append(modules, map[string]any{
+			"moduleId":   intFromAny(row["moduleId"]),
+			"moduleName": name,
+			"pageName":   pageName,
+			"navOrder":   intFromAny(row["navOrder"]),
+			"dropdown":   dropByParent[pageName],
+		})
+	}
+	return modules
 }
