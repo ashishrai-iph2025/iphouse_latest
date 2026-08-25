@@ -268,3 +268,126 @@ func dayKey(bucket string) string {
 	}
 	return b
 }
+
+/*
+tvChannelColumn is the column on this table that holds the TV CHANNEL NAME.
+
+It is not one column, and the same name means different things. Measured across
+the warehouse:
+
+	Agg_Daily_Telegram_Sports_Raw   TVChannelName    58 names — No Logo, NBC Sports…
+	                                ChannelName   3,950 names — StreamIPTV.UK,
+	                                              iptv4kstore.net… the pirate ACCOUNT
+	SportsURLRawData                ChannelName     326 names — ESPN, TNT Sports…
+	SportsSourceURLRawData          ChannelName     318 names
+	Agg_Daily_Youtube_MasterNew     ChannelName             the YouTube account
+	SocialMedia_Sports_Raw          none
+
+So ChannelName is the broadcaster on one table and the infringer's own account on
+another, and a tile that took it blindly would report 3,950 "TV channels" on
+Telegram. The discriminator is ChannelURL: where a table carries one, ChannelName
+is the name OF that URL — an account — and where it does not, the name stands
+alone and is the station.
+
+Passed a predicate rather than a table type, because both callers ask the same
+question of different things: the direct-SQL path holds a tableShape and the API
+path holds a dataset from the catalogue.
+
+Empty means this table records accounts and no stations, so the tile does not
+appear — the difference between an absent figure and a wrong one three orders of
+magnitude out.
+*/
+func tvChannelColumn(has func(string) bool) string {
+	if has(colTVChannelName) {
+		return colTVChannelName
+	}
+	if has(colChannelName) && !has(colChannelURL) {
+		return colChannelName
+	}
+	return ""
+}
+
+/*
+tvChannelDim is the dimension a breakdown has to be asked BY to enumerate those
+names, or empty where there is nothing to enumerate.
+
+Resolved through DimByColumn, which is the SAME resolution every breakdown panel
+uses — it prefers a dimension LABELLED by the column over one grouped by it. On
+the Open Web sports tables that lands on the id-grouped dimension labelled with
+ChannelName, which is exactly what the "Source of Piracy" panel draws. The tile
+and the chart beside it then count the same buckets, which is the point.
+*/
+func tvChannelDim(ds reportsapi.Dataset) string {
+	col := tvChannelColumn(func(c string) bool { return hasColumn(ds, c) })
+	if col == "" {
+		return ""
+	}
+	if key, ok := ds.DimByColumn(col); ok {
+		return key
+	}
+	return ""
+}
+
+const (
+	colTVChannelName = "TVChannelName"
+	colChannelName   = "ChannelName"
+	colChannelURL    = "ChannelURL"
+)
+
+/*
+nullGroupLabel is what a breakdown calls the bucket for rows whose grouping value
+is NULL or empty.
+
+The literal belongs to reports_api — see the grpExpr in its breakdown.go, which
+is a COALESCE of the column, cast to CHAR and nullified when empty, onto that
+literal. Repeated here because
+this side has to recognise it, and it is repeated as a NAMED constant so the next
+reader can find out why a string appears in a numeric path.
+*/
+const nullGroupLabel = "(none)"
+
+/*
+countNamedGroups is how many distinct NAMED values a breakdown covers.
+
+Distinct labels rather than a row count, because the buckets are not always the
+thing being counted. On the Open Web sports tables the breakdown groups by
+ChannelId and labels each bucket with its ChannelName — 325 ids carrying 326
+names — so the figure belongs to the labels. Where the grouping IS the name the
+two are identical and this changes nothing.
+
+The difference between this and len(rows) is one bucket, and it is the difference
+between a distinct count and a wrong one. A breakdown returns a row for the rows
+that had NO value — labelled "(none)" — because a panel showing "43 infringements
+carry no channel" is telling the reader something. COUNT(DISTINCT col) does not
+count that, because SQL does not count NULL, and a tile that says "distinct TV
+channels" has to mean the same thing the warehouse means.
+
+Measured: one client over one month has buckets (none) 280, No Logo 43, DAZN 3,
+Sky Sports 1, beIN SPORTS 1 — five rows, and COUNT(DISTINCT TVChannelName) = 4.
+Counting the rows would have reported five, every time, for every client.
+
+'No Logo' IS counted: it is a value the warehouse holds, so it is one of the
+distinct names, whatever it means about the footage. That call belongs to whoever
+fills the column, not here.
+*/
+func countNamedGroups(rows []map[string]any) int64 {
+	seen := map[string]bool{}
+	for _, r := range rows {
+		/* The empty bucket is identified by its KEY, not its label: on a
+		   dimension with a separate label column the label is a MIN() over that
+		   column and need not read "(none)" for the rows that have no value. */
+		key := strings.TrimSpace(strFromAny(r["grp"]))
+		if key == nullGroupLabel {
+			continue
+		}
+		name := strings.TrimSpace(strFromAny(r["label"]))
+		if name == "" {
+			name = key
+		}
+		if name == "" || name == nullGroupLabel {
+			continue
+		}
+		seen[name] = true
+	}
+	return int64(len(seen))
+}

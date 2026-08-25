@@ -2,11 +2,34 @@ package admin
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/ip-house/iphouse-api/db"
 )
+
+// How many logins one grant lookup may ask about. A shared login spans the
+// companies one person reads — a handful, not a page of them.
+const maxLoginIDsPerLookup = 50
+
+/*
+inPlaceholders is "?,?,?" — the bind markers for an IN clause of n values.
+
+Built from the count rather than pasted, because the two have to agree exactly
+and database/sql only notices when the statement RUNS: an off-by-one compiles,
+vets, passes every test that does not reach a database, and then fails in front
+of whoever opened the screen. Ids are still bound as arguments — only the
+markers are assembled here, never a value.
+*/
+func inPlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
 
 // GET/POST/PUT/DELETE /api/admin/modules
 func Modules(w http.ResponseWriter, r *http.Request) {
@@ -210,9 +233,69 @@ func ModulePermissionsReorder(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{"success": true})
 }
 
+// activeModules is the grantable list — deleted modules excluded, in the order
+// the Module Permissions screen shows them, so two pickers cannot disagree
+// about what exists or about what order it comes in.
+func activeModules() []map[string]any {
+	rows, _ := db.Query(`SELECT Id, ModuleName, pageName, status FROM module_permission WHERE status = 0 ORDER BY Id ASC`)
+	if rows == nil {
+		return []map[string]any{}
+	}
+	return rows
+}
+
 // GET/POST /api/admin/user-module-permissions
 func UserModulePermissions(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
+		/* Several logins at once: ?loginIds=4,9,12 → { success, byLogin: {"4":[…]} }
+
+		   One person's shared login is one row per company they may read, each with
+		   its own loginId and its own grants — see the `assignments` column in
+		   SharedLogins. The account editor shows all of them together so an admin
+		   can see that a login has Reports on one company and nothing on another,
+		   which is the state this screen exists to correct and the one that a
+		   per-login lookup makes invisible: it answers only about the company you
+		   already chose to look at. */
+		if raw := r.URL.Query().Get("loginIds"); raw != "" {
+			ids := []any{}
+			for _, part := range strings.Split(raw, ",") {
+				n, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+				if err != nil || n <= 0 {
+					continue
+				}
+				ids = append(ids, n)
+				// A person is assigned to a handful of companies. A cap keeps this a
+				// lookup rather than a way to page the whole grant table out.
+				if len(ids) >= maxLoginIDsPerLookup {
+					break
+				}
+			}
+			if len(ids) == 0 {
+				fail(w, 422, "loginIds must be one or more login ids")
+				return
+			}
+			rows, _ := db.Query("SELECT loginId, moduleId FROM user_module_permission_test"+
+				" WHERE allowed = 1 AND loginId IN ("+inPlaceholders(len(ids))+")", ids...)
+			// Every id asked for gets a key, present or not: absent and
+			// "granted nothing" are the same answer here, and a missing key
+			// would leave the caller unable to tell either from "not read yet".
+			byLogin := map[string][]int64{}
+			for _, id := range ids {
+				byLogin[fmt.Sprint(id)] = []int64{}
+			}
+			for _, row := range rows {
+				k := fmt.Sprint(intVal(row["loginId"]))
+				byLogin[k] = append(byLogin[k], intVal(row["moduleId"]))
+			}
+			/* The module list rides along. The caller is a panel inside another
+			   screen's drawer and it needs both halves before it can draw a single
+			   checkbox — asking twice would put a visible gap between "the list
+			   appeared" and "the ticks appeared", which reads as the grants having
+			   been cleared. */
+			ok(w, map[string]any{"success": true, "byLogin": byLogin, "modules": activeModules()})
+			return
+		}
+
 		// Single-user permission lookup: ?loginId=X → { success, allowed: []int }
 		if lid := r.URL.Query().Get("loginId"); lid != "" {
 			rows, _ := db.Query("SELECT moduleId FROM user_module_permission_test WHERE loginId = ? AND allowed = 1", lid)
@@ -234,14 +317,10 @@ func UserModulePermissions(w http.ResponseWriter, r *http.Request) {
 			` + roleJoin + `
 			WHERE l.is_active = 1 AND u.deleted = 0` + staffFilter + `
 			ORDER BY u.name, l.login_username`)
-		modules, _ := db.Query(`SELECT Id, ModuleName, pageName, status FROM module_permission WHERE status = 0 ORDER BY Id ASC`)
 		if users == nil {
 			users = []map[string]any{}
 		}
-		if modules == nil {
-			modules = []map[string]any{}
-		}
-		ok(w, map[string]any{"success": true, "users": users, "modules": modules})
+		ok(w, map[string]any{"success": true, "users": users, "modules": activeModules()})
 		return
 	}
 

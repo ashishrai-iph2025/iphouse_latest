@@ -272,6 +272,8 @@ interface SectionDim {
   viz?: string
   /** How much of a row the panel takes. Absent → derived from `viz`. */
   span?: 'full' | 'half' | 'third'
+  /** Admin-written note from Report Configuration, shown behind an ⓘ icon. */
+  desc?: string
 }
 
 /* The page is a twelve-column grid, so a row holds one panel, two, three or
@@ -306,6 +308,9 @@ interface SectionPanel {
   role?: string    // trend only: which source it draws
   metric?: string  // tile only: the kpi key it shows
   span?: 'full' | 'half' | 'third' | 'quarter'
+  /** Admin-written note from Report Configuration, shown behind an ⓘ icon on
+      the card. `label` already carries any rename the admin made there. */
+  desc?: string
 }
 
 interface Section {
@@ -321,9 +326,45 @@ interface Section {
       platform and per client. Absent from an older server, where the pane is
       every understood filter less the panel-only ones; see the fallback below. */
   slicers?: string[]
+  /** Per-slicer rename and ⓘ note, keyed by query parameter. Only carries the
+      slicers somebody actually renamed or described. */
+  slicerMeta?: Record<string, { label?: string; desc?: string }>
   extraKpi: string[]   // KPI keys beyond identified/removed/pending/removalPct
   kpiTiles?: string[]  // the headline metrics, in their default reading order
+  /** The window this report is bound to, where one is configured — the sports
+      reporting period (Report Configuration → Sports reporting period). Absent
+      means the open calendar every report used to have. The server clamps to
+      this whatever the browser sends, so it is a description of the report and
+      not a rule this page is trusted to keep. */
+  period?: { start: string; end: string }
 }
+
+/*
+The window a report opens on, inside a configured period.
+
+Seven days, because that is what a reader wants first — and counted back from
+the period's END rather than from today, since a season that closed in March has
+no last seven days if "last" means "up to now". Where the period is still
+running, today is inside it and this is the real last week.
+
+Clipped to the period's start too: a period shorter than a week opens on all of
+itself rather than on days that predate its own data.
+*/
+const DEFAULT_DAYS = 7
+
+function periodDefaultRange(period: { start: string; end: string }): { from: string; to: string } {
+  const to = period.end < today ? period.end : today
+  const back = new Date(`${to}T00:00:00Z`)
+  back.setUTCDate(back.getUTCDate() - (DEFAULT_DAYS - 1))
+  const from = back.toISOString().slice(0, 10)
+  return { from: from < period.start ? period.start : from, to: to < period.start ? period.start : to }
+}
+
+/** What each source role is CALLED. Mirrors roleDisplayName in
+    go-server/handlers/reportplatforms.go — this copy is what titles a role's
+    trend card when that role returned no rows at all, and so is not in
+    `data.sources` to be read off. */
+const ROLE_LABELS: Record<string, string> = { linking: 'Linking', host: 'Host' }
 
 /** Display labels for the slicers a section may declare. */
 const FILTER_LABELS: Record<string, string> = {
@@ -339,18 +380,42 @@ const FILTER_LABELS: Record<string, string> = {
   // Sports. Attributes of the asset, not of the row — the reports API reads
   // them off the title master, so they appear only on the sports tables.
   franchiseName: 'Franchise', matchDay: 'Match Day',
+  // The account behind the post, identified by its URL rather than by the
+  // display name `channel` filters on. Set by clicking the repeat-offenders
+  // panel; it gets no dropdown — see PANEL_ONLY_FILTERS.
+  channelUrl: 'Channel / Profile URL',
+  // The provider a DMCA notice was sent to — the party that answers for the
+  // site, which is not the site itself.
+  hspName: 'Hosting Provider',
 }
 
 /** Display labels for the extra KPI keys a section may return. */
 const KPI_LABELS: Record<string, string> = {
-  googleDelisted: 'Google Delisted', bingDelisted: 'Bing Delisted',
+  googleDelisted: 'Google De-Indexed', bingDelisted: 'Bing De-Indexed',
   totalDomains: 'Total Websites', totalAssets: 'Total Assets',
   suspendedWebsites: 'Suspended Websites', impactedTraffic: 'Impacted Traffic',
   totalChannels: 'Channels', channelsSuspended: 'Website / Channel Suspended',
   profilesSuspended: 'Profiles Suspended',
   views: 'Total Views', viewsSaved: 'Total Views Saved',
+  // The part of that audience the takedown removed — the pair to Total Views,
+  // which is the audience it reached.
+  viewsImpacted: 'Total Views Impacted',
+  /* Broadcasters, not accounts. "Channels" sits on the same report counting the
+     accounts that carried the feed; this counts the stations whose feed it was,
+     and a report can show 58 of these against thousands of those. */
+  totalTVChannels: 'Total Channels',
   impactedSubscribers: 'Impacted Subscribers', likes: 'Total Likes',
   crawled: 'Crawled', notices: 'Notices Sent',
+  /* Submissions, not de-indexed URLs. "De-Indexed" is how many links an engine
+     DROPPED; this is how many submissions we sent it, and both appear on the
+     same report — so neither may be called the other.
+
+     Submissions, never "batches". That is the warehouse's word for the grouping
+     (DelistingBatchId is a column) and it had leaked onto a tile, where it asks
+     the reader to understand an internal id before they can read a number. The
+     key stays `delistingBatches` — it addresses stored layouts and the server's
+     own map — but nothing shown says it. */
+  delistingBatches: 'De-Indexing',
   totalPlaces: 'No. of Website / Channel / Page', savedRevenue: 'Estimated Saved Revenue',
   // Mobile apps.
   totalApps: 'Total Apps', totalCategories: 'Categories', totalDevelopers: 'Developers',
@@ -373,10 +438,13 @@ const KPI_FOOT: Record<string, string> = {
   impactedTraffic: 'Audience the infringement reached',
   viewsSaved: 'Views the removals prevented',
   views: 'Views the infringement took',
+  viewsImpacted: 'Views the removals took down',
+  totalTVChannels: 'Distinct TV channel names',
   delisted: 'Dropped by a search engine',
   googleDelisted: 'Dropped by Google',
   bingDelisted: 'Dropped by Bing',
-  notices: 'Enforcement notices sent',
+  notices: 'Distinct notices, not the URLs they listed',
+  delistingBatches: 'Distinct submissions, not the links they covered',
   crawled: 'Pages crawled',
   // Mobile apps.
   totalApps: 'Distinct app titles',
@@ -412,7 +480,7 @@ const SUMMARY = 'summary'
  * an install where nobody has touched the pane behaves exactly as this list
  * says — and one where somebody has, does what they asked instead.
  */
-const PANEL_ONLY_FILTERS = new Set(['tatBucket', 'keyword'])
+const PANEL_ONLY_FILTERS = new Set(['tatBucket', 'keyword', 'channelUrl'])
 
 /** Which slicer a breakdown panel cross-filters, when the section has one.
     Mirrors DIMFilterParam in go-server/handlers/reportplatforms.go. */
@@ -435,6 +503,17 @@ const DIM_FILTER: Record<string, string> = {
   byContentRating: 'contentRating', byRemovalStatus: 'removalStatus',
   // Sports.
   byFranchise: 'franchiseName', byMatchDay: 'matchDay',
+  // Its own parameter rather than `channel`: that one filters on the display
+  // name and this panel's rows are URLs.
+  byRepeatOffender: 'channelUrl',
+  /* Enforcement, per counterparty. The engine panel shares `searchEngine` with
+     the volume breakdown above it — one engine, one slicer — while a hosting
+     provider is a party no other panel groups by and gets its own. */
+  byHSPNotices: 'hspName',
+  /* The provider panel on the linking half. Same slicer as the host one above:
+     one provider, one filter, so clicking a bar on either narrows both. */
+  byDelistingBatchHSP: 'hspName',
+  byDelistingBatchEngine: 'searchEngine',
 }
 
 /**
@@ -578,6 +657,14 @@ const DIM_VIZ: VizOption[] = [
 /** Offered only where the dimension is geographic — a map of channel names is
     not a map of anything. */
 const MAP_VIZ: VizOption = { key: 'map', label: 'World map', hint: 'Countries tinted by volume' }
+
+/** Offered only on the repeat-offenders panel — it is the one breakdown whose
+    rows carry a day count, and on any other panel this shape draws an axis of
+    "0 days". */
+const REPEAT_VIZ: VizOption = {
+  key: 'repeat', label: 'Repeat offenders',
+  hint: 'Ranked by how many separate days each account was found on',
+}
 
 const TREND_VIZ: VizOption[] = [
   { key: 'auto',   label: 'Automatic',    hint: 'Columns for a few periods, an area for many' },
@@ -780,8 +867,111 @@ function VizPicker({ options, value, fallback, saved, onPick, onSetDefault }: {
   )
 }
 
-function Card({ title, chartTitle, action, table, className = '', children }: {
-  title?: string; chartTitle?: string; action?: React.ReactNode
+/**
+ * The ⓘ an admin's description sits behind — written per panel in Report
+ * Configuration → Page Layout. No text at all renders nothing, so a card nobody
+ * annotated looks exactly as it always did.
+ *
+ * HOVERED, and rendered rather than left to the browser's own `title`: a native
+ * tooltip waits about a second, wraps a paragraph into one long line, and cannot
+ * be styled to match the card it belongs to. This opens at once and reads as
+ * part of the page.
+ *
+ * It stays open while the pointer is over the BUBBLE too, with a short grace
+ * period crossing the gap between the two — the notes run to a couple of lines,
+ * and one that vanishes as you move to read it is a note you cannot read. Focus
+ * opens it as well, which is what gives it to the keyboard and, since a tap
+ * focuses, to touch.
+ *
+ * Portalled for one reason: both the card and the KPI tile are `overflow-hidden`,
+ * so a bubble positioned inside either is clipped at the card edge.
+ */
+function InfoDot({ text }: { text?: string }) {
+  const [open, setOpen] = useState(false)
+  const [rect, setRect] = useState<DOMRect | null>(null)
+  const dotRef = useRef<HTMLSpanElement>(null)
+  const timer = useRef<number | null>(null)
+
+  const cancelClose = () => {
+    if (timer.current !== null) { window.clearTimeout(timer.current); timer.current = null }
+  }
+  /* Measured as it opens rather than in an effect afterwards, so the bubble
+     never paints one frame at the previous icon's position. */
+  const show = () => {
+    cancelClose()
+    setRect(dotRef.current?.getBoundingClientRect() ?? null)
+    setOpen(true)
+  }
+  const hide = () => {
+    cancelClose()
+    timer.current = window.setTimeout(() => setOpen(false), 140)
+  }
+
+  // A pending close must not fire into an unmounted component.
+  useEffect(() => cancelClose, [])
+
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    /* The bubble is pinned to where the icon was, so anything that moves the
+       icon leaves it stranded. Closing is honest and cheap; following the
+       scroll would mean re-measuring on every frame for a transient note. */
+    const onMove = () => setOpen(false)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('scroll', onMove, true)
+    window.addEventListener('resize', onMove)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', onMove, true)
+      window.removeEventListener('resize', onMove)
+    }
+  }, [open])
+
+  if (!text) return null
+  const W = 280
+  return (
+    <>
+      {/* The description is the accessible name, so a screen reader reads it on
+          focus without depending on the bubble being open. */}
+      <span ref={dotRef} tabIndex={0} role="note" aria-label={text}
+        onMouseEnter={show} onMouseLeave={hide}
+        onFocus={show} onBlur={hide}
+        className={`inline-grid place-items-center w-4 h-4 flex-shrink-0 rounded-full
+          cursor-help transition-colors ${open
+            ? 'text-[#FC934C]'
+            : 'text-gray-300 hover:text-[#FC934C] dark:text-white/30 dark:hover:text-[#FDBE94]'}`}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth={2} strokeLinecap="round">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 11v5" /><path d="M12 7.5h.01" />
+        </svg>
+      </span>
+
+      {open && rect && createPortal(
+        <div role="tooltip"
+          onMouseEnter={cancelClose} onMouseLeave={hide}
+          className="fixed z-[9999] rounded-xl border shadow-2xl px-3 py-2.5
+            bg-white border-gray-200 dark:bg-[#1a2d55] dark:border-white/15"
+          style={{
+            width: W,
+            // Below the icon, unless that would run off the bottom — then above it.
+            top: rect.bottom + 8 + 160 > window.innerHeight
+              ? Math.max(8, rect.top - 8 - 160)
+              : rect.bottom + 8,
+            left: Math.max(8, Math.min(rect.left - 8, window.innerWidth - W - 8)),
+          }}>
+          <p className="text-[11.5px] leading-relaxed text-[#14254A] dark:text-white/85 whitespace-pre-wrap">
+            {text}
+          </p>
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
+function Card({ title, info, chartTitle, action, table, className = '', children }: {
+  title?: string; info?: string; chartTitle?: string; action?: React.ReactNode
   table?: React.ReactNode; className?: string; children: React.ReactNode
 }) {
   const [asTable, setAsTable] = useState(false)
@@ -791,6 +981,7 @@ function Card({ title, chartTitle, action, table, className = '', children }: {
       {title && (
         <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100 dark:border-white/10">
           <h3 className="text-[14px] font-bold text-[#14254A] dark:text-white truncate">{title}</h3>
+          <InfoDot text={info} />
           <span className="ml-auto flex items-center gap-1.5">
             {action}
             {table && (
@@ -817,8 +1008,48 @@ function Card({ title, chartTitle, action, table, className = '', children }: {
   )
 }
 
+/**
+ * What a panel draws when the window returned nothing for it.
+ *
+ * A panel the layout puts on the page STAYS on the page. Returning null instead
+ * meant a card configured in Report Configuration → Page Layout simply was not
+ * there, with nothing on either screen to say why — the layout listed a panel
+ * the reader could not find, and the reader saw a gap they could not explain.
+ * Saying "no data for this period" answers both.
+ *
+ * Which is also why this is not a reason to hide the panel automatically: an
+ * empty card is a fact about the window, not about the page, and whether the
+ * page carries it at all is the layout's decision alone.
+ */
+function NoData({ note = 'No data for this period' }: { note?: string }) {
+  return (
+    <div className="h-full min-h-[120px] grid place-items-center text-center px-4">
+      <span className="text-[11.5px] text-gray-400 dark:text-white/35">{note}</span>
+    </div>
+  )
+}
+
 /** The table twin behind every chart's Table toggle. */
-function DataTable({ head, rows }: { head: string[]; rows: (string | number)[][] }) {
+function DataTable({ head, rows, onPick, pickValues, activeVal = '' }: {
+  head: string[]; rows: (string | number)[][]
+  /* Clicking a row filters by it, exactly as clicking its mark does.
+
+     A table twin exists because the chart had to shorten or drop something — a
+     long channel URL, a date the axis skipped — and the reader who switched to
+     it was already reaching for that row. Leaving the click behind on the chart
+     made TABLE a dead end: the value you came to find was the one value you
+     could no longer act on. */
+  onPick?: (v: string) => void
+  /* The value each row filters BY, one per row, in row order.
+
+     Passed rather than read off column 0, because column 0 is a DISPLAY string.
+     A trend table prints "11 Aug" where the filter needs "2026-08-11", and a
+     rate column is a formatted percentage — picking the rendered text would
+     filter by a value that exists nowhere in the data. Absent, and the rows
+     simply do not pick. */
+  pickValues?: string[]
+  activeVal?: string
+}) {
   if (rows.length === 0) return <div className="text-sm text-gray-400 py-3">No data.</div>
   return (
     <div className="overflow-x-auto max-h-[320px]">
@@ -832,10 +1063,27 @@ function DataTable({ head, rows }: { head: string[]; rows: (string | number)[][]
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => (
-            <tr key={i} className="border-t border-[#14254A]/[0.07] dark:border-white/[0.07]">
+          {rows.map((r, i) => {
+          /* A row picks only where it has BOTH a handler and a value of its own.
+             A dimension this section cannot filter by passes no handler, and its
+             rows must not take a pointer cursor promising something no click
+             will do. */
+          const pv = pickValues?.[i]
+          const can = !!onPick && !!pv
+          const on  = can && pv === activeVal
+          return (
+            <tr key={i} onClick={can ? () => onPick!(pv!) : undefined}
+              title={can ? 'Filter the report by this row' : undefined}
+              className={`border-t border-[#14254A]/[0.07] dark:border-white/[0.07] transition-colors ${
+                can ? 'cursor-pointer hover:bg-[#14254A]/[0.045] dark:hover:bg-white/[0.06]' : ''} ${
+                on ? 'bg-[#14254A]/[0.07] dark:bg-white/[0.09]' : ''}`}>
               {r.map((c, j) => (
-                <td key={j} className={`px-2 py-1.5 ${
+                /* The name column is clipped at 220px, so its full value lives
+                   on the title — a table twin exists to make what the chart had
+                   to shorten readable, and a URL cut at 220px is the chart's
+                   problem repeated. */
+                <td key={j} title={typeof c === 'number' ? undefined : String(c)}
+                  className={`px-2 py-1.5 ${
                   j === 0
                     ? 'text-gray-700 dark:text-gray-200 truncate max-w-[220px]'
                     : 'text-right tabular-nums font-semibold text-[#14254A] dark:text-white'}`}>
@@ -843,7 +1091,8 @@ function DataTable({ head, rows }: { head: string[]; rows: (string | number)[][]
                 </td>
               ))}
             </tr>
-          ))}
+          )
+          })}
         </tbody>
       </table>
     </div>
@@ -949,7 +1198,7 @@ function kpiDelta(metric: string, cur: unknown, prev: unknown, window?: string):
  * itself stays in ink — a number is text, not a mark. Proportional figures, not
  * tabular: at this size equal-width digits look loose.
  */
-function Kpi({ label, value, foot, accent, spark, sparkData, dense, delta, icon }: {
+function Kpi({ label, value, foot, accent, spark, sparkData, dense, delta, icon, info }: {
   label: string; value: string; foot?: string; accent: string
   spark?: string; sparkData?: any[]
   delta?: KpiDelta | null
@@ -958,6 +1207,8 @@ function Kpi({ label, value, foot, accent, spark, sparkData, dense, delta, icon 
   /** A tile whose figure is a range rather than a number — two values and a
       dash need a step down in size to sit on one line at this width. */
   dense?: boolean
+  /** Admin-written note from Report Configuration, behind an ⓘ by the label. */
+  info?: string
 }) {
   /* Every tile is the same box whatever it holds. The label sits at the top and
      the sparkline at the bottom, with the value, its change and its footnote
@@ -979,8 +1230,11 @@ function Kpi({ label, value, foot, accent, spark, sparkData, dense, delta, icon 
 
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <span className="text-[9px] font-bold uppercase tracking-widest text-gray-400 leading-tight block mb-1.5">
-            {label}
+          <span className="flex items-center gap-1 mb-1.5">
+            <span className="text-[9px] font-bold uppercase tracking-widest text-gray-400 leading-tight">
+              {label}
+            </span>
+            <InfoDot text={info} />
           </span>
           <div className={`font-extrabold leading-none text-[#14254A] dark:text-white ${
             dense ? 'text-[15px] leading-tight' : 'text-xl'}`}>{value}</div>
@@ -1047,8 +1301,14 @@ function Spark({ data, dataKey, color }: { data: any[]; dataKey: string; color: 
  * carry weight — the peak of each series on columns, the last point on the
  * area — with the axis and the tooltip carrying the rest.
  */
-function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode = 'auto' }: {
+function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode = 'auto',
+  single = false, color, onPick }: {
   data: any[]; m: MarkTheme
+  /* Clicking a period narrows the whole report to it — see periodSpan and
+     pickPeriod. Every other panel on this page has cross-filtered on click
+     since it was built; the dated ones were the exception, which made the axis
+     everybody actually wants to drill into the one thing that did nothing. */
+  onPick?: (label: string) => void
   /** 'auto' keeps the shape the point count asks for; anything else is the
       reader overriding it from the card's chart-type menu. */
   mode?: 'auto' | 'column' | 'line' | 'area'
@@ -1057,6 +1317,13 @@ function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode
      engines have dropped, which is a different event from a page coming down, so
      the caller names it. */
   firstName?: string; secondName?: string
+  /* ONE series, for a figure that has no counterpart. An enforcement action is
+     sent or it is not — there is no "notices removed" — and a flat zero drawn
+     beside it would invite a removal rate to be read off a card that has none. */
+  single?: boolean
+  /** Overrides the first series' colour, so a card measuring a different UNIT
+      from the trend beside it does not wear the same navy. */
+  color?: string
 }) {
   if (data.length === 0) {
     return <div className="text-sm text-gray-400 py-16 text-center">No dated rows in this range.</div>
@@ -1070,7 +1337,9 @@ function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode
         <p className="text-[11px] text-gray-400 uppercase tracking-widest mb-2">{shortDate(d.label)}</p>
         <p className="text-3xl font-extrabold text-[#14254A] dark:text-white">{full(d.urls)}</p>
         <p className="text-xs text-gray-400 mt-1">
-          {firstName.toLowerCase()} · {full(d.removed)} {secondName.toLowerCase()} ({d.rate}%)
+          {single
+            ? firstName.toLowerCase()
+            : `${firstName.toLowerCase()} · ${full(d.removed)} ${secondName.toLowerCase()} (${d.rate}%)`}
         </p>
         <p className="text-[11px] text-gray-400 mt-4 max-w-xs mx-auto">
           Widen the date range to see this as a trend.
@@ -1081,8 +1350,8 @@ function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode
 
   const axis = { tickLine: false, axisLine: false, tick: { fill: m.axis, fontSize: 11 } }
   const series = [
-    { key: 'urls',    name: firstName,  color: m.ident },
-    { key: 'removed', name: secondName, color: m.removed },
+    { key: 'urls', name: firstName, color: color ?? m.ident },
+    ...(single ? [] : [{ key: 'removed', name: secondName, color: m.removed }]),
   ]
 
   /* Label only the tallest column of each series. `above` keeps the two apart:
@@ -1114,17 +1383,27 @@ function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode
     )
   }
 
-  const ticks = niceTicks(Math.max(...data.map(d => Math.max(d.urls, d.removed))))
+  const ticks = niceTicks(Math.max(...data.map(d => single ? d.urls : Math.max(d.urls, d.removed))))
   const yAxis = { ...axis, width: 46, ticks, domain: [0, ticks[ticks.length - 1]], tickFormatter: axisNum }
+
+  /* Recharts reports the clicked CATEGORY on the chart itself rather than on
+     each mark, which is what we want here: on an area chart the mark is a
+     two-pixel line and the reader is aiming at the day, not at the stroke. The
+     tooltip already tracks the nearest column, so the click lands where the
+     tooltip says it will. */
+  const clickable = onPick
+    ? { onClick: (st: any) => { const l = st?.activeLabel; if (l) onPick(String(l)) } }
+    : {}
 
   return (
     <>
-      <div style={{ height: 168 }}>
+      <div style={{ height: 168, cursor: onPick ? 'pointer' : undefined }}>
         <ResponsiveContainer width="100%" height="100%">
           {(mode === 'column' || (mode === 'auto' && data.length <= 12)) ? (
             /* Columns: capped at 24px so a sparse range leaves air in the band
                rather than three slabs, and 2px apart in the surface colour. */
-            <BarChart data={data} margin={{ top: 18, right: 8, left: 0, bottom: 0 }} barGap={2}>
+            <BarChart data={data} margin={{ top: 18, right: 8, left: 0, bottom: 0 }} barGap={2}
+              {...clickable}>
               <CartesianGrid vertical={false} stroke={m.grid} />
               <XAxis dataKey="label" {...axis} tickFormatter={shortDate} />
               <YAxis {...yAxis} />
@@ -1139,7 +1418,7 @@ function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode
           ) : (
             /* Area: 2px stroke over a wash — enough to read the shape, not
                enough to hide the series underneath it. */
-            <AreaChart data={data} margin={{ top: 18, right: 34, left: 0, bottom: 0 }}>
+            <AreaChart data={data} margin={{ top: 18, right: 34, left: 0, bottom: 0 }} {...clickable}>
               <defs>
                 {series.map(s => (
                   <linearGradient key={s.key} id={`tr-${s.key}`} x1="0" y1="0" x2="0" y2="1">
@@ -1177,11 +1456,14 @@ function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode
  * sharing one plot invent a correlation out of where the two axes happen to be
  * pinned. One series here, so no legend box: the card title names it.
  */
-function RateTrend({ data, m, mode = 'line' }: {
+function RateTrend({ data, m, mode = 'line', onPick }: {
   data: any[]; m: MarkTheme
   /** The rate is a line by default; the card's menu can make it an area or
       a column per period. */
   mode?: 'line' | 'area' | 'column'
+  /** Same period pick as the trend beside it — a poor week is read off THIS
+      card, so it is the one a reader is most likely to want to open. */
+  onPick?: (label: string) => void
 }) {
   if (data.length < 2) {
     return <div className="text-sm text-gray-400 py-16 text-center">Not enough periods in this range to plot a rate.</div>
@@ -1210,18 +1492,21 @@ function RateTrend({ data, m, mode = 'line' }: {
     </>
   )
   const margin = { top: 18, right: mode === 'column' ? 8 : 40, left: 0, bottom: 0 }
+  const clickable = onPick
+    ? { onClick: (st: any) => { const l = st?.activeLabel; if (l) onPick(String(l)) } }
+    : {}
 
   return (
-    <div style={{ height: 200 }}>
+    <div style={{ height: 200, cursor: onPick ? 'pointer' : undefined }}>
       <ResponsiveContainer width="100%" height="100%">
         {mode === 'column' ? (
-          <BarChart data={data} margin={margin}>
+          <BarChart data={data} margin={margin} {...clickable}>
             {frame}
             <Bar dataKey="rate" name="Removal rate" fill={m.removed}
               maxBarSize={24} radius={[4, 4, 0, 0]} isAnimationActive={false} />
           </BarChart>
         ) : mode === 'area' ? (
-          <AreaChart data={data} margin={margin}>
+          <AreaChart data={data} margin={margin} {...clickable}>
             <defs>
               <linearGradient id="rate-fill" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={m.removed} stopOpacity={0.18} />
@@ -1236,7 +1521,7 @@ function RateTrend({ data, m, mode = 'line' }: {
             </Area>
           </AreaChart>
         ) : (
-          <LineChart data={data} margin={margin}>
+          <LineChart data={data} margin={margin} {...clickable}>
             {frame}
             <Line type="monotone" dataKey="rate" name="Removal rate" stroke={m.removed}
               strokeWidth={2} strokeLinecap="round" dot={false} isAnimationActive={false}
@@ -1823,14 +2108,47 @@ function HeatGrid({ rows, m, onPick, activeVal = '', limit = 24 }: {
  * half of Open Web uses `delisted` — search engines dropping a link is not the
  * same event as a page coming down, and the two move apart.
  */
-function toTrend(daily: any[], secondKey = 'removed') {
+/* `firstKey` is which column the leading series reads. It is `urls` for every
+   volume trend, and the action key — `notices`, `delistingBatches` — for the
+   enforcement cards, which plot how many actions were SENT rather than how many
+   URLs were found. The monthly rollup below then sums the right column too,
+   which is the part that would silently draw an empty chart if it were faked at
+   the call site instead. */
+/**
+ * The date range one point on a dated chart stands for.
+ *
+ * toTrend draws two grains and a click has to mean whatever the mark meant:
+ * "2026-08-11" is one day, "2026-08" is the whole of August — the rollup the
+ * trend switches to past 62 rows. Clicking a MONTH therefore drills to that
+ * month's days rather than to a single figure, which is the useful direction.
+ *
+ * Anything else returns null and does not pick. The labels come from data, and
+ * a chart drawn over something that is not a date must not silently move the
+ * reader's date range.
+ */
+function periodSpan(label: string): { from: string; to: string } | null {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(label)) return { from: label, to: label }
+  if (/^\d{4}-\d{2}$/.test(label)) {
+    const [y, mo] = label.split('-').map(Number)
+    /* Day 0 of the NEXT month is the last day of this one — no table of month
+       lengths, and February in a leap year is right for free. UTC because the
+       label is a warehouse date, not a moment in the reader's zone. */
+    const last = new Date(Date.UTC(y, mo, 0)).getUTCDate()
+    return { from: `${label}-01`, to: `${label}-${String(last).padStart(2, '0')}` }
+  }
+  return null
+}
+
+function toTrend(daily: any[], secondKey = 'removed', firstKey = 'urls') {
   const withRate = (r: { label: string; urls: number; removed: number }) =>
     ({ ...r, rate: pct(r.removed, r.urls) })
   const second = (d: any) => Number(d[secondKey]) || 0
 
+  const first = (d: any) => Number(d[firstKey]) || 0
+
   if (daily.length <= 62) {
     return daily
-      .map(d => ({ label: String(d.date || '').slice(0, 10), urls: Number(d.urls) || 0, removed: second(d) }))
+      .map(d => ({ label: String(d.date || '').slice(0, 10), urls: first(d), removed: second(d) }))
       .filter(d => d.label)
       .map(withRate)
   }
@@ -1839,7 +2157,7 @@ function toTrend(daily: any[], secondKey = 'removed') {
     const key = String(d.date || '').slice(0, 7)
     if (!key) continue
     const row = months.get(key) ?? { label: key, urls: 0, removed: 0 }
-    row.urls    += Number(d.urls) || 0
+    row.urls    += first(d)
     row.removed += second(d)
     months.set(key, row)
   }
@@ -2302,20 +2620,162 @@ function SeasonColumns({ rows, m, onPick, activeVal = '' }: {
   )
 }
 
+/* ── Repeat offenders ──────────────────────────────────────────────────────────
+   The one panel on this page whose ranking measure is not a volume.
+
+   Everywhere else the longest bar is the answer, so the order explains itself.
+   Here it does not: the rows are ranked by how many DISTINCT DAYS the account
+   was identified on (see go-server/handlers/repeatoffenders.go), and a chart
+   that draws only the volumes puts 82 above 155 for reasons nothing on the card
+   discloses. That is not a chart with an odd sort — it is a chart that looks
+   broken.
+
+   So the day count LEADS each row, in gold, beside the position it earned. The
+   reader sees 14, 11, 9 running down the card and the order is explained before
+   the volumes are read at all.
+
+   Horizontal, and deliberately: these labels are URLs. A column chart gives each
+   account about a tenth of the card and angles what is left, which is how ten
+   VK accounts all come to read "https://vkvideo…". Down the side, the label
+   column gets real width and the whole account is legible.
+
+   Volumes stay on the two brand series the rest of the page uses — navy found,
+   orange removed — sharing one scale, so no second axis is implied for a count
+   of days that could never share one. */
+
+/** Truncate through the MIDDLE. Account URLs share their beginning far more
+    often than their end — ten `vkvideo.ru/video-…` rows differ only in the id —
+    so trimming the tail is exactly what makes two different accounts print the
+    same label. The full URL is always on the row's tooltip and in the Table. */
+function midCut(s: string, max: number): string {
+  if (s.length <= max) return s
+  const head = Math.ceil((max - 1) / 2)
+  return s.slice(0, head) + '…' + s.slice(s.length - (max - 1 - head))
+}
+
+/** The URL as a reader needs it: no scheme, no `www.`, no trailing slash. Those
+    are eighteen characters that are identical on every row and push the part
+    that identifies the account off the end. */
+function prettyURL(u: string): string {
+  const raw = String(u ?? '').trim()
+  if (!raw) return '—'
+  const bare = raw
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    .replace(/^www\./i, '')
+    .replace(/\/+$/, '')
+  return bare || raw
+}
+
+function RepeatOffenders({ rows, m, onPick, activeVal = '', limit = 10 }: {
+  rows: any[]; m: MarkTheme; onPick?: (v: string) => void; activeVal?: string; limit?: number
+}) {
+  const segs = rows.slice(0, limit)
+  /* Not "No data.", which reads as a card that failed. An empty repeat-offender
+     list is a FINDING — every account this window found, it found once — and the
+     panel says which of the two it is looking at. */
+  if (segs.length === 0) {
+    return (
+      <div className="text-sm text-gray-400 dark:text-white/45 py-6 text-center">
+        No channel or profile was identified on more than one day in this window.
+      </div>
+    )
+  }
+  const max = Math.max(1, ...segs.map(r => Number(r.urls) || 0))
+  const hasActive = !!activeVal
+
+  return (
+    <>
+      <div className="flex flex-col gap-1.5">
+        {segs.map((r, i) => {
+          const url = String(r.label ?? r.value ?? '—')
+          const filterVal = String(r.value ?? url)
+          const urls = Number(r.urls) || 0
+          const removed = Number(r.removed) || 0
+          const days = Number(r.repeats) || 0
+          const isActive = activeVal === filterVal || activeVal === url
+          const dimmed = hasActive && !isActive
+          return (
+            <button key={filterVal + i} type="button" disabled={!onPick} onClick={() => onPick?.(filterVal)}
+              title={`${url}\nIdentified on ${days} separate days · ${full(urls)} URLs identified · ${full(removed)} removed`}
+              className={`grid items-center gap-3 rounded-md px-1.5 py-1 text-left transition-all ${
+                onPick ? 'hover:bg-[#14254A]/[0.04] dark:hover:bg-white/5' : 'cursor-default'} ${
+                isActive ? 'bg-[#14254A]/[0.05] ring-1 ring-[#14254A]/30 dark:bg-white/5 dark:ring-white/20' : ''} ${
+                dimmed ? 'opacity-40' : ''}`}
+              /* The label column is given real room — these are URLs, and the
+                 whole complaint a top-ten of accounts answers is "which
+                 account". The bars take a share rather than a fixed width, so
+                 the same panel works full-width here and half-width in a
+                 summary. */
+              style={{ gridTemplateColumns: '18px 52px minmax(90px, 1fr) minmax(160px, 42%)' }}>
+
+              {/* The position, so "top 10" is a fact on the card rather than a
+                  claim in its title. */}
+              <span className="text-[10px] font-bold tabular-nums text-gray-300 dark:text-white/30 text-right">
+                {i + 1}
+              </span>
+
+              {/* THE RANKING MEASURE, first and in gold — the third brand
+                  colour, kept for the one figure that is neither found nor
+                  removed. Read down the column it is a descending list, which
+                  is the order the card is in. */}
+              <span className="flex items-baseline gap-0.5 justify-end tabular-nums"
+                style={{ color: BRAND_GOLD }}>
+                <span className="text-[13px] font-extrabold leading-none">{days}</span>
+                <span className="text-[9px] font-bold uppercase tracking-wide">days</span>
+              </span>
+
+              <span className="text-xs text-gray-600 dark:text-gray-300 truncate" title={url}>
+                {midCut(prettyURL(url), 56)}
+              </span>
+
+              {/* Two thin bars from a shared baseline, 2px apart, each with its
+                  value at the tip — no axis needed at this size. The same mark
+                  the other ranked lists on this page use. */}
+              <span className="flex flex-col gap-[2px] min-w-0">
+                {[{ v: urls, c: m.ident }, { v: removed, c: m.removed }].map((b, j) => (
+                  <span key={j} className="flex items-center gap-1.5">
+                    <span className="h-2 rounded-r-[3px]"
+                      style={{ width: `${Math.max(0.5, (b.v / max) * 100)}%`, minWidth: 2, background: b.c }} />
+                    <span className="text-[10px] font-bold tabular-nums text-[#14254A] dark:text-white whitespace-nowrap">
+                      {fmt(b.v, 0)}
+                    </span>
+                  </span>
+                ))}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+      <Legend items={[
+        { label: 'Days identified on — the ranking', color: BRAND_GOLD },
+        { label: 'URLs identified', color: m.ident },
+        { label: 'Removed', color: m.removed },
+      ]} />
+    </>
+  )
+}
+
 /** Slicer in the right rail. */
-function Slicer({ label, value, onChange, options, placeholder = 'All', required, disabled }: {
+function Slicer({ label, info, value, onChange, options, placeholder = 'All', required, disabled }: {
   label: string; value: string; onChange: (v: string) => void
   options: { key: string; label: string }[]
   placeholder?: string; required?: boolean; disabled?: boolean
+  /** What this slicer narrows, behind an ⓘ — see reportpaneldesc.go. */
+  info?: string
 }) {
   return (
     <div>
-      <label className="block text-[11px] font-bold uppercase tracking-widest mb-1 text-gray-400">
-        {label}
-        {required && <span className="text-[#FC934C] ml-0.5">*</span>}
+      {/* Tight against its control: a dozen of these run down the rail, and the
+          label belongs to the box under it rather than floating between two. */}
+      <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider mb-[3px] text-gray-400">
+        <span className="truncate">
+          {label}
+          {required && <span className="text-[#FC934C] ml-0.5">*</span>}
+        </span>
+        <InfoDot text={info} />
       </label>
       <SearchableSelect options={options} value={value} onChange={onChange}
-        placeholder={placeholder} emptyLabel={clearLabel(label)} disabled={disabled} />
+        placeholder={placeholder} emptyLabel={clearLabel(label)} disabled={disabled} compact />
     </div>
   )
 }
@@ -2398,6 +2858,17 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
   useEffect(() => {
     window.localStorage.setItem('reports.rail', railOpen ? 'open' : 'closed')
   }, [railOpen])
+  /* The live card holds its place while the report scrolls under it — the two
+     rails already do, and the counts it carries are the reason to leave the
+     screen open at all. Remembered like the rails, and OFF by default: pinning
+     spends viewport, which should be the reader's choice rather than ours. */
+  const [rtPinned, setRtPinned] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem('reports.realtimePin') === 'pinned'
+  })
+  useEffect(() => {
+    window.localStorage.setItem('reports.realtimePin', rtPinned ? 'pinned' : 'free')
+  }, [rtPinned])
   /* The collapsed rail's flyout: open on hover, no click anywhere in it. Held
      in state rather than done with `group-hover` because a pure-CSS flyout
      closes the instant the pointer is between the rail and the panel — one
@@ -2617,6 +3088,27 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         if (scoped && d.sections.length > 0) {
           setSection(prev => prev || d.sections[0].key)
         }
+
+        /* The section on screen when the list arrives has not been through
+           switchSection — it came from the URL, or it is the client default
+           picked just above — so its period has never been applied. Without
+           this the first render of a governed report asks for the generic last
+           thirty days and gets back a window the server clamped, which is the
+           one case a reader sees dates they did not choose.
+
+           Only a range that actually falls OUTSIDE the period is replaced. This
+           effect also re-runs on every client change, and a reader who has
+           picked a window inside the period must keep it — resetting them to
+           the default week for switching company would be the same fault this
+           is here to prevent, in the other direction. */
+        setFilters(f => {
+          const cur = d.sections.find((s: Section) =>
+            s.key === (section || (scoped ? d.sections[0]?.key : '')))
+          if (!cur?.period) return f
+          const { start, end } = cur.period
+          if (f.from >= start && f.from <= end && f.to >= start && f.to <= end) return f
+          return { ...f, ...periodDefaultRange(cur.period) }
+        })
       })
       .catch(e => {
         if (!mounted.current) return
@@ -2711,12 +3203,62 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
   const cross = (k: string) => (label: string) =>
     setFilters(f => ({ ...f, [k]: f[k] === label ? '' : label }))
 
+  /* ── Clicking a date ───────────────────────────────────────────────────────
+
+     A dated chart cross-filters by moving the report's RANGE, because that is
+     what a date filter is here — there is no per-day slicer, and inventing one
+     would give the page two ways of saying "August 11th" that could disagree.
+
+     Which means the click needs a way back, and the range it replaced is the
+     one thing nothing else on the page remembers. A day is also the range that
+     collapses the trend to a single figure, so without this the reader lands on
+     a card with no chart left to click and no clue what the range had been. */
+  const [drill, setDrill] = useState<{ label: string; from: string; to: string } | null>(null)
+
+  /* Live only while the range still IS the drilled period. Derived rather than
+     cleared by every setter that touches a date — the picker, the section
+     switch, a preset — because one of those will be added later without this
+     being remembered, and a stale "back to" offering a range nobody was on is
+     worse than none. */
+  const drillSpan = drill ? periodSpan(drill.label) : null
+  const drilled = !!drillSpan && filters.from === drillSpan.from && filters.to === drillSpan.to
+
+  /** A dated mark or table row → narrow the report to that period. */
+  const pickPeriod = (label: string) => {
+    const span = periodSpan(label)
+    if (!span) return
+    // Clicking the period you are already in is the way out of it — the same
+    // toggle every other panel on this page uses for its own values.
+    if (drilled && drill!.label === label) {
+      setFilters(f => ({ ...f, from: drill!.from, to: drill!.to }))
+      setDrill(null)
+      return
+    }
+    /* Month first, then a day inside it: the escape stays the range the reader
+       CHOSE, not the month they passed through. One step back, always to
+       somewhere they recognise. */
+    setDrill({ label, from: drilled ? drill!.from : filters.from, to: drilled ? drill!.to : filters.to })
+    setFilters(f => ({ ...f, from: span.from, to: span.to }))
+  }
+
   function switchSection(key: string) {
     setSection(key)
     setData(null)
     setErr('')
-    // Keep client + dates; every other slicer belongs to the section being left.
-    setFilters(f => ({ clientId: f.clientId, from: f.from, to: f.to }))
+    // The dates are about to be replaced wholesale; a way back to the previous
+    // platform's range would be a way back to nothing.
+    setDrill(null)
+    /* Keep client + dates; every other slicer belongs to the section being
+       left. The dates are the exception when the section being ENTERED has a
+       period of its own: a range carried in from an unbounded report is very
+       likely outside it, and the server would clamp it to something the reader
+       never chose and cannot see the reason for. So a governed section opens on
+       its own default week instead. */
+    const to = sections.find(s => s.key === key)
+    setFilters(f => ({
+      clientId: f.clientId,
+      ...(to?.period ? periodDefaultRange(to.period) : { from: f.from, to: f.to }),
+    }))
   }
 
   /* The server sends {id, name, count}; a few lists are still plain strings.
@@ -2790,12 +3332,22 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     return sources
       .map(s => {
         const second = s.secondSeries === 'delisted' ? 'delisted' : 'removed'
+        const daily = (data?.dailyBySource?.[s.role] || []) as any[]
+        /* No action series here any more. What each side SENT, day by day, is a
+           breakdown panel now (byNoticeDay / byDelistingBatchDay) rather than a
+           trend drawn off these daily rows — which never carried the action ids,
+           so the card it fed read a flat zero. See enforcementactions.go. */
         return {
           role: String(s.role),
           label: String(s.label || s.role),
           // The word the chart, its legend and its card title all use.
-          secondName: second === 'delisted' ? 'Delisting' : 'Removal',
-          rows: toTrend((data?.dailyBySource?.[s.role] || []) as any[], second),
+          secondName: second === 'delisted' ? 'De-Indexing' : 'Removal',
+          /* The series itself, carried beside the word for it. The card title
+             below used to recover this by matching secondName against a
+             literal, so renaming the label retitled every card to the measure
+             it does not show, with nothing failing to say so. */
+          secondKey: second,
+          rows: toTrend(daily, second),
         }
       })
       .filter(s => s.rows.length > 0)
@@ -2878,7 +3430,9 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
   const chips = (activeSection?.filters ?? [])
     .filter(k => filters[k])
     .map(k => ({
-      key: k, label: FILTER_LABELS[k] ?? k,
+      /* The RENAMED name where there is one, so a chip matches the slicer it
+         came from instead of reverting to this page's own wording. */
+      key: k, label: activeSection?.slicerMeta?.[k]?.label || FILTER_LABELS[k] || k,
       display: asOpts(opts[k]).find(o => o.key === filters[k])?.label
         ?? seenNames.current[`${k} ${filters[k]}`]
         ?? filters[k],
@@ -2904,6 +3458,9 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
       ...(sourceTrends.length > 0
         ? sourceTrends.map(s => ({ key: `trend:${s.role}`, kind: 'trend' as const, role: s.role, span: 'half' as const }))
         : [{ key: 'trend', kind: 'trend' as const, span: 'full' as const }]),
+      /* No action trends here either — what each side SENT is a breakdown panel
+         now, and it arrives with `dims` below. Mirrors defaultPanels in
+         go-server/handlers/reportlayout.go, which this list is the fallback for. */
       { key: 'rate', kind: 'rate', span: 'full' },
       { key: 'head:breakdowns', kind: 'heading', label: 'Breakdowns',
         sub: 'Views of the same result set — click any row to cross-filter every panel', span: 'full' },
@@ -2912,8 +3469,13 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
   }, [activeSection, sourceTrends])
 
   /** Every breakdown panel's table twin has the same five columns. */
-  const dimTable = (rows: any[]) => (
+  const dimTable = (rows: any[], onPick?: (v: string) => void, activeVal = '') => (
     <DataTable head={['Name', 'Identified', 'Removed', 'Rate', 'Share']}
+      onPick={onPick} activeVal={activeVal}
+      /* The row's own label, not the cell text: the cell falls back to an em
+         dash for a blank name, and filtering by "—" would find nothing while
+         looking like it had worked. */
+      pickValues={rows.map(r => String(r.label ?? ''))}
       rows={rows.map(r => {
         const urls = Number(r.urls) || 0
         const removed = Number(r.removed) || 0
@@ -2939,11 +3501,15 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     // shape the layout configures.
     const vizKey = `${section}:${dim.key}`
     const viz = vizFor(vizKey, configured)
-    // A map is only offered where the dimension is geographic; everywhere else
-    // it would draw an empty world and a list of things that are not countries.
-    const options = configured === 'map' ? [MAP_VIZ, ...DIM_VIZ] : DIM_VIZ
+    /* A map is only offered where the dimension is geographic; everywhere else
+       it would draw an empty world and a list of things that are not countries.
+       Repeat offenders is the same rule for the same reason — it is the only
+       panel whose rows carry the day count that shape draws. */
+    const options = configured === 'map' ? [MAP_VIZ, ...DIM_VIZ]
+      : configured === 'repeat' ? [REPEAT_VIZ, ...DIM_VIZ]
+      : DIM_VIZ
     return (
-      <Card key={dim.key} title={dim.label}
+      <Card key={dim.key} title={dim.label} info={dim.desc}
         action={<VizPicker options={options} value={viz} fallback={configured}
           saved={vizDefault[vizKey]}
           onPick={v => setViz(vizKey, v)}
@@ -2954,12 +3520,28 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
            there — the rows take a pointer cursor and highlight on hover. */
         chartTitle={undefined}
         table={viz === 'table' ? undefined
+          /* The repeat panel's table twin carries the day count and the full
+             URL — the two things the chart had to shorten or move off the mark
+             to stay readable. Keyed off the DIMENSION, not off `viz`: switching
+             this panel to bars does not stop its rows being accounts. */
+          : dim.key === 'byRepeatOffender'
+            ? <DataTable head={['Channel / Profile URL', 'Days', 'Identified', 'Removed', 'Rate']}
+                onPick={pick} activeVal={active}
+                pickValues={rows.map(r => String(r.label ?? ''))}
+                rows={rows.map(r => {
+                  const urls = Number(r.urls) || 0
+                  const removed = Number(r.removed) || 0
+                  return [String(r.label ?? '—'), Number(r.repeats) || 0, urls, removed,
+                    `${pct(removed, urls)}%`]
+                })} />
           : viz === 'value' || viz === 'ordinal'
             // Single-series panels have no removal figure to show — a bucket's
             // rows have all come down by definition.
             ? <DataTable head={[dim.label, 'Count']}
+                onPick={pick} activeVal={active}
+                pickValues={rows.map(r => String(r.label ?? ''))}
                 rows={rows.map(r => [String(r.label ?? '—'), Number(r.urls) || 0])} />
-            : dimTable(rows)}
+            : dimTable(rows, pick, active)}
         className={spanClass}>
         {viz === 'donut'   && <Donut rows={rows} m={m} onPick={pick} activeVal={active} />}
         {viz === 'share'   && <Donut rows={rows} m={m} onPick={pick} activeVal={active} ramp="ordinal" />}
@@ -2968,13 +3550,14 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         {viz === 'column'  && (FULL_SET_DIMS.has(dim.key)
           ? <SeasonColumns rows={rows} m={m} onPick={pick} activeVal={active} />
           : <ColumnChart rows={rows} m={m} onPick={pick} activeVal={active} />)}
+        {viz === 'repeat'  && <RepeatOffenders rows={rows} m={m} onPick={pick} activeVal={active} />}
         {viz === 'table'   && <RankTable rows={rows} onPick={pick} activeVal={active} />}
         {viz === 'value'   && <ValueBars rows={rows} m={m} onPick={pick} activeVal={active} />}
         {viz === 'ordinal' && <ValueBars rows={rows} m={m} onPick={pick} activeVal={active} ordered />}
         {viz === 'map'     && <WorldMap rows={rows} m={m} onPick={pick} activeVal={active} />}
         {viz === 'heat'    && <HeatGrid rows={rows} m={m} onPick={pick} activeVal={active} />}
         {!['donut', 'share', 'stacked', 'table', 'heat', 'map', 'hbar', 'column',
-           'value', 'ordinal'].includes(viz) && (
+           'value', 'ordinal', 'repeat'].includes(viz) && (
           <SegmentBars rows={rows} m={m} activeVal={active} onPick={pick} />
         )}
       </Card>
@@ -2994,18 +3577,29 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
        place a three- or four-panel row is legible anyway. */
     const spanClass = `${p.kind === 'tile' ? 'col-span-1' : 'col-span-2'} ${
       SPAN_CLASS[p.span ?? ''] ?? SPAN_CLASS.half}`
-    const grain = trendGrain === 'month' ? 'Month-on-Month' : 'Day-on-Day'
+    /* No "Day-on-Day" prefix on any card title any more. It was the one part of
+       a panel's name that the configuration screen could not know, so a card was
+       listed there under a different name from the one it wore here. Each
+       chart's own subtitle still says "by day" / "by month". */
 
     switch (p.kind) {
       case 'tile': {
-        const t = tileFor(p.metric ?? '', p.label ?? p.metric ?? '')
-        if (!t) return null
+        const metric = p.metric ?? ''
+        const label = p.label ?? KPI_LABELS[metric] ?? metric
+        const t = tileFor(metric, label)
         /* Wrapped rather than spanning directly, because the tile itself is
            `h-full` — so tiles sharing a row with a taller panel stretch to it
            instead of leaving the row ragged. */
         return (
           <div key={p.key} className={spanClass}>
-            <Kpi {...t} sparkData={trend} />
+            {t
+              ? <Kpi {...t} sparkData={trend} info={p.desc} />
+              /* No figure in this result set — a platform whose tables COULD
+                 produce this metric but whose run did not. The tile still
+                 draws, because the layout put it here; an em dash is the
+                 honest value and hiding the card is the layout's call. */
+              : <Kpi label={label} value="—" foot="No figure for this period"
+                  accent={m.identSoft} icon={metric} info={p.desc} />}
           </div>
         )
       }
@@ -3019,30 +3613,53 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
 
       case 'trend': {
         // A per-source trend draws one half of a two-halved report; without a
-        // role it is the merged one. A role whose source is not in this result
-        // set draws nothing rather than an empty card.
+        // role it is the merged one.
         const src = p.role ? sourceTrends.find(s => s.role === p.role) : undefined
-        if (p.role && !src) return null
+        /* That half returned nothing — its tables answered no rows for this
+           window, or ran and failed. The card still draws: the layout put this
+           panel on the page, and vanishing left Report Configuration listing a
+           trend that was nowhere to be found on the report. */
+        if (p.role && !src) {
+          const roleName = ROLE_LABELS[p.role] ?? p.role
+          return (
+            <Card key={p.key} title={p.label || `${roleName} Identification & Removal`}
+              info={p.desc} className={spanClass}>
+              <NoData note={`No ${roleName.toLowerCase()} data for this period`} />
+            </Card>
+          )
+        }
+
         const rows = src ? src.rows : trend
         const first = src ? `${src.label} URLs` : 'Identified'
         const second = src ? src.secondName : 'Removed'
+        /* The fallback name only — the server sends this card's title as
+           `label`, computed by trendPanelLabel so that Report Configuration
+           lists it under exactly the name it wears here. Kept in step with that
+           function, and deliberately WITHOUT the grain: "Day-on-Day" flips to
+           "Month-on-Month" under the reader, which no stored layout can track,
+           and the subtitle below already says which. */
         const title = src
-          ? `${grain} ${src.label} Identification & ${second}`
-          : isSummary ? `${grain} Infringement Identification & Removal` : 'Identification & Removal'
+          ? `${src.label} Identification & ${second}`
+          : isSummary ? 'Infringement Identification & Removal' : 'Identification & Removal'
         const trendKey = `${section}:${p.key}`
         const trendMode = vizFor(trendKey, 'auto') as 'auto' | 'column' | 'line' | 'area'
         return (
-          <Card key={p.key} title={p.label || title} className={spanClass}
+          <Card key={p.key} title={p.label || title} info={p.desc} className={spanClass}
             action={<VizPicker options={TREND_VIZ} value={trendMode} fallback="auto"
               saved={vizDefault[trendKey]}
               onPick={v => setViz(trendKey, v)}
               onSetDefault={v => saveVizDefault(trendKey, v)} />}
             chartTitle={src
-              ? `${src.label} URLs found against those ${second === 'Delisting' ? 'delisted' : 'removed'}, by ${trendGrain}`
+              ? `${src.label} URLs found against those ${src.secondKey === 'delisted' ? 'de-indexed' : 'removed'}, by ${trendGrain}`
               : `Links found against links taken down, by ${trendGrain}`}
             table={<DataTable head={[trendGrain === 'month' ? 'Month' : 'Date', first, second, 'Rate']}
+              onPick={pickPeriod} activeVal={drilled ? drill!.label : ''}
+              /* The raw label, not the printed one: the column reads "11 Aug"
+                 and the range needs "2026-08-11". */
+              pickValues={rows.map(t => String(t.label ?? ''))}
               rows={rows.map(t => [shortDate(t.label), t.urls, t.removed, `${t.rate}%`])} />}>
-            <Trend data={rows} m={m} firstName={first} secondName={second} mode={trendMode} />
+            <Trend data={rows} m={m} firstName={first} secondName={second} mode={trendMode}
+              onPick={pickPeriod} />
           </Card>
         )
       }
@@ -3054,21 +3671,23 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         const rateKey = `${section}:${p.key}`
         const rateMode = vizFor(rateKey, 'line') as 'line' | 'area' | 'column'
         return (
-          <Card key={p.key} title={p.label || 'Removal rate'} className={spanClass}
+          <Card key={p.key} title={p.label || 'Removal rate'} info={p.desc} className={spanClass}
             action={<VizPicker options={RATE_VIZ} value={rateMode} fallback="line"
               saved={vizDefault[rateKey]}
               onPick={v => setViz(rateKey, v)}
               onSetDefault={v => saveVizDefault(rateKey, v)} />}
             chartTitle={`Share of that ${trendGrain}'s identified links that came down`}
             table={<DataTable head={[trendGrain === 'month' ? 'Month' : 'Date', 'Removal rate']}
+              onPick={pickPeriod} activeVal={drilled ? drill!.label : ''}
+              pickValues={trend.map(t => String(t.label ?? ''))}
               rows={trend.map(t => [shortDate(t.label), `${t.rate}%`])} />}>
-            <RateTrend data={trend} m={m} mode={rateMode} />
+            <RateTrend data={trend} m={m} mode={rateMode} onPick={pickPeriod} />
           </Card>
         )
       }
 
       default:
-        return renderDim({ key: p.key, label: p.label ?? p.key, viz: p.viz }, spanClass)
+        return renderDim({ key: p.key, label: p.label ?? p.key, viz: p.viz, desc: p.desc }, spanClass)
     }
   }
 
@@ -3091,20 +3710,32 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         const showCut = !!cut && sections.some(o =>
           o.key !== s.key && splitLabel(o.label)[0] === subject)
         return (
+          /* One line per report, qualifier included.
+
+             The qualifier used to sit on a second line, which made four of the
+             eleven items twice the height of the rest for a word that is never
+             read on its own — it is only ever read as "the Sports one". Set
+             beside the subject it says the same thing in half the space, and
+             the list stops needing the full column to show eleven entries.
+
+             `items-baseline` rather than `items-center`: the chip is smaller
+             text, and centring it against the subject sits it visibly high. */
           <button key={s.key} title={s.label}
             onClick={() => { switchSection(s.key); setFlyout(false) }}
             aria-current={on ? 'page' : undefined}
-            className={`rounded-xl transition-all whitespace-nowrap xl:whitespace-normal
-              text-left px-4 py-2.5 text-[15px] ${
+            className={`flex items-baseline gap-1.5 rounded-lg transition-all whitespace-nowrap
+              text-left px-3 py-2 text-sm ${
               on
-                ? 'font-bold text-white shadow-[0_6px_16px_-4px_rgba(252,147,76,0.7)]'
-                : 'font-semibold text-[#14254A]/65 hover:bg-[#14254A]/[0.05] dark:text-white/65 dark:hover:bg-white/5'
+                ? 'font-semibold text-white shadow-[0_4px_12px_-4px_rgba(252,147,76,0.7)]'
+                : 'font-medium text-[#14254A]/65 hover:bg-[#14254A]/[0.05] dark:text-white/65 dark:hover:bg-white/5'
             }`}
             style={on ? { background: 'linear-gradient(135deg,#FDA65A,#FC934C)' } : undefined}>
-            <span className="block leading-snug">{subject}</span>
+            {/* min-w-0 + truncate so a long subject shortens itself instead of
+                widening the rail or pushing the qualifier out of the box. */}
+            <span className="min-w-0 truncate leading-snug">{subject}</span>
             {showCut && (
-              <span className={`block text-[11px] leading-snug font-semibold ${
-                on ? 'text-white/75' : 'text-[#14254A]/45 dark:text-white/40'}`}>
+              <span className={`flex-none text-[10px] leading-snug font-semibold uppercase tracking-wide ${
+                on ? 'text-white/75' : 'text-[#14254A]/40 dark:text-white/35'}`}>
                 {cut}
               </span>
             )}
@@ -3204,12 +3835,12 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
              without a z-index here the flyout opens *underneath* the cards and
              all that shows is a sliver of it in the gap between two KPI rows. */
           className={`relative z-40 w-full xl:flex-none xl:sticky xl:top-2 ${
-            railOpen ? 'xl:w-[236px]' : 'xl:w-[56px]'}`}>
+            railOpen ? 'xl:w-[196px]' : 'xl:w-[52px]'}`}>
           <div className={`bg-white dark:bg-[#1a2d55] rounded-2xl shadow-card border transition-colors
             ${!railOpen && flyout
               ? 'border-[#FC934C]/40 dark:border-[#FC934C]/40'
-              : 'border-gray-100 dark:border-white/10'} p-4 xl:p-3`}>
-            <div className={`flex items-center justify-between gap-1 px-1.5 pt-0.5 pb-3 ${
+              : 'border-gray-100 dark:border-white/10'} p-3 xl:p-2`}>
+            <div className={`flex items-center justify-between gap-1 px-1.5 pt-0.5 pb-2 ${
               railOpen ? '' : 'xl:px-0 xl:pb-0'}`}>
               {railOpen && (
                 <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-gray-400">Navigation</p>
@@ -3247,8 +3878,8 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
                 negative margin/padding pair gives the active item's glow room
                 inside the scroll box — an overflow clips it whether or not the
                 list is long enough to actually scroll. */}
-            <nav className={`flex xl:flex-col gap-1.5 overflow-x-auto
-              xl:max-h-[calc(100dvh-11rem)] xl:overflow-y-auto xl:p-1.5 xl:-m-1.5 ${
+            <nav className={`flex gap-1.5 xl:flex-col xl:gap-0.5 overflow-x-auto
+              xl:max-h-[calc(100dvh-10rem)] xl:overflow-y-auto xl:p-1.5 xl:-m-1.5 ${
               railOpen ? '' : 'xl:hidden'}`}>
               {navItems}
             </nav>
@@ -3268,10 +3899,10 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
                 flyout
                   ? 'opacity-100 translate-x-0 scale-100 pointer-events-auto'
                   : 'opacity-0 -translate-x-1.5 scale-[0.98] pointer-events-none'}`}>
-              <div className="w-[224px] bg-white dark:bg-[#1a2d55] rounded-2xl border border-gray-100 dark:border-white/10
-                shadow-[0_18px_44px_-14px_rgba(20,37,74,0.35)] dark:shadow-[0_18px_44px_-14px_rgba(0,0,0,0.65)] p-2.5">
-                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-gray-400 px-2 pt-1 pb-2">Navigation</p>
-                <nav className="flex flex-col gap-1">{navItems}</nav>
+              <div className="w-[196px] bg-white dark:bg-[#1a2d55] rounded-2xl border border-gray-100 dark:border-white/10
+                shadow-[0_18px_44px_-14px_rgba(20,37,74,0.35)] dark:shadow-[0_18px_44px_-14px_rgba(0,0,0,0.65)] p-2">
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-gray-400 px-2 pt-1 pb-1.5">Navigation</p>
+                <nav className="flex flex-col gap-0.5">{navItems}</nav>
               </div>
             </div>
           )}
@@ -3304,8 +3935,32 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
               sports tables, and showing it over a non-sports report would put a
               number on screen that does not describe what is under it. */}
           {filters.clientId && isSportsSection && (
-            <RealtimeCard view="sports" clientId={filters.clientId}
-              startDate={filters.from} endDate={filters.to} />
+            /* ── Pinned: an OPAQUE gutter, not just a sticky card ────────────
+               Sticking the card alone left the strip above it transparent, so
+               the report scrolled up through the gap and KPI figures appeared
+               to float over the card's top edge.
+
+               So what sticks is a band painted in the scroll container's own
+               background (AdminShell's `main`, #eef2f7 / #0f1f3d), running from
+               the very top of the viewport to just below the card. Content
+               passing underneath is hidden before it ever reaches the card, and
+               the padding inside the band is what keeps the visual gap that
+               `top-2` used to provide.
+
+               z-30: above the charts, below the collapsed nav's flyout at z-40,
+               which still has to cover this. */
+            rtPinned ? (
+              <div className="sticky top-0 z-30 pt-2 pb-2 bg-[#eef2f7] dark:bg-[#0f1f3d]">
+                <RealtimeCard view="sports" clientId={filters.clientId}
+                  startDate={filters.from} endDate={filters.to}
+                  pinned onTogglePin={() => setRtPinned(false)}
+                  className="shadow-lg" />
+              </div>
+            ) : (
+              <RealtimeCard view="sports" clientId={filters.clientId}
+                startDate={filters.from} endDate={filters.to}
+                pinned={false} onTogglePin={() => setRtPinned(true)} />
+            )
           )}
 
           {/* The KPI band is a panel like any other now — it is drawn inside the
@@ -3322,14 +3977,16 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
               cardTitle={activeSection.label}
               title={scoped
                 ? 'Loading your report…'
-                : health && !health.connected ? 'Waiting on the reports database' : 'Pick a client to load the report'}
+                : health && !health.connected ? 'Reports aren’t available right now' : 'Pick a client to load the report'}
               body={scoped
                 /* A client has no slicer to act on, so this is a wait, not an
-                   instruction — and never a note about the warehouse being
-                   unreachable, which is not theirs to fix. */
+                   instruction. */
                 ? 'Fetching the figures for your account.'
                 : health && !health.connected
-                  ? (health.error || 'The analytics database is not reachable, so the client list cannot load.')
+                  /* Not the server's own text. It named the host, the database
+                     and sometimes the user that was refused, on a screen whose
+                     reader cannot act on any of it. */
+                  ? 'The client list can’t be loaded at the moment. Please try again in a few minutes.'
                   : 'Use the Client slicer on the right. The report runs automatically and re-runs on every filter change.'}
             />
           ) : !data ? (
@@ -3373,6 +4030,37 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
                 </div>
               )}
 
+              {/* ── The way back out of a date click ──────────────────────
+                  A click on a day sets the range to that day, which is the
+                  right thing and also the one filter on this page that HIDES
+                  its own undo: the trend it was clicked on collapses to a
+                  single figure, so there is no mark left to click again. The
+                  slicers do not have that problem — their chips sit in the rail
+                  and their charts stay drawn.
+
+                  Above the panels rather than in the rail with the chips,
+                  because it is a different kind of statement: not "one value of
+                  one dimension" but "the whole report is on a narrower range
+                  than the one you picked". */}
+              {drilled && (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl px-4 py-2.5 text-sm border
+                  bg-[#FC934C]/[0.08] border-[#FC934C]/30 text-[#14254A]
+                  dark:bg-[#FC934C]/10 dark:border-[#FC934C]/25 dark:text-white">
+                  <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: BRAND_ORANGE }} />
+                  <span>
+                    <strong>{drill!.label.length === 7
+                      ? shortDate(drill!.label) : shortDateFull(drill!.label)}</strong> only — every panel below is
+                    filtered to {drill!.label.length === 7 ? 'this month' : 'this day'}.
+                  </span>
+                  <button onClick={() => pickPeriod(drill!.label)}
+                    className="ml-auto text-[11px] font-bold uppercase tracking-wider
+                      text-[#14254A]/60 hover:text-[#14254A] dark:text-white/60 dark:hover:text-white
+                      transition-colors">
+                    ← Back to {shortDate(drill!.from)} – {shortDate(drill!.to)}
+                  </button>
+                </div>
+              )}
+
               {/* Every visual on the page, in the order and at the widths this
                   platform — and this client — is configured for. Twelve columns,
                   so a row holds one panel, two, three or four; a row whose widths
@@ -3401,17 +4089,18 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             </div>
           )}
 
-          {/* A spec whose column names do not match the warehouse yields empty
-              panels; the server reports the first failure so this is diagnosable
-              from the page instead of the network tab. */}
+          {/* That some panels are missing IS the reader's business — it says
+              the report in front of them is short, which they would otherwise
+              have to infer from an empty card. Why is not: the reason is a
+              failed statement naming the column and the table it ran against,
+              and the fix is an endpoint no reader of a report is going to call.
+              Both are in the server log for the person who can act on them. */}
           {data?.queryWarning && (
             <div className="rounded-xl px-4 py-3 text-sm border bg-amber-50 border-amber-200 text-amber-800
               dark:bg-amber-500/10 dark:border-amber-400/25 dark:text-amber-200">
               <strong>Some panels could not be loaded.</strong>
-              <p className="text-[11px] mt-1 font-mono break-all opacity-90">{data.queryWarning}</p>
               <p className="text-[11px] mt-1 opacity-80">
-                Column names for this report came from the source project, not from this warehouse.
-                Call <code>/api/reports/spec-check?type={activeSection?.key}</code> to see exactly which are missing.
+                The rest of this report is complete and the figures shown are accurate.
               </p>
             </div>
           )}
@@ -3443,12 +4132,14 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
               <strong>Error:</strong> {err}
             </div>
           )}
-          {/* The plain sentence comes first and the connection string comes last,
-              folded away. Reading "no report backend is configured — set
-              REPORTS_API_URL …" is work even for the person who can act on it,
-              and for everyone else it was noise in place of an answer. So the
-              headline says what happened in words, and the wording that a
-              developer actually needs sits one click below it, unchanged. */}
+          {/* A sentence, and nothing folded away beneath it.
+
+              This panel used to carry the server's own words — "no report
+              backend is configured — set REPORTS_API_URL …" — behind a
+              Technical details toggle. That was noise in place of an answer for
+              everyone who opened it, and for the one person who could act on it
+              the same text is in the server log, with the part this screen
+              could never show: which hop actually failed. */}
           {unavailable && !authError && (
             <div className="rounded-2xl border bg-white dark:bg-[#1a2d55] border-gray-100 dark:border-white/10
               shadow-card px-5 py-6 sm:px-7 sm:py-8">
@@ -3463,16 +4154,23 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
                   </svg>
                 </span>
 
+                {/* One message, for staff and clients alike.
+
+                    It used to fork: a client was told to wait, while staff got
+                    the server's raw text and the four environment variables to
+                    set it in. None of that belonged on a page — it named the
+                    warehouse, the config file and the boot sequence to anyone
+                    who opened the panel, and it is not something a reader of a
+                    report acts on even when they understand it. The detail is
+                    in the server log, which is where the person who can fix it
+                    is already looking. */}
                 <div>
                   <p className="font-bold text-[#14254A] dark:text-white">
-                    {scoped ? 'Reports are temporarily unavailable' : 'Reports aren’t connected yet'}
+                    Reports aren’t available right now
                   </p>
                   <p className="text-sm mt-1.5 max-w-md mx-auto leading-relaxed text-gray-500 dark:text-white/45">
-                    {scoped
-                      /* A client can do nothing with a connection string, and the
-                         warehouse's hostname is not theirs to know. */
-                      ? 'We are aware of it and are restoring the connection — please try again shortly.'
-                      : 'This page reads from the analytics warehouse, and that connection has not been set up on this server yet. Nothing is wrong with the report itself.'}
+                    We can’t load your reports at the moment. Nothing is wrong with your data —
+                    please try again in a few minutes.
                   </p>
                 </div>
 
@@ -3482,31 +4180,6 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
                     hover:opacity-90 transition-opacity">
                   Try again
                 </button>
-
-                {/* Staff only: the exact server message, kept verbatim so it is
-                    still copy-pasteable into a ticket. */}
-                {!scoped && (
-                  <details className="w-full max-w-md mt-2 text-left group">
-                    <summary className="cursor-pointer list-none text-[11px] font-bold uppercase tracking-widest
-                      text-gray-400 hover:text-[#14254A] dark:hover:text-white text-center">
-                      Technical details
-                      <span className="ml-1 inline-block group-open:rotate-90 transition-transform">›</span>
-                    </summary>
-                    <div className="mt-2.5 rounded-xl border border-gray-100 dark:border-white/10
-                      bg-gray-50 dark:bg-white/[0.04] px-3.5 py-3 space-y-2">
-                      <p className="text-[11px] font-mono break-words text-gray-600 dark:text-white/60">
-                        {unavailable}
-                      </p>
-                      <p className="text-[11px] leading-relaxed text-gray-500 dark:text-white/45">
-                        Set <code>REPORTS_API_URL</code> to read through reports_api, or{' '}
-                        <code>REPORTS_DB_HOST</code> / <code>REPORTS_DB_NAME</code> /{' '}
-                        <code>REPORTS_DB_USER</code> / <code>REPORTS_DB_PASS</code> to query the warehouse
-                        directly, in <code>.env.local</code>. Then restart the Go API — the environment is
-                        read once at boot.
-                      </p>
-                    </div>
-                  </details>
-                )}
               </div>
             </div>
           )}
@@ -3535,13 +4208,13 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
              was. The height is bounded by the viewport less the shell's header;
              being a few pixels out only means it starts scrolling slightly
              early, which is invisible. */
-          <div className="bg-white dark:bg-[#1a2d55] rounded-xl shadow-card border border-gray-100 dark:border-white/10 p-4 space-y-3.5
+          <div className="bg-white dark:bg-[#1a2d55] rounded-xl shadow-card border border-gray-100 dark:border-white/10 p-3 space-y-2.5
             xl:max-h-[calc(100dvh-8.5rem)] xl:overflow-y-auto">
             <div className="flex items-center justify-between gap-2">
               {/* Numbered only where there is a sequence to be in. A client
                   login has no client slicer, so the date range is the only
                   step and "2 ·" would be counting something invisible. */}
-              <p className="text-sm font-bold text-[#14254A] dark:text-white">
+              <p className="text-[13px] font-bold text-[#14254A] dark:text-white">
                 {scoped ? 'Date Range' : '2 · Date Range'}
               </p>
               <span className="flex items-center gap-1">
@@ -3562,10 +4235,28 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             {/* One control owns both ends of the range, with its quick ranges
                 inside — two separate pickers let an invalid window be set and
                 said nothing about which preset produced the dates. */}
+            {/* Clamped to the report's own period where it has one, so a
+                range outside the data cannot be picked in the first place. The
+                server clamps too and is the authority — this is the half that
+                keeps a reader from choosing a window and then being shown a
+                different one. `max` stays today for an ungoverned report, and
+                for a governed one whose period runs past today: there is no
+                data ahead of now either way. */}
             <DateRangePicker
               value={{ from: filters.from, to: filters.to }}
               onChange={r => setFilters(f => ({ ...f, from: r.from, to: r.to }))}
-              max={today} />
+              min={activeSection?.period?.start}
+              max={activeSection?.period && activeSection.period.end < today
+                ? activeSection.period.end
+                : today}
+              /* The quick ranges count back from the newest day the report can
+                 show, not from a today the period may have ended before —
+                 otherwise "Last 7 days" on a closed season resolves to seven
+                 days with nothing in them. */
+              anchor={activeSection?.period && activeSection.period.end < today
+                ? activeSection.period.end
+                : undefined}
+              compact />
 
             {/* No Platform slicer here. The navigation rail on the left is the
                 same control over the same value — two copies of it meant two
@@ -3603,11 +4294,18 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
                 is the arrangement this page used to hardcode. */}
             {(activeSection?.slicers
               ?? (activeSection?.filters ?? []).filter(k => !PANEL_ONLY_FILTERS.has(k))
-            ).map(key => (
-              <Slicer key={key} label={FILTER_LABELS[key] ?? key}
-                value={filters[key] || ''} onChange={setF(key)}
-                options={asOpts(opts[key])} />
-            ))}
+            ).map(key => {
+              /* Renamed and described in Report Configuration → Page Layout,
+                 same as any chart. Absent for a slicer nobody touched, which
+                 falls back to this page's own label and no ⓘ. */
+              const meta = (activeSection?.slicerMeta ?? {})[key]
+              return (
+                <Slicer key={key} label={meta?.label || FILTER_LABELS[key] || key}
+                  info={meta?.desc}
+                  value={filters[key] || ''} onChange={setF(key)}
+                  options={asOpts(opts[key])} />
+              )
+            })}
 
             {chips.length > 0 && (
               <div className="pt-3 border-t border-[#14254A]/10 dark:border-white/10">

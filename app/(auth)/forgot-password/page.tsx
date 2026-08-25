@@ -1,4 +1,5 @@
 ﻿'use client'
+import { usePasswordPolicy, checkPassword, PasswordRules } from '@/lib/passwordPolicy'
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -90,13 +91,16 @@ export default function ForgotPasswordPage() {
     }
   }
 
+  const policy = usePasswordPolicy()
+
   // ── Step 2: paste token + set new password ──────────────────────────────────
   async function handleReset(e: React.FormEvent) {
     e.preventDefault()
     const token = resetToken.replace(/\s+/g, '')
     if (!token)                { setError('Please paste the reset token from your email.'); return }
     if (newPass !== confirmPas) { setError('Passwords do not match.'); return }
-    if (newPass.length < 8)    { setError('Password must be at least 8 characters.'); return }
+    const bad = checkPassword(newPass, policy)
+    if (bad)                   { setError(bad); return }
     setError('')
     setLoading(true)
     try {
@@ -258,8 +262,8 @@ export default function ForgotPasswordPage() {
                 <div className="relative mb-3">
                   <input
                     type={showPass ? 'text' : 'password'} value={newPass}
-                    onChange={e => setNewPass(e.target.value)} required minLength={8}
-                    placeholder="Minimum 8 characters"
+                    onChange={e => setNewPass(e.target.value)} required minLength={policy.minLength}
+                    placeholder={`Minimum ${policy.minLength} characters`}
                     className="w-full px-4 py-2.5 text-sm rounded-xl border focus:outline-none pr-10"
                     style={{ borderColor: '#dce3ee' }}
                     onFocus={e => (e.target.style.borderColor = '#14254A')}
@@ -271,25 +275,37 @@ export default function ForgotPasswordPage() {
                   </button>
                 </div>
 
-                {/* Password strength */}
-                {newPass && (
-                  <div className="flex gap-1 mb-3">
-                    {[1,2,3,4].map(n => {
-                      const score = [newPass.length >= 8, /[A-Z]/.test(newPass), /\d/.test(newPass), /[^A-Za-z0-9]/.test(newPass)].filter(Boolean).length
-                      const colors = ['#ef4444','#f97316','#eab308','#16A34A']
-                      return <div key={n} className="flex-1 h-1 rounded-full transition-all"
-                        style={{ background: n <= score ? colors[score - 1] : '#e5e7eb' }} />
-                    })}
-                    <span className="text-[10px] ml-1" style={{ color: '#9ca3af' }}>
-                      {['','Weak','Fair','Good','Strong'][[newPass.length >= 8, /[A-Z]/.test(newPass), /\d/.test(newPass), /[^A-Za-z0-9]/.test(newPass)].filter(Boolean).length]}
-                    </span>
-                  </div>
-                )}
+                {/* Strength, scored against the CONFIGURED minimum rather than a
+                    hardcoded 8 — a meter calling a password "Strong" that the
+                    server is about to refuse is worse than no meter. The rules
+                    below it are the authoritative list. */}
+                {newPass && (() => {
+                  const hits = [
+                    Array.from(newPass).length >= policy.minLength,
+                    /\p{Lu}/u.test(newPass),
+                    /\d/.test(newPass),
+                    /[^\p{L}\p{N}\s]/u.test(newPass),
+                  ].filter(Boolean).length
+                  const colors = ['#ef4444','#f97316','#eab308','#16A34A']
+                  return (
+                    <div className="flex gap-1 mb-3">
+                      {[1,2,3,4].map(n => (
+                        <div key={n} className="flex-1 h-1 rounded-full transition-all"
+                          style={{ background: n <= hits ? colors[hits - 1] : '#e5e7eb' }} />
+                      ))}
+                      <span className="text-[10px] ml-1" style={{ color: '#9ca3af' }}>
+                        {['','Weak','Fair','Good','Strong'][hits]}
+                      </span>
+                    </div>
+                  )
+                })()}
+
+                <PasswordRules policy={policy} value={newPass} />
 
                 <label className="block text-xs font-medium mb-1" style={{ color: '#374151' }}>Confirm Password</label>
                 <input
                   type={showPass ? 'text' : 'password'} value={confirmPas}
-                  onChange={e => setConfirmPas(e.target.value)} required minLength={8}
+                  onChange={e => setConfirmPas(e.target.value)} required minLength={policy.minLength}
                   placeholder="Repeat new password"
                   className="w-full px-4 py-2.5 text-sm rounded-xl border focus:outline-none mb-4"
                   style={{ borderColor: '#dce3ee' }}

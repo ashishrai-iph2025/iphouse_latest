@@ -52,6 +52,20 @@ func Get() *sql.DB {
 	return pool
 }
 
+/*
+Ready reports whether Init has produced a usable pool.
+
+Get returns nil before Init, and every call through it then panics on a nil
+receiver rather than returning an error. Code that can legitimately run before
+the database is up — settings read on a cold path, and the tests that exercise
+those settings without one — asks here first and falls back to its defaults.
+*/
+func Ready() bool {
+	mu.Lock()
+	defer mu.Unlock()
+	return pool != nil
+}
+
 // Query runs a SELECT and returns rows as a slice of maps.
 func Query(sqlStr string, args ...any) ([]map[string]any, error) {
 	db := Get()

@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	ipauth "github.com/ip-house/iphouse-api/auth"
@@ -248,6 +249,24 @@ func intVal(v any) int64 {
 		return int64(t)
 	case int:
 		return int64(t)
+	/* scanRows turns every []byte the driver hands back into a string, and which
+	   columns arrive that way is a property of the driver's protocol rather than
+	   of the schema — aggregates and CASE expressions in particular. Falling
+	   through to 0 for those is indistinguishable from a genuine zero, which is
+	   the worst possible failure for a flag column. Parsing here can only fix
+	   call sites that were already reading 0. */
+	case string:
+		n, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
+		if err != nil {
+			return 0
+		}
+		return n
+	case []byte:
+		n, err := strconv.ParseInt(strings.TrimSpace(string(t)), 10, 64)
+		if err != nil {
+			return 0
+		}
+		return n
 	}
 	return 0
 }

@@ -511,9 +511,12 @@ export default function UploadURLPage() {
                   </span>
                 </h2>
                 <p className="text-xs text-brand-muted mt-0.5">
+                  {/* Submissions, not "batches" — the word is out of the
+                      product's vocabulary now, here as well as on the reports
+                      it had leaked onto. */}
                   {scope === 'company'
-                    ? 'Every URL batch submitted on this account'
-                    : 'Only the URL batches you submitted'}
+                    ? 'Every URL submission made on this account'
+                    : 'Only the URL submissions you made'}
                 </p>
               </div>
               {!histLoading && history.length > 0 && (

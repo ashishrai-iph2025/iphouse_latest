@@ -339,15 +339,41 @@ func SuperAdminUserPermissions(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{"success": true, "users": rows})
 }
 
-// GET /api/admin/super-admin/active-sessions
+/*
+GET /api/admin/super-admin/active-sessions
+
+Who has made a request in the last half hour. The stamp is written by every
+authenticated request — see handlers.TouchLastSeen, which also creates the column
+this reads, because nothing ever did.
+
+	LEFT JOIN, not JOIN. Eleven login rows on this database carry no userId: a
+	registration approved before a company was assigned, and staff accounts,
+	which are exactly the sessions a Super Admin opening this page is most likely
+	to be one of. An inner join dropped every one of them, so the panel could not
+	show the person reading it.
+
+	The error is REPORTED. It used to be discarded into `_`, and that is the only
+	reason this screen could say "No active sessions in the last 30 minutes" for
+	months while the column it reads did not exist — a sentence about the data,
+	over a query that never ran.
+*/
 func ActiveSessions(w http.ResponseWriter, r *http.Request) {
-	rows, _ := db.Query(`
-		SELECT l.loginId, l.login_username, l.last_seen_at, u.name, u.role
+	rows, err := db.Query(`
+		SELECT l.loginId, l.login_username, l.last_seen_at,
+		       COALESCE(NULLIF(TRIM(u.name), ''),
+		                NULLIF(TRIM(CONCAT(IFNULL(l.first_name,''),' ',IFNULL(l.last_name,''))), ''),
+		                l.login_username) AS name,
+		       COALESCE(u.role, 0) AS role
 		FROM dcp_user_login l
-		JOIN dcp_user u ON u.userId = l.userId
-		WHERE l.is_active = 1 AND u.deleted = 0
+		LEFT JOIN dcp_user u ON u.userId = l.userId AND u.deleted = 0
+		WHERE l.is_active = 1
 		  AND l.last_seen_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 30 MINUTE)
 		ORDER BY l.last_seen_at DESC`)
+	if err != nil {
+		log.Printf("[super-admin] active sessions query failed: %v", err)
+		fail(w, 500, "The active session list could not be read")
+		return
+	}
 	if rows == nil {
 		rows = []map[string]any{}
 	}
@@ -364,8 +390,32 @@ func ForceLogout(w http.ResponseWriter, r *http.Request) {
 		fail(w, 422, "loginId required")
 		return
 	}
-	db.Exec("UPDATE dcp_user_login SET force_logout_at = UTC_TIMESTAMP() WHERE loginId = ?", body.LoginID)
-	ok(w, map[string]any{"success": true})
+	/* NOTHING READS THIS COLUMN.
+
+	   The stamp is written and no code path anywhere checks it — not the JWT
+	   middleware, not the login handlers — so a forced logout does not end a
+	   session, and the note on the screen ("their active JWT session is
+	   invalidated on their next request") describes behaviour that was never
+	   built. The column did not exist either until TouchLastSeen started
+	   creating it, so this Exec failed silently on top.
+
+	   Reported rather than quietly succeeding: an admin pressing this needs to
+	   know it did not do what the page claims. */
+	if _, n, err := db.Exec(
+		"UPDATE dcp_user_login SET force_logout_at = UTC_TIMESTAMP() WHERE loginId = ?", body.LoginID); err != nil {
+		log.Printf("[super-admin] force logout stamp failed for login %d: %v", body.LoginID, err)
+		fail(w, 500, "The force-logout flag could not be written")
+		return
+	} else if n == 0 {
+		fail(w, 404, "No active login with that id")
+		return
+	}
+	ok(w, map[string]any{
+		"success": true,
+		/* Said out loud, on the response, because the screen's own copy promises
+		   more than the server does. */
+		"warning": "The flag was recorded, but nothing enforces it yet — the session stays valid until it expires.",
+	})
 }
 
 // GET/PUT /api/admin/super-admin/permissions
@@ -437,3 +487,19 @@ func SuperAdminPermissions(w http.ResponseWriter, r *http.Request) {
 		fail(w, 405, "Method not allowed")
 	}
 }
+
+/* ── Schema entry points ──────────────────────────────────────────────────────
+   Exported for the startup manifest in package main; see the note beside the
+   same wrappers in handlers/sessionseen.go. */
+
+// EnsureReportsAPISchema creates the reports-service connection config table.
+func EnsureReportsAPISchema() { ensureReportsAPISchema() }
+
+// EnsureRedisCfgSchema creates the report cache configuration table.
+func EnsureRedisCfgSchema() { ensureRedisCfgSchema() }
+
+// EnsureWarRoomSettingsTable creates the per-client War Room settings table.
+func EnsureWarRoomSettingsTable() { ensureWarRoomSettingsTable() }
+
+// EnsureIdleSettingsTable creates the session idle-timeout settings table.
+func EnsureIdleSettingsTable() { ensureIdleSettingsTable() }

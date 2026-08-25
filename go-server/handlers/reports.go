@@ -53,11 +53,21 @@ func rawURLTable(kind string) (reportTable, bool) {
 
 // reportsUnavailable answers a missing/unreachable warehouse as a normal payload
 // the page can render, rather than a 500 the user cannot act on.
-func reportsUnavailable(w http.ResponseWriter, err error) {
+//
+// The reason reaches the reader, the address does not. Some of these errors are
+// the warehouse's own — a failed statement, quoting the schema and table it ran
+// against — and this payload is rendered onto the page verbatim, on screens a
+// CLIENT login can open. Super Admins still get it whole; for everyone else the
+// qualified names and URLs are replaced. See redactWarehouseNames.
+func reportsUnavailable(w http.ResponseWriter, r *http.Request, err error) {
+	msg := err.Error()
+	if !maySeeWarehouseNames(r) {
+		msg = redactWarehouseNames(msg, "the reports warehouse")
+	}
 	OK(w, map[string]any{
 		"ok":        false,
 		"available": false,
-		"error":     err.Error(),
+		"error":     msg,
 	})
 }
 
@@ -83,40 +93,48 @@ func ReportsHealth(w http.ResponseWriter, r *http.Request) {
 		ok, database, err := c.Health(r.Context())
 		body := map[string]any{
 			"success": true, "configured": true, "connected": ok,
-			"host": c.BaseURL(), "database": database, "via": "reports_api",
+			"via": "reports_api",
 		}
-		if database == "" {
-			body["database"] = name
-		}
-		if err != nil {
-			body["error"] = err.Error()
+		/* Same rule as the connected path below, and it has to be the same on
+		   the way OUT too: a health check that hides the address when it works
+		   and prints it when it breaks is not hiding it. The service's own
+		   error text quotes its base URL and dataset, so that goes through the
+		   redactor rather than through unchanged. */
+		if maySeeWarehouseNames(r) {
+			body["host"] = c.BaseURL()
+			body["database"] = database
+			if database == "" {
+				body["database"] = name
+			}
+			if err != nil {
+				body["error"] = err.Error()
+			}
+		} else if err != nil {
+			body["error"] = redactWarehouseNames(err.Error(), "the reports service")
 		}
 		OK(w, body)
 		return
 	}
 
+	/* The three ways this can fail all used to answer with the hostname and the
+	   schema attached, to every admin. A driver error is the worst of them: it
+	   quotes the DSN, so the reply named the host, the database and the user in
+	   one line. They are folded into one helper so the gate cannot be applied to
+	   two of the three again. */
 	if !db.ReportsConfigured() {
-		OK(w, map[string]any{
-			"success": true, "configured": false, "connected": false,
-			"host": host, "database": name,
-			"error": "No report backend is configured — set REPORTS_API_URL to read through reports_api, or REPORTS_DB_HOST / REPORTS_DB_USER / REPORTS_DB_PASS to query the warehouse directly",
-		})
+		reportsHealthDown(w, r, false, host, name,
+			"No report backend is configured — set REPORTS_API_URL to read through reports_api, or REPORTS_DB_HOST / REPORTS_DB_USER / REPORTS_DB_PASS to query the warehouse directly",
+			"No report backend is configured — ask a Super Admin to connect one")
 		return
 	}
 
 	p, err := db.Reports()
 	if err != nil {
-		OK(w, map[string]any{
-			"success": true, "configured": true, "connected": false,
-			"host": host, "database": name, "error": err.Error(),
-		})
+		reportsHealthDown(w, r, true, host, name, err.Error(), "")
 		return
 	}
 	if err := p.Ping(); err != nil {
-		OK(w, map[string]any{
-			"success": true, "configured": true, "connected": false,
-			"host": host, "database": name, "error": err.Error(),
-		})
+		reportsHealthDown(w, r, true, host, name, err.Error(), "")
 		return
 	}
 
@@ -147,6 +165,30 @@ func ReportsHealth(w http.ResponseWriter, r *http.Request) {
 	OK(w, out)
 }
 
+/*
+reportsHealthDown answers an unreachable warehouse without describing it.
+
+`detail` is the real reason, for the Super Admin who can act on it. Everyone
+else gets `safe` when one is given and a redacted `detail` otherwise — redacted
+rather than blanked, because "cannot connect" and "access denied for this user"
+send an admin to different people, and only the identifiers have to go.
+*/
+func reportsHealthDown(w http.ResponseWriter, r *http.Request, configured bool, host, name, detail, safe string) {
+	out := map[string]any{
+		"success": true, "configured": configured, "connected": false,
+	}
+	if maySeeWarehouseNames(r) {
+		out["host"] = host
+		out["database"] = name
+		out["error"] = detail
+	} else if safe != "" {
+		out["error"] = safe
+	} else {
+		out["error"] = redactWarehouseNames(detail, "the reports warehouse")
+	}
+	OK(w, out)
+}
+
 // envDisplay reads a non-secret env value for display. Only host/database names
 // are ever exposed this way — never the user or password.
 func envDisplay(key string) string {
@@ -157,7 +199,7 @@ func envDisplay(key string) string {
 func ReportsOptions(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if !reportsBackendReady() {
-		reportsUnavailable(w, fmt.Errorf("no report backend is configured — set REPORTS_API_URL to read through reports_api, or REPORTS_DB_* to query the warehouse directly"))
+		reportsUnavailable(w, r, fmt.Errorf("no report backend is configured — set REPORTS_API_URL to read through reports_api, or REPORTS_DB_* to query the warehouse directly"))
 		return
 	}
 	if !mayOpenReports(claims) {
@@ -185,6 +227,14 @@ func ReportsOptions(w http.ResponseWriter, r *http.Request) {
 	   value in this window" look identical once the choice has been made. */
 	scope := flatQuery(q)
 	scope["clientId"] = clientID
+	/* Held to the sports period for the same reason the charts are: a slicer
+	   offering a value that only exists outside the period is a choice that
+	   empties the report, and the page cannot then say why. */
+	if p, ok := platformByKey(kind); ok {
+		if period, governed := sportsPeriodFor(p, clientID); governed {
+			clampToSportsPeriod(scope, period)
+		}
+	}
 
 	// Configured platforms (reportplatforms.go) list their own slicer values,
 	// merged across every table the platform reads.
@@ -231,7 +281,7 @@ func ReportsOptions(w http.ResponseWriter, r *http.Request) {
 		 WHERE ClientId IS NOT NULL AND ClientName IS NOT NULL
 		 ORDER BY ClientName`)
 	if err != nil {
-		reportsUnavailable(w, err)
+		reportsUnavailable(w, r, err)
 		return
 	}
 	assets, _ := db.ReportsQuery(`
@@ -273,7 +323,7 @@ func ReportsOptions(w http.ResponseWriter, r *http.Request) {
 func ReportsData(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if !reportsBackendReady() {
-		reportsUnavailable(w, fmt.Errorf("no report backend is configured — set REPORTS_API_URL to read through reports_api, or REPORTS_DB_* to query the warehouse directly"))
+		reportsUnavailable(w, r, fmt.Errorf("no report backend is configured — set REPORTS_API_URL to read through reports_api, or REPORTS_DB_* to query the warehouse directly"))
 		return
 	}
 	if !mayOpenReports(claims) {
@@ -307,9 +357,34 @@ func ReportsData(w http.ResponseWriter, r *http.Request) {
 			Fail(w, 403, "You do not have access to this report")
 			return
 		}
+		scope := flatQuery(q)
+		/* A sports report reads only inside its configured period, whatever the
+		   request asked for — see sportsperiod.go. Clamped BEFORE the cache
+		   call, so the key describes the window that was actually run: clamping
+		   afterwards would file every out-of-period request under its own key
+		   and cache the same answer under each of them. */
+		period, governed := sportsPeriodFor(p, clientID)
+		adjusted := governed && clampToSportsPeriod(scope, period)
+
 		// Through the cache — see reportcachebridge.go. Identical answer, and
 		// on a hit, without recomputing eighteen aggregates.
-		OK(w, cachedPlatformReport(p, flatQuery(q), false, false))
+		rep := cachedPlatformReport(p, scope, false, false)
+		if governed {
+			/* Echoed so the page can pin its calendar to the same window rather
+			   than infer it, and can say so when the range it asked for is not
+			   the range it is looking at. */
+			rep["period"] = map[string]any{
+				"start": period.Start, "end": period.End,
+				"from": scope["from"], "to": scope["to"],
+				"adjusted": adjusted,
+			}
+		}
+		// The figures are the report; the tables behind them are not. See
+		// scrubReportPayload — this endpoint answers client logins too.
+		if !maySeeWarehouseNames(r) {
+			scrubReportPayload(rep)
+		}
+		OK(w, rep)
 		return
 	}
 
@@ -322,7 +397,11 @@ func ReportsData(w http.ResponseWriter, r *http.Request) {
 			Fail(w, 403, "You do not have access to any reports")
 			return
 		}
-		OK(w, runSummary(plats, flatQuery(q)))
+		sum := runSummary(plats, flatQuery(q))
+		if !maySeeWarehouseNames(r) {
+			scrubReportPayload(sum)
+		}
+		OK(w, sum)
 		return
 	}
 
@@ -508,7 +587,12 @@ func mapRows(rows []map[string]any, keys ...string) []map[string]any {
 			switch k {
 			case "date":
 				m[k] = isoDay(v)
-			case "urls", "removed", "delisted", "google", "bing":
+			// `repeats` is the repeat-offenders panel's day count. Numeric like
+			// the rest: MySQL's text protocol hands a COUNT() back as []byte,
+			// which JSON-encodes as a base64 string the chart cannot plot.
+			case "urls", "removed", "delisted", "google", "bing", "repeats",
+				// The enforcement action counts — see enforcementactions.go.
+				"notices", "delistingBatches":
 				m[k] = numOf(v)
 			default:
 				m[k] = v

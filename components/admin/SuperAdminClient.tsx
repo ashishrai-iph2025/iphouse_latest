@@ -1,6 +1,6 @@
 ﻿'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import AdminPageHeader from './AdminPageHeader'
@@ -91,7 +91,7 @@ function Pagination({
 }
 
 export default function SuperAdminClient() {
-  const [tab, setTab] = useState<'accounts' | 'userPermissions' | 'permissions' | 'sessions' | 'flow'>('accounts')
+  const [tab, setTab] = useState<TabKey>('accounts')
 
   return (
     <div className="p-6 fade-in">
@@ -119,27 +119,113 @@ export default function SuperAdminClient() {
         <span className="text-sm font-bold text-[#FC934C] group-hover:translate-x-0.5 transition-transform flex-shrink-0">Open →</span>
       </Link>
 
-      {/* Tab switcher */}
-      <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit mb-6">
-        {[
-          { key: 'accounts',        label: '👑 Admins & Super Admins' },
-          { key: 'userPermissions', label: '👤 User Permission'     },
-          { key: 'permissions',     label: '🔐 Module Permissions'  },
-          { key: 'sessions',        label: '🟢 Active Sessions'     },
-          { key: 'flow',            label: '🗺️ Access Flow'        },
-        ].map(t => (
-          <button key={t.key} onClick={() => setTab(t.key as any)}
-            className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${tab === t.key ? 'bg-white shadow text-[#14254A]' : 'text-gray-500 hover:text-gray-700'}`}>
+      <TabBar tab={tab} onChange={setTab} />
+
+      <div role="tabpanel" id={`sa-panel-${tab}`} aria-labelledby={`sa-tab-${tab}`}>
+        {tab === 'accounts'        && <AdminAccountsTab />}
+        {tab === 'userPermissions' && <UserPermissionTab />}
+        {tab === 'permissions'     && <ModulePermissionsTab />}
+        {tab === 'sessions'        && <ActiveSessionsTab />}
+      </div>
+    </div>
+  )
+}
+
+/* ── Tab switcher ─────────────────────────────────────────────────────────
+ *
+ * The brand's "you are here" mark is already settled: the sidebar paints its
+ * active item with the yellow→orange gradient on navy. These tabs now say the
+ * same thing the same way — a navy track with the gradient chip riding in it —
+ * so a Super Admin's eye does not have to learn a second convention halfway
+ * down the page.
+ *
+ * The emoji went with it. 👑🔐🟢 arrive with their own colours baked in, which
+ * on a navy bar means three unrelated palettes fighting the brand one, drawn
+ * differently on every OS. Stroked glyphs inherit `currentColor`, so they turn
+ * navy inside the active chip and white/65 outside it without being told.
+ */
+
+const TAB_ICON = {
+  /* Crown — Admins & Super Admins */
+  accounts: <path d="M3 8.2l4.2 3.4L12 4.8l4.8 6.8L21 8.2l-1.7 10a1 1 0 0 1-1 .8H5.7a1 1 0 0 1-1-.8z" />,
+  /* Person — one row per human */
+  userPermissions: <><circle cx="12" cy="8" r="3.4" /><path d="M4.8 20a7.2 7.2 0 0 1 14.4 0" /></>,
+  /* Padlock — module grants */
+  permissions: <><rect x="4.5" y="10" width="15" height="10" rx="2" /><path d="M8 10V7.6a4 4 0 0 1 8 0V10" /></>,
+  /* Pulse — live sessions */
+  sessions: <path d="M3 12.5h4L9.6 6l4 13 2.4-6.5H21" />,
+} as const
+
+type TabKey = keyof typeof TAB_ICON
+
+const TABS: { key: TabKey; label: string }[] = [
+  { key: 'accounts',        label: 'Admins & Super Admins' },
+  { key: 'userPermissions', label: 'User Permission'       },
+  { key: 'permissions',     label: 'Module Permissions'    },
+  { key: 'sessions',        label: 'Active Sessions'       },
+]
+
+function TabBar({ tab, onChange }: { tab: TabKey; onChange: (k: TabKey) => void }) {
+  const listRef = useRef<HTMLDivElement>(null)
+
+  /* Arrow keys move between tabs, Home/End jump to the ends — what a tablist is
+     expected to do, and what a row of plain buttons does not do on its own.
+     Focus follows selection, so only the active tab is in the tab order. */
+  function onKeyDown(e: React.KeyboardEvent) {
+    const i = TABS.findIndex(t => t.key === tab)
+    const to =
+      e.key === 'ArrowRight' ? (i + 1) % TABS.length :
+      e.key === 'ArrowLeft'  ? (i - 1 + TABS.length) % TABS.length :
+      e.key === 'Home'       ? 0 :
+      e.key === 'End'        ? TABS.length - 1 : -1
+    if (to < 0) return
+    e.preventDefault()
+    onChange(TABS[to].key)
+    listRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[to]?.focus()
+  }
+
+  return (
+    <div
+      ref={listRef}
+      role="tablist"
+      aria-label="Super Admin sections"
+      onKeyDown={onKeyDown}
+      /* `max-w-full` + horizontal scroll rather than wrapping: four labels on a
+         narrow window should slide, not stack into a two-row block that pushes
+         the table down the page. */
+      className="flex gap-1 p-1 mb-6 w-fit max-w-full overflow-x-auto scrollbar-none
+                 rounded-2xl bg-[#14254A] dark:bg-[#1c2f58]
+                 border border-[#14254A] dark:border-white/10 shadow-card"
+    >
+      {TABS.map(t => {
+        const active = tab === t.key
+        return (
+          <button
+            key={t.key}
+            id={`sa-tab-${t.key}`}
+            role="tab"
+            aria-selected={active}
+            aria-controls={`sa-panel-${t.key}`}
+            tabIndex={active ? 0 : -1}
+            onClick={() => onChange(t.key)}
+            className={`flex-shrink-0 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl
+              text-xs font-semibold whitespace-nowrap transition-all
+              focus:outline-none focus-visible:ring-2 focus-visible:ring-[#FFC82B]
+              focus-visible:ring-offset-2 focus-visible:ring-offset-[#14254A]
+              dark:focus-visible:ring-offset-[#1c2f58]
+              ${active
+                ? 'bg-gradient-to-r from-[#FFC82B] to-[#FC934C] text-[#14254A] shadow-[0_2px_10px_rgba(252,147,76,0.35)]'
+                : 'text-white/65 hover:text-white hover:bg-white/10'}`}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"
+              className="flex-shrink-0" aria-hidden focusable="false">
+              {TAB_ICON[t.key]}
+            </svg>
             {t.label}
           </button>
-        ))}
-      </div>
-
-      {tab === 'accounts'        && <AdminAccountsTab />}
-      {tab === 'userPermissions' && <UserPermissionTab />}
-      {tab === 'permissions'     && <ModulePermissionsTab />}
-      {tab === 'flow'            && <AccessFlowTab />}
-      {tab === 'sessions'        && <ActiveSessionsTab />}
+        )
+      })}
     </div>
   )
 }
@@ -1196,167 +1282,6 @@ function ActiveSessionsTab() {
           </div>
         </Overlay>
       )}
-    </>
-  )
-}
-
-/* ── Tab: Access Flow — static reference diagram of the login/permission model ── */
-function DiagramCard({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-card p-5 mb-5">
-      <h3 className="font-bold text-[#14254A] text-sm mb-1">{title}</h3>
-      <p className="text-xs text-gray-500 mb-4">{description}</p>
-      <div className="overflow-x-auto">{children}</div>
-    </div>
-  )
-}
-
-function AccessFlowTab() {
-  return (
-    <>
-      <DiagramCard
-        title="1. Login Decision"
-        description="Every login attempt checks dcp_super_admin by email FIRST. A match always wins over the regular client path.">
-        <svg viewBox="0 0 700 370" style={{ minWidth: 640 }}>
-          <defs>
-            <marker id="af1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M2 1L8 5L2 9" fill="none" stroke="#9CA3AF" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </marker>
-          </defs>
-
-          <rect x="220" y="20" width="260" height="56" rx="8" fill="#F9FAFB" stroke="#D1D5DB" strokeWidth="1" />
-          <text x="350" y="38" textAnchor="middle" dominantBaseline="central" fontSize="14" fontWeight="700" fill="#111827">Login Attempt</text>
-          <text x="350" y="60" textAnchor="middle" dominantBaseline="central" fontSize="11" fill="#6B7280">username + password or OTP</text>
-
-          <line x1="350" y1="76" x2="350" y2="132" stroke="#9CA3AF" strokeWidth="1.5" markerEnd="url(#af1)" />
-
-          <rect x="220" y="136" width="260" height="56" rx="8" fill="#F9FAFB" stroke="#D1D5DB" strokeWidth="1" />
-          <text x="350" y="154" textAnchor="middle" dominantBaseline="central" fontSize="14" fontWeight="700" fill="#111827">Check dcp_super_admin</text>
-          <text x="350" y="176" textAnchor="middle" dominantBaseline="central" fontSize="11" fill="#6B7280">match by email?</text>
-
-          <text x="180" y="228" textAnchor="middle" fontSize="11" fill="#6B7280">no match</text>
-          <text x="475" y="228" textAnchor="middle" fontSize="11" fill="#6B7280">match found</text>
-
-          <line x1="260" y1="192" x2="130" y2="278" stroke="#9CA3AF" strokeWidth="1.5" markerEnd="url(#af1)" />
-          <line x1="440" y1="192" x2="350" y2="278" stroke="#9CA3AF" strokeWidth="1.5" markerEnd="url(#af1)" />
-          <line x1="440" y1="192" x2="570" y2="278" stroke="#9CA3AF" strokeWidth="1.5" markerEnd="url(#af1)" />
-
-          <rect x="40" y="280" width="180" height="56" rx="8" fill="#F3F4F6" stroke="#9CA3AF" strokeWidth="1" />
-          <text x="130" y="298" textAnchor="middle" dominantBaseline="central" fontSize="14" fontWeight="700" fill="#374151">Client</text>
-          <text x="130" y="320" textAnchor="middle" dominantBaseline="central" fontSize="11" fill="#6B7280">dcp_user.role = 0</text>
-
-          <rect x="260" y="280" width="180" height="56" rx="8" fill="#EFF6FF" stroke="#0078D4" strokeWidth="1" />
-          <text x="350" y="298" textAnchor="middle" dominantBaseline="central" fontSize="14" fontWeight="700" fill="#0078D4">Admin</text>
-          <text x="350" y="320" textAnchor="middle" dominantBaseline="central" fontSize="11" fill="#0078D4">role = 'Admin'</text>
-
-          <rect x="480" y="280" width="180" height="56" rx="8" fill="#F5F3FF" stroke="#7C3AED" strokeWidth="1" />
-          <text x="570" y="298" textAnchor="middle" dominantBaseline="central" fontSize="14" fontWeight="700" fill="#7C3AED">Super Admin</text>
-          <text x="570" y="320" textAnchor="middle" dominantBaseline="central" fontSize="11" fill="#7C3AED">role = 'SuperAdmin'</text>
-
-          <text x="350" y="356" textAnchor="middle" fontSize="11" fill="#9CA3AF">dcp_super_admin is checked first — it always wins over the regular client path</text>
-        </svg>
-      </DiagramCard>
-
-      <DiagramCard
-        title="2. Authentication Method"
-        description="Admin / Super Admin can use EITHER password or emailed OTP — either one alone completes login. Clients use password, then OTP as a second factor when their login type requires it.">
-        <svg viewBox="0 0 700 340" style={{ minWidth: 640 }}>
-          <defs>
-            <marker id="af2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M2 1L8 5L2 9" fill="none" stroke="#9CA3AF" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </marker>
-          </defs>
-
-          <line x1="345" y1="20" x2="345" y2="320" stroke="#E5E7EB" strokeWidth="1" strokeDasharray="4 4" />
-
-          {/* Left: Admin / Super Admin */}
-          <text x="170" y="34" textAnchor="middle" fontSize="13" fontWeight="700" fill="#111827">Admin / Super Admin</text>
-          <text x="170" y="52" textAnchor="middle" fontSize="11" fill="#6B7280">either method is enough</text>
-
-          <rect x="40" y="76" width="120" height="56" rx="8" fill="#EFF6FF" stroke="#0078D4" strokeWidth="1" />
-          <text x="100" y="96" textAnchor="middle" dominantBaseline="central" fontSize="13" fontWeight="700" fill="#0078D4">Password</text>
-          <text x="100" y="116" textAnchor="middle" dominantBaseline="central" fontSize="10" fill="#0078D4">vs password_hash</text>
-
-          <rect x="180" y="76" width="120" height="56" rx="8" fill="#ECFDF5" stroke="#10B981" strokeWidth="1" />
-          <text x="240" y="96" textAnchor="middle" dominantBaseline="central" fontSize="13" fontWeight="700" fill="#059669">Email OTP</text>
-          <text x="240" y="116" textAnchor="middle" dominantBaseline="central" fontSize="10" fill="#059669">vs twofa_code</text>
-
-          <text x="170" y="150" textAnchor="middle" fontSize="11" fill="#9CA3AF">OR</text>
-
-          <line x1="100" y1="132" x2="160" y2="188" stroke="#9CA3AF" strokeWidth="1.5" markerEnd="url(#af2)" />
-          <line x1="240" y1="132" x2="180" y2="188" stroke="#9CA3AF" strokeWidth="1.5" markerEnd="url(#af2)" />
-
-          <rect x="90" y="192" width="160" height="56" rx="8" fill="#F5F3FF" stroke="#7C3AED" strokeWidth="1" />
-          <text x="170" y="210" textAnchor="middle" dominantBaseline="central" fontSize="13" fontWeight="700" fill="#7C3AED">Session Issued</text>
-          <text x="170" y="230" textAnchor="middle" dominantBaseline="central" fontSize="10" fill="#7C3AED">JWT · role = Admin/SuperAdmin</text>
-
-          {/* Right: Client */}
-          <text x="520" y="34" textAnchor="middle" fontSize="13" fontWeight="700" fill="#111827">Client</text>
-          <text x="520" y="52" textAnchor="middle" fontSize="11" fill="#6B7280">sequential — both required</text>
-
-          <rect x="440" y="76" width="160" height="44" rx="8" fill="#EFF6FF" stroke="#0078D4" strokeWidth="1" />
-          <text x="520" y="98" textAnchor="middle" dominantBaseline="central" fontSize="13" fontWeight="700" fill="#0078D4">Password</text>
-
-          <line x1="520" y1="120" x2="520" y2="156" stroke="#9CA3AF" strokeWidth="1.5" markerEnd="url(#af2)" />
-
-          <rect x="440" y="160" width="160" height="52" rx="8" fill="#ECFDF5" stroke="#10B981" strokeWidth="1" />
-          <text x="520" y="178" textAnchor="middle" dominantBaseline="central" fontSize="13" fontWeight="700" fill="#059669">Email OTP</text>
-          <text x="520" y="196" textAnchor="middle" dominantBaseline="central" fontSize="10" fill="#059669">if login type requires</text>
-
-          <line x1="520" y1="212" x2="520" y2="240" stroke="#9CA3AF" strokeWidth="1.5" markerEnd="url(#af2)" />
-
-          <rect x="440" y="244" width="160" height="56" rx="8" fill="#F3F4F6" stroke="#9CA3AF" strokeWidth="1" />
-          <text x="520" y="262" textAnchor="middle" dominantBaseline="central" fontSize="13" fontWeight="700" fill="#374151">Session Issued</text>
-          <text x="520" y="282" textAnchor="middle" dominantBaseline="central" fontSize="10" fill="#6B7280">JWT · role = Client</text>
-        </svg>
-      </DiagramCard>
-
-      <DiagramCard
-        title="3. Module Access Unlocked"
-        description="Same identity (login_username), different scope. Configuration access is keyed to dcp_super_admin.id — the same id used for claims.LoginID — so it works whether the person has one company or many.">
-        <svg viewBox="0 0 730 380" style={{ minWidth: 640 }}>
-          <defs>
-            <marker id="af3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M2 1L8 5L2 9" fill="none" stroke="#9CA3AF" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </marker>
-          </defs>
-
-          <rect x="20" y="158" width="130" height="44" rx="8" fill="#F9FAFB" stroke="#D1D5DB" strokeWidth="1" />
-          <text x="85" y="180" textAnchor="middle" dominantBaseline="central" fontSize="13" fontWeight="700" fill="#111827">Person</text>
-          <line x1="150" y1="180" x2="178" y2="180" stroke="#9CA3AF" strokeWidth="1.5" markerEnd="url(#af3)" />
-
-          <rect x="180" y="40" width="530" height="300" rx="20" fill="#FAFAFA" stroke="#E5E7EB" strokeWidth="1" />
-          <text x="200" y="68" fontSize="14" fontWeight="700" fill="#111827">Access Unlocked, By Role</text>
-          <text x="200" y="86" fontSize="11" fill="#9CA3AF">Same identity, different scope</text>
-
-          <rect x="200" y="105" width="150" height="215" rx="12" fill="#F3F4F6" stroke="#9CA3AF" strokeWidth="1" />
-          <text x="275" y="135" textAnchor="middle" dominantBaseline="central" fontSize="14" fontWeight="700" fill="#374151">Client</text>
-          <text x="275" y="159" textAnchor="middle" dominantBaseline="central" fontSize="11" fill="#6B7280">Own dashboards</text>
-          <text x="275" y="183" textAnchor="middle" dominantBaseline="central" fontSize="11" fill="#6B7280">No config access</text>
-
-          <rect x="370" y="105" width="150" height="215" rx="12" fill="#EFF6FF" stroke="#0078D4" strokeWidth="1" />
-          <text x="445" y="135" textAnchor="middle" dominantBaseline="central" fontSize="14" fontWeight="700" fill="#0078D4">Admin</text>
-          <text x="445" y="159" textAnchor="middle" dominantBaseline="central" fontSize="11" fill="#0078D4">Dashboard access</text>
-          <text x="445" y="183" textAnchor="middle" dominantBaseline="central" fontSize="11" fill="#0078D4">Config: partial</text>
-          <text x="445" y="207" textAnchor="middle" dominantBaseline="central" fontSize="10" fill="#0078D4" opacity="0.75">(granted subset)</text>
-
-          <rect x="540" y="105" width="150" height="215" rx="12" fill="#F5F3FF" stroke="#7C3AED" strokeWidth="1" />
-          <text x="615" y="135" textAnchor="middle" dominantBaseline="central" fontSize="14" fontWeight="700" fill="#7C3AED">Super Admin</text>
-          <text x="615" y="159" textAnchor="middle" dominantBaseline="central" fontSize="11" fill="#7C3AED">All dashboards</text>
-          <text x="615" y="183" textAnchor="middle" dominantBaseline="central" fontSize="11" fill="#7C3AED">All config modules</text>
-          <text x="615" y="207" textAnchor="middle" dominantBaseline="central" fontSize="10" fill="#7C3AED" opacity="0.75">automatic, no grants</text>
-          <text x="615" y="231" textAnchor="middle" dominantBaseline="central" fontSize="11" fill="#7C3AED">Manages all admins</text>
-        </svg>
-      </DiagramCard>
-
-      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3">
-        <span className="text-lg">ℹ️</span>
-        <p className="text-xs text-amber-800">
-          The only place any of this is edited is <strong>Manage Access</strong> (from the User Permission tab or Registrations) —
-          it sets the role, which creates/updates/deletes the <code>dcp_super_admin</code> row, and — once elevated — the
-          Configuration module checkboxes right below it.
-        </p>
-      </div>
     </>
   )
 }

@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { usePasswordPolicy, checkPassword, PasswordRules } from '@/lib/passwordPolicy'
 import { createPortal } from 'react-dom'
 
 interface Status {
@@ -53,9 +54,13 @@ export default function PasswordExpiryBanner() {
 
   useEffect(() => { load() }, [load])
 
+  const policy = usePasswordPolicy()
+
   async function submit() {
     setMsg('')
-    if (form.newPass.length < 8) { setMsg('New password must be at least 8 characters.'); return }
+    // The server decides; this only saves a round trip and words it the same way.
+    const bad = checkPassword(form.newPass, policy)
+    if (bad) { setMsg(bad); return }
     if (form.newPass !== form.confirm) { setMsg('The two new passwords do not match.'); return }
     if (form.newPass === form.current) { setMsg('The new password must be different from the current one.'); return }
 
@@ -155,7 +160,7 @@ export default function PasswordExpiryBanner() {
                     </label>
                     <input type="password" autoComplete="new-password" className={input}
                       value={form.newPass} onChange={e => setForm(f => ({ ...f, newPass: e.target.value }))} />
-                    <p className="text-[11px] text-gray-400 mt-1">At least 8 characters.</p>
+                    <PasswordRules policy={policy} value={form.newPass} />
                   </div>
                   <div>
                     <label className="block text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-1">

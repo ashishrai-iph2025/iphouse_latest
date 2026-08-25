@@ -13,8 +13,8 @@ import (
 	"github.com/ip-house/iphouse-api/handlers"
 	"github.com/ip-house/iphouse-api/handlers/admin"
 	"github.com/ip-house/iphouse-api/middleware"
-	"github.com/ip-house/iphouse-api/notify"
 	"github.com/ip-house/iphouse-api/reportsapi"
+	"github.com/ip-house/iphouse-api/schema"
 	"github.com/ip-house/iphouse-api/store"
 )
 
@@ -31,13 +31,31 @@ func main() {
 	if err := db.Init(); err != nil {
 		log.Fatalf("[main] DB connect failed: %v", err)
 	}
-	db.Migrate()
-	// Admin notification tables — created up front so the first bell read
-	// never races the first event write.
-	notify.EnsureSchema()
-	// The client-facing Reports module and its portal→warehouse client mapping.
-	// Created up front so an admin can grant the module and map a client without
-	// having to open the report first to bring the tables into existence.
+	/* Versioned schema first, and the process does not start without it.
+
+	   Every migration tool behaves this way for the same reason: a portal that
+	   boots on a schema it was not built for does not fail, it MISBEHAVES — one
+	   feature at a time, quietly, which is strictly harder to diagnose than a
+	   refusal at boot with the failing statement in the log. This codebase has
+	   the scars: dcp_settings and dcp_user_login.last_seen_at were both read by
+	   code and created by nothing, and both survived that way for months.
+
+	   See go-server/schema, and MIGRATION.md for how the two lists relate. */
+	if err := schema.Run(); err != nil {
+		log.Fatalf("[main] %v", err)
+	}
+	/* And every schema function the portal already had, in a declared order,
+	   once each, recorded — instead of nineteen sync.Once calls firing on
+	   whichever request happened to touch their feature first. db.Migrate is
+	   step 100; see schema_manifest.go. */
+	schema.RunSteps(schemaSteps())
+
+	/* The Reports module GRANT, which is not schema.
+
+	   EnsureReportsAccess creates the module's tables — steps 110 and 111 above
+	   do that now — and then makes sure the module row exists and is granted, so
+	   it stays here: it is data the portal needs present, re-asserted on every
+	   boot rather than recorded as done once. */
 	handlers.EnsureReportsAccess()
 
 	/* The reports API credentials come from the database first and the
@@ -45,6 +63,11 @@ func main() {
 	   here, before anything serves, so no request can be made with the
 	   environment while the stored row is waiting to be read. */
 	reportsapi.SetSource(admin.ReportsAPISource)
+
+	/* Every authenticated request marks its session alive, which is what the
+	   Active Sessions panel reads. Joined here because the middleware cannot
+	   import handlers — see middleware.OnSeen. */
+	middleware.OnSeen(handlers.TouchLastSeen)
 
 	/* Finished reports kept in Redis, and the background pass that keeps them
 	   fresh. Optional: with no Redis configured the cache reports itself off and
@@ -72,8 +95,6 @@ func main() {
 	// War Room dataset store (Redis-backed, in-memory fallback).
 	handlers.SetWarRoomStore(store.New(config.C.RedisAddr))
 
-	// Background scheduler for automatic database backups.
-	handlers.StartBackupScheduler()
 	// Watches each client's MarkScan download queue and notifies when an
 	// extraction flips from pending to ready.
 	handlers.StartDownloadWatcher()
@@ -102,6 +123,9 @@ func main() {
 	mux.Handle("POST /api/auth/check-email", rl(handlers.CheckEmail))
 	mux.Handle("POST /api/auth/forgot-password", rl(handlers.ForgotPassword))
 	mux.Handle("POST /api/auth/reset-password", rl(handlers.ResetPassword))
+	// Public: the reset and forgot-password screens are reached by people who
+	// cannot sign in, and they are the ones being asked for a new password.
+	mux.Handle("GET /api/password-policy", rl(handlers.PasswordPolicyPublic))
 	mux.Handle("POST /api/auth/verify-reset-otp", rl(handlers.VerifyResetOTP))
 	mux.Handle("POST /api/auth/register", rl(handlers.Register))
 	// REMOVED: /api/test-db endpoint (information disclosure risk).
@@ -353,6 +377,14 @@ func main() {
 	mux.Handle("PUT /api/admin/report-layout", cfg("report-config", handlers.ReportLayoutSave))
 	mux.Handle("DELETE /api/admin/report-layout", cfg("report-config", handlers.ReportLayoutReset))
 	mux.Handle("GET /api/admin/report-layout/clients", cfg("report-config", handlers.ReportLayoutClients))
+	/* The sports reporting period: one window, governing every sports report.
+	   Same grant as the rest of Report Configuration — it decides what a report
+	   covers, which is what that grant is for, and it names no warehouse table
+	   so it needs nothing stronger. See sportsperiod.go. */
+	mux.Handle("GET /api/admin/report-sports-period", cfg("report-config", handlers.SportsPeriodGet))
+	mux.Handle("PUT /api/admin/report-sports-period", cfg("report-config", handlers.SportsPeriodSave))
+	mux.Handle("DELETE /api/admin/report-sports-period", cfg("report-config", handlers.SportsPeriodDelete))
+
 	mux.Handle("GET /api/admin/report-access", cfg("report-config", handlers.ReportAccessList))
 	mux.Handle("PUT /api/admin/report-access", cfg("report-config", handlers.ReportAccessSave))
 
@@ -399,10 +431,12 @@ func main() {
 	mux.Handle("GET /api/admin/security-policy/locked", saAuth(handlers.SecurityPolicyLocked))
 	mux.Handle("POST /api/admin/security-policy/unlock", saAuth(handlers.SecurityPolicyUnlock))
 	mux.Handle("POST /api/admin/security-policy/send-warnings", saAuth(handlers.SecurityPolicySendWarnings))
-	mux.Handle("POST /api/admin/backup/run", saAuth(handlers.RunBackup))
+	/* Listing only. Taking a backup — on demand or on a schedule — was removed
+	   on request, so the endpoints that could start one are gone rather than
+	   merely unlinked from the page: an endpoint with no button is still an
+	   endpoint, and this one dumps whichever database the process booted
+	   against. The page still shows what is already in S3. */
 	mux.Handle("GET /api/admin/backup/list", saAuth(handlers.ListBackups))
-	mux.Handle("GET /api/admin/backup/schedule", saAuth(handlers.BackupSchedule))
-	mux.Handle("POST /api/admin/backup/schedule", saAuth(handlers.BackupSchedule))
 	/* Where the portal's reports come from. The base URL is editable by anyone
 	   holding the report-config Configuration grant; REVEALING the key is Super
 	   Admin only, because reading a credential back is a different act from

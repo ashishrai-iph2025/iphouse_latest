@@ -33,8 +33,17 @@ export default function SideNav() {
   // apiAccess claim is frozen at login, so it's only the fallback.
   const hasRealApiToken = liveApiAccess ?? !!(user?.apiAccess)
 
+  /* Dashboard is exempt from the TOKEN check and from nothing else.
+
+     It used to `return true` outright, from when it was a floor every login
+     had. It is an ordinary grant now, so it has to be looked up like the rest —
+     otherwise unticking the module leaves the tab sitting in this layout while
+     it correctly disappears from the horizontal one.
+
+     The token exemption stays: the dashboard embeds PowerBI and never calls
+     Markscan, so a missing Markscan token is no reason to hide it. */
   function isNavAllowed(item: NavItem): boolean {
-    if (item.href === '/dashboard') return true
+    if (item.href === '/dashboard') return isItemAllowed(item, allowedModules)
     if (!hasRealApiToken && !isApiIndependentItem(item)) return false
     return isItemAllowed(item, allowedModules)
   }

@@ -8,7 +8,8 @@
 //
 // allowedModuleNames === null means "not known yet" (first-ever load with no
 // cache, fetch still in flight). Consumers must FAIL CLOSED on null — render
-// only the always-allowed items (Dashboard) — never the full nav.
+// nothing rather than the full nav. There are no always-allowed items: Dashboard
+// used to be one and is now an ordinary grant like every other module.
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { useSession } from '@/lib/auth-client'

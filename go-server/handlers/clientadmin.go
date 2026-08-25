@@ -247,8 +247,15 @@ func clientAdminUsersUpdate(w http.ResponseWriter, r *http.Request) {
 		active = 1
 	}
 	wasActive := flagOn(target["is_active"])
+	/* Enabling clears `deleted` for the same reason /admin/users does: the flag
+	   means "not a live assignment" and every auth query depends on it implying
+	   is_active = 0. Disabling leaves it untouched. */
+	stmt := "UPDATE dcp_user_login SET is_active = ?, updated_at = UTC_TIMESTAMP() WHERE loginId = ? AND userId = ?"
+	if active == 1 {
+		stmt = "UPDATE dcp_user_login SET is_active = ?, deleted = 0, updated_at = UTC_TIMESTAMP() WHERE loginId = ? AND userId = ?"
+	}
 	if _, _, err := db.Exec(
-		"UPDATE dcp_user_login SET is_active = ?, updated_at = UTC_TIMESTAMP() WHERE loginId = ? AND userId = ?",
+		stmt,
 		active, body.LoginID, claims.UserID); err != nil {
 		log.Printf("[client-admin] update loginId=%d failed: %v", body.LoginID, err)
 		logClientAdmin(r, actClientAdminDenied, map[string]any{

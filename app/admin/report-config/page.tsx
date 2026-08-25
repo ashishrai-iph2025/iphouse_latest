@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import BackToConfiguration from '@/components/admin/BackToConfiguration'
 import ReportsApiConnectionPanel from '@/components/admin/ReportsApiConnectionPanel'
 import ReportCachePanel from '@/components/admin/ReportCachePanel'
+import SportsPeriodPanel from '@/components/admin/SportsPeriodPanel'
 import AdminPageHeader from '@/components/admin/AdminPageHeader'
 import SearchableSelect from '@/components/ui/SearchableSelect'
 import MultiSearchableSelect from '@/components/ui/MultiSearchableSelect'
@@ -24,7 +25,7 @@ import MultiSearchableSelect from '@/components/ui/MultiSearchableSelect'
 const NAVY   = '#14254A'
 const ORANGE = '#FC934C'
 
-type Tab = 'warehouse' | 'sources' | 'layout' | 'inventory' | 'access' | 'clients' | 'connection' | 'cache'
+type Tab = 'warehouse' | 'sources' | 'layout' | 'inventory' | 'access' | 'clients' | 'sports' | 'connection' | 'cache'
 
 /** One portal client and the warehouse client it reads. */
 interface ClientMapRow {
@@ -66,6 +67,15 @@ interface LayoutPanel {
   param?: string
   span: Span
   hidden: boolean
+  /** The admin's rename. Empty keeps the panel's own name (`name` above). */
+  title: string
+  /** Shown behind an ⓘ icon on the report card. Empty means the built-in note
+      below is used instead. */
+  desc: string
+  /** The built-in note this panel carries when nobody has written one. Offered
+      as the editor's placeholder, so clearing the box visibly means "back to
+      this" rather than leaving a field blank to no stated effect. */
+  defaultDesc: string
   /** Filters only: whether the pane leaves this slicer out before anyone
       configures it, so an overridden one can be marked as such. */
   defaultHidden?: boolean
@@ -74,6 +84,14 @@ interface LayoutPanel {
       registry chose for that dimension. */
   defaultViz?: string
   defaultVizLabel?: string
+  /** Top-N breakdowns only: how many rows the panel keeps. `rowLimit` is the
+      admin's override and 0 means unset; `defaultRowLimit` is the registry's own
+      number, kept beside it so the field can say what clearing it goes back to.
+      Both absent on a panel that is not a top-N — a closed list such as a
+      per-day trend or a TAT band must never be cut, so it is offered no
+      control. */
+  rowLimit?: number
+  defaultRowLimit?: number
   /** A section rule spans the page by definition; a half-width one is a label
       floating beside a chart. A slicer sits in a one-column rail, so it has no
       width either. */
@@ -430,6 +448,10 @@ export default function ReportConfigPage() {
   // Drag state for the preview: what is being carried, and what it is over.
   const [dragKey, setDragKey] = useState('')
   const [overKey, setOverKey] = useState('')
+  /* Which panel's rename/description editor is open. One at a time: the two
+     inputs take a row of their own, and a list with five open editors is a form
+     pretending to be a list. */
+  const [editKey, setEditKey] = useState('')
 
   const flash = (msg: string, ok = true) => {
     setToast({ msg, ok })
@@ -558,9 +580,14 @@ export default function ReportConfigPage() {
         label: p.label, viz: p.viz, metric: p.metric, param: p.param,
         span: (p.span || p.defaultSpan || 'half') as Span,
         hidden: !!p.hidden,
+        title: String(p.customLabel || ''),
+        desc: String(p.desc || ''),
+        defaultDesc: String(p.defaultDesc || ''),
         defaultHidden: p.defaultHidden,
         defaultSpan: (p.defaultSpan || 'half') as Span,
         defaultViz: p.defaultViz, defaultVizLabel: p.defaultVizLabel,
+        rowLimit: typeof p.rowLimit === 'number' ? p.rowLimit : undefined,
+        defaultRowLimit: typeof p.defaultRowLimit === 'number' ? p.defaultRowLimit : undefined,
         fixedSpan: !!p.fixedSpan,
       }))
       setVizChoices(d.vizChoices || [])
@@ -703,8 +730,27 @@ export default function ReportConfigPage() {
      which is why "default" is a value in the list rather than a reset button. */
   const setViz = (key: string, viz: string) =>
     setLayout(cur => cur.map(p => p.key === key ? { ...p, viz } : p))
+  /* How many rows a top-N panel keeps.
+
+     Held as a NUMBER OR ZERO rather than as the raw text: an empty box means
+     "the registry's own number", which is the same way the chart picker and the
+     rename go back to their defaults. Anything unparseable is treated as empty
+     for the same reason — a half-typed value must not be read as a limit of
+     nothing. The ceiling matches the server's, which clamps rather than
+     refuses, so a pasted 500 saves as 100 instead of bouncing the layout. */
+  const setRowLimit = (key: string, raw: string) => {
+    const n = Math.floor(Number(raw))
+    const next = !raw.trim() || !isFinite(n) || n < 1 ? 0 : Math.min(n, 100)
+    setLayout(cur => cur.map(p => p.key === key ? { ...p, rowLimit: next } : p))
+  }
   const toggleHidden = (key: string) =>
     setLayout(cur => cur.map(p => p.key === key ? { ...p, hidden: !p.hidden } : p))
+  /* The rename and the ⓘ description. Clearing either puts the panel back on
+     its own name / no icon, so there is no separate reset for them. */
+  const setTitle = (key: string, title: string) =>
+    setLayout(cur => cur.map(p => p.key === key ? { ...p, title } : p))
+  const setDesc = (key: string, desc: string) =>
+    setLayout(cur => cur.map(p => p.key === key ? { ...p, desc } : p))
 
   /* Two lists in one array: the grid the report draws, and the rail beside it.
      They are edited on the same screen and saved in the same call — one layout,
@@ -713,9 +759,15 @@ export default function ReportConfigPage() {
   const gridPanels = useMemo(() => layout.filter(p => !isPaneFilter(p)), [layout])
   const panePanels = useMemo(() => layout.filter(isPaneFilter), [layout])
 
+  /* Every field the save sends is compared here, `rowLimit` included. A field
+     the editor can change but this cannot see is a change the Save button stays
+     disabled for — the edit is visible on screen and unsaveable, with nothing
+     to say why. */
+  const layoutFingerprint = (ps: LayoutPanel[]) =>
+    JSON.stringify(ps.map(p => [p.key, p.span, p.viz ?? '', p.hidden, p.title, p.desc, p.rowLimit ?? 0]))
+
   const layoutDirty = useMemo(
-    () => JSON.stringify(layout.map(p => [p.key, p.span, p.viz ?? '', p.hidden])) !==
-          JSON.stringify(layoutSaved.map(p => [p.key, p.span, p.viz ?? '', p.hidden])),
+    () => layoutFingerprint(layout) !== layoutFingerprint(layoutSaved),
     [layout, layoutSaved])
 
   async function saveLayout() {
@@ -732,6 +784,10 @@ export default function ReportConfigPage() {
             // Only a breakdown has a chart type; sending one for a tile would
             // store a row the server ignores.
             viz: p.kind === 'dim' ? (p.viz ?? '') : '',
+            title: p.title.trim(), desc: p.desc.trim(),
+            // 0 means "the registry's own number". Only sent for a panel that
+            // actually has a top-N to set.
+            rowLimit: p.defaultRowLimit ? (p.rowLimit || 0) : 0,
           })),
         }),
       })
@@ -1003,8 +1059,16 @@ export default function ReportConfigPage() {
     const pane = isPaneFilter(p)
     const atTop = i <= 0 || isPaneFilter(layout[i - 1]) !== pane
     const atEnd = i < 0 || i === layout.length - 1 || isPaneFilter(layout[i + 1]) !== pane
+    /* Everything but a section rule can be renamed and described — slicers
+       included, since the rail is where a reader most often needs telling what
+       a control narrows. A rule already IS a title and carries its own
+       subtitle, so it has nothing to add. */
+    const canAnnotate = p.kind !== 'heading'
+    const editing = editKey === p.key
+    const annotated = p.title.trim() !== '' || p.desc.trim() !== ''
     return (
-      <div key={p.key}
+      <div key={p.key}>
+      <div
         draggable
         onDragStart={e => {
           setDragKey(p.key)
@@ -1039,8 +1103,24 @@ export default function ReportConfigPage() {
 
         <span className="min-w-0 flex-1">
           <span className="block text-[12.5px] font-semibold text-[#14254A] dark:text-white truncate"
-            title={p.name}>
-            {p.name}
+            title={p.title ? `Renamed — its own name is “${p.name}”` : p.name}>
+            {p.title || p.name}
+            {/* Amber where somebody wrote the note, grey where it is the
+                built-in one — so "described by hand" is visible at a glance
+                without opening every row. */}
+            {(p.desc.trim() || p.defaultDesc.trim()) !== '' && (
+              <span className={`ml-1.5 align-middle inline-grid place-items-center ${
+                p.desc.trim() !== ''
+                  ? 'text-amber-500 dark:text-amber-300'
+                  : 'text-gray-300 dark:text-white/25'}`}
+                title={p.desc.trim() || p.defaultDesc} aria-label="Has a description">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth={2} strokeLinecap="round">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 11v5" /><path d="M12 7.5h.01" />
+                </svg>
+              </span>
+            )}
           </span>
           {p.kind === 'dim' ? (
             /* The chart a breakdown OPENS on. It is a default, not a lock — the
@@ -1058,6 +1138,33 @@ export default function ReportConfigPage() {
                   placeholder={`Default · ${p.defaultVizLabel ?? p.defaultViz ?? '—'}`}
                   emptyLabel={`Default · ${p.defaultVizLabel ?? p.defaultViz ?? '—'}`} />
               </span>
+
+              {/* How many rows the panel keeps.
+
+                  Only on a panel the registry already cuts. A closed list — a
+                  per-day trend, the TAT bands, the search engines — sends back
+                  no defaultRowLimit, and a top-N over one of those would not
+                  shorten a long tail, it would drop days off a calendar.
+
+                  Empty means the default rather than zero, matching the Chart
+                  control beside it: every field in this row goes back to the
+                  registry by being cleared. */}
+              {!!p.defaultRowLimit && (
+                <>
+                  <span className="text-[9px] font-bold uppercase tracking-widest text-gray-400 flex-shrink-0 ml-1">
+                    Rows
+                  </span>
+                  <input
+                    type="number" min={1} max={100} inputMode="numeric"
+                    value={p.rowLimit ? String(p.rowLimit) : ''}
+                    onChange={e => setRowLimit(p.key, e.target.value)}
+                    placeholder={`Top ${p.defaultRowLimit}`}
+                    title={`How many rows this panel keeps. Empty is the default, Top ${p.defaultRowLimit}.`}
+                    className="w-[74px] px-2 py-1 text-[11px] rounded-lg border border-gray-200
+                      dark:border-white/15 dark:bg-[#14254A] dark:text-white tabular-nums
+                      focus:outline-none focus:ring-2 focus:ring-[#14254A]/20" />
+                </>
+              )}
             </span>
           ) : pane ? (
             /* What the slicer FILTERS is already its name, so the second line
@@ -1100,6 +1207,27 @@ export default function ReportConfigPage() {
         </span>
         )}
 
+        {/* A pencil: rename the card and give it an ⓘ description, both shown
+            on the report exactly as written here. Amber once either is set, so
+            an annotated panel is visible in the list without opening it. */}
+        {canAnnotate && (
+          <button onClick={() => setEditKey(cur => cur === p.key ? '' : p.key)}
+            title={annotated ? 'Edit the custom title / description' : 'Rename or add a description'}
+            aria-expanded={editing}
+            className={`w-8 h-8 grid place-items-center rounded-lg border transition-colors flex-shrink-0 ${
+              editing
+                ? 'border-[#FC934C] text-[#FC934C] bg-[#FC934C]/10'
+                : annotated
+                  ? 'border-amber-300 text-amber-600 hover:bg-amber-50 dark:border-amber-400/30 dark:text-amber-300'
+                  : 'border-gray-200 text-gray-300 hover:text-gray-500 dark:border-white/15 dark:text-white/30'
+            }`}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+            </svg>
+          </button>
+        )}
+
         {/* An eye, not a word: this is a switch, and a button reading "Visible"
             looks like a statement of fact rather than something to press. */}
         <button onClick={() => toggleHidden(p.key)}
@@ -1133,6 +1261,47 @@ export default function ReportConfigPage() {
               dark:hover:text-white dark:hover:bg-white/10">▼</button>
         </span>
       </div>
+
+      {/* The rename / description editor. Local until Save like every other
+          layout edit — the report keeps its current titles until the whole
+          layout is written. */}
+      {editing && (
+        <div className="px-3 pb-3 pt-1 bg-[#FC934C]/[0.04] dark:bg-white/[0.02] space-y-2">
+          <label className="block">
+            <span className="text-[9px] font-bold uppercase tracking-widest text-gray-400 block mb-1">
+              Custom title
+            </span>
+            <input type="text" value={p.title} maxLength={191}
+              onChange={e => setTitle(p.key, e.target.value)}
+              placeholder={p.name}
+              className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-white/15
+                bg-white dark:bg-white/[0.06] text-[12px] text-[#14254A] dark:text-white
+                placeholder:text-gray-300 dark:placeholder:text-white/25
+                focus:outline-none focus:border-[#FC934C]" />
+            <span className="text-[10px] text-gray-400 block mt-0.5">
+              Shown as the card&apos;s title on the report. Leave empty to keep &ldquo;{p.name}&rdquo;.
+            </span>
+          </label>
+          <label className="block">
+            <span className="text-[9px] font-bold uppercase tracking-widest text-gray-400 block mb-1">
+              Description
+            </span>
+            <textarea value={p.desc} maxLength={1000} rows={3}
+              onChange={e => setDesc(p.key, e.target.value)}
+              placeholder={p.defaultDesc || 'What this figure means, how it is counted, or what to read it against…'}
+              className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-white/15
+                bg-white dark:bg-white/[0.06] text-[12px] text-[#14254A] dark:text-white resize-y
+                placeholder:text-gray-300 dark:placeholder:text-white/25
+                focus:outline-none focus:border-[#FC934C]" />
+            <span className="text-[10px] text-gray-400 block mt-0.5">
+              {p.defaultDesc
+                ? 'Appears behind an ⓘ on the card. Leave empty to keep the built-in note shown above in grey.'
+                : 'Appears behind an ⓘ on the card. Leave empty for no icon.'}
+            </span>
+          </label>
+        </div>
+      )}
+      </div>
     )
   }
 
@@ -1157,6 +1326,10 @@ export default function ReportConfigPage() {
       : []),
     { key: 'clients',   label: 'Client mapping',  hint: 'Which reporting client each portal client reads' },
     { key: 'access',    label: 'User access',      hint: 'Which logins may see which platform' },
+    /* Beside the tabs that decide what a report CONTAINS, because that is what
+       it decides: not which rows exist, but which of them a sports report is
+       allowed to reach. */
+    { key: 'sports',    label: 'Sports period',    hint: 'The date window every sports report is held inside' },
     // Last, because it is the thing you set once and the others are the daily
     // work — but on this screen rather than a separate page, since "which table
     // feeds this report" and "which service serves those tables" are one question.
@@ -1187,18 +1360,34 @@ export default function ReportConfigPage() {
         </div>
       )}
 
-      {/* Tabs */}
+      {/* ── Tabs ──────────────────────────────────────────────────────────
+          The brand's own colours, and the SAME treatment the reports rail uses
+          for the platform it is on: an orange gradient pill, white text, and a
+          soft orange cast under it. Borrowed rather than invented because these
+          two controls do the same job — they are the primary switch for the
+          screen they sit on — and this one was a white pill on a grey track,
+          which is the product's minor filter toggle (All / Active / Inactive).
+          A page's main navigation and a list's status filter should not look
+          alike.
+
+          The track stays navy at 6%: it is what makes the pill read as sitting
+          IN a group of nine rather than floating on the page. */}
       <div className="flex gap-1 p-1 rounded-xl w-fit mb-4 bg-[#14254A]/[0.06] dark:bg-white/[0.06]">
-        {TABS.map(t => (
-          <button key={t.key} onClick={() => setTab(t.key)} title={t.hint}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${
-              tab === t.key
-                ? 'bg-white shadow-sm text-[#14254A] dark:bg-[#14254A] dark:text-white'
-                : 'text-[#14254A]/50 hover:text-[#14254A] dark:text-white/50 dark:hover:text-white'
-            }`}>
-            {t.label}
-          </button>
-        ))}
+        {TABS.map(t => {
+          const on = tab === t.key
+          return (
+            <button key={t.key} onClick={() => setTab(t.key)} title={t.hint}
+              aria-current={on ? 'page' : undefined}
+              className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+                on
+                  ? 'text-white shadow-[0_4px_12px_-4px_rgba(252,147,76,0.7)]'
+                  : 'text-[#14254A]/65 hover:bg-[#14254A]/[0.05] hover:text-[#14254A] dark:text-white/65 dark:hover:bg-white/5 dark:hover:text-white'
+              }`}
+              style={on ? { background: 'linear-gradient(135deg,#FDA65A,#FC934C)' } : undefined}>
+              {t.label}
+            </button>
+          )
+        })}
       </div>
 
       {/* ── Data sources ────────────────────────────────────────────────────── */}
@@ -2023,8 +2212,8 @@ export default function ReportConfigPage() {
                             ${overKey === p.key && dragKey && dragKey !== p.key
                               ? 'ring-2 ring-[#FC934C] ring-offset-1 dark:ring-offset-[#1a2d55]' : ''}`}
                           style={{ gridColumn: `span ${SPAN_COLS[p.span]} / span ${SPAN_COLS[p.span]}` }}
-                          title={`${p.name} — drag to move`}>
-                          {p.name}
+                          title={`${p.title || p.name} — drag to move`}>
+                          {p.title || p.name}
                         </div>
                       ))}
                     </div>
@@ -2060,6 +2249,48 @@ export default function ReportConfigPage() {
                     </p>
                   )}
                 </div>
+                </div>
+
+                {/* ── Save, beneath the thing being saved ──────────────────
+                    At the foot of the PREVIEW rather than the foot of the
+                    page: the editor list runs to twenty-odd rows, so a bar
+                    below it sat a long scroll away from the wireframe that
+                    shows what you are about to commit. The preview is sticky,
+                    so from here the buttons stay on screen however far down
+                    the list you are. */}
+                <div className="mt-4 pt-3 border-t border-gray-100 dark:border-white/10">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button onClick={saveLayout} disabled={!layoutDirty || busy === 'layout-save'}
+                      className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-[#14254A]
+                        hover:bg-[#1d3563] disabled:opacity-40 transition-colors">
+                      {busy === 'layout-save' ? 'Saving…' : 'Save layout'}
+                    </button>
+                    {layoutDirty && (
+                      <button onClick={() => setLayout(layoutSaved)}
+                        className="px-3.5 py-2 rounded-xl text-xs font-bold border border-gray-200
+                          text-gray-500 hover:text-[#14254A] dark:border-white/15 dark:text-white/60">
+                        Discard changes
+                      </button>
+                    )}
+                    <span className="flex-1" />
+                    {layoutConfigured && (
+                      <button onClick={resetLayout} disabled={busy === 'layout-save'}
+                        title="Delete the stored layout — the report goes back to the order and widths it is built with"
+                        className="px-3.5 py-2 rounded-xl text-xs font-bold border border-red-200 text-red-600
+                          hover:bg-red-50 dark:border-red-400/25 dark:text-red-300 dark:hover:bg-red-500/10">
+                        Reset to default
+                      </button>
+                    )}
+                  </div>
+                  <p className="mt-2 text-[11px] text-gray-400 leading-relaxed">
+                    {layoutClient
+                      ? layoutConfigured
+                        ? 'This client has a layout of its own. Changes to the shared layout will not touch it.'
+                        : 'This client follows the shared layout. Saving here gives it one of its own.'
+                      : layoutConfigured
+                        ? 'Saved. This is what every client sees unless they have a layout of their own.'
+                        : 'No saved layout yet — what you see is the default the report is built with.'}
+                  </p>
                 </div>
               </Card>
 
@@ -2143,38 +2374,6 @@ export default function ReportConfigPage() {
               </div>
             </div>
 
-              <div className="flex items-center gap-2 flex-wrap">
-                <button onClick={saveLayout} disabled={!layoutDirty || busy === 'layout-save'}
-                  className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-[#14254A]
-                    hover:bg-[#1d3563] disabled:opacity-40 transition-colors">
-                  {busy === 'layout-save' ? 'Saving…' : 'Save layout'}
-                </button>
-                {layoutDirty && (
-                  <button onClick={() => setLayout(layoutSaved)}
-                    className="px-3.5 py-2 rounded-xl text-xs font-bold border border-gray-200
-                      text-gray-500 hover:text-[#14254A] dark:border-white/15 dark:text-white/60">
-                    Discard changes
-                  </button>
-                )}
-                <span className="flex-1" />
-                {layoutConfigured && (
-                  <button onClick={resetLayout} disabled={busy === 'layout-save'}
-                    title="Delete the stored layout — the report goes back to the order and widths it is built with"
-                    className="px-3.5 py-2 rounded-xl text-xs font-bold border border-red-200 text-red-600
-                      hover:bg-red-50 dark:border-red-400/25 dark:text-red-300 dark:hover:bg-red-500/10">
-                    Reset to default
-                  </button>
-                )}
-              </div>
-              <p className="text-[11px] text-gray-400">
-                {layoutClient
-                  ? layoutConfigured
-                    ? 'This client has a layout of its own. Changes to the shared layout will not touch it.'
-                    : 'This client follows the shared layout. Saving here gives it one of its own.'
-                  : layoutConfigured
-                    ? 'Saved. This is what every client sees unless they have a layout of their own.'
-                    : 'No saved layout yet — what you see is the default the report is built with.'}
-              </p>
             </>
           )}
         </div>
@@ -2405,6 +2604,8 @@ export default function ReportConfigPage() {
       )}
 
       {/* ── User access ─────────────────────────────────────────────────────── */}
+      {tab === 'sports' && <SportsPeriodPanel />}
+
       {tab === 'connection' && <ReportsApiConnectionPanel />}
 
       {tab === 'cache' && <ReportCachePanel />}

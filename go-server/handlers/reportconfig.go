@@ -285,7 +285,7 @@ func ReportConfigTables(w http.ResponseWriter, r *http.Request) {
 			// not the set the Warehouse tab governs.
 			tables, err := pickerTables(r.Context())
 			if err != nil {
-				reportsUnavailable(w, err)
+				reportsUnavailable(w, r, err)
 				return
 			}
 			OK(w, map[string]any{"success": true, "tables": tables})
@@ -301,7 +301,7 @@ func ReportConfigTables(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !db.ReportsConfigured() {
-		reportsUnavailable(w, fmt.Errorf("reports database is not configured"))
+		reportsUnavailable(w, r, fmt.Errorf("reports database is not configured"))
 		return
 	}
 
@@ -312,7 +312,7 @@ func ReportConfigTables(w http.ResponseWriter, r *http.Request) {
 			 WHERE TABLE_SCHEMA NOT IN ('information_schema','mysql','performance_schema','sys')
 			 ORDER BY name LIMIT 2000`)
 		if err != nil {
-			reportsUnavailable(w, err)
+			reportsUnavailable(w, r, err)
 			return
 		}
 		// Same curation as the API path — a table hidden on the Warehouse tab is
@@ -340,7 +340,7 @@ func ReportConfigTables(w http.ResponseWriter, r *http.Request) {
 		 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
 		 ORDER BY ORDINAL_POSITION`, schema, name)
 	if err != nil {
-		reportsUnavailable(w, err)
+		reportsUnavailable(w, r, err)
 		return
 	}
 	OK(w, map[string]any{"success": true, "table": table, "columns": rows})
@@ -373,7 +373,7 @@ func ReportConfigInventory(w http.ResponseWriter, r *http.Request) {
 	   come from the catalogue. Only the row/client/date profile is a query, and
 	   that is now skipped rather than fatal. */
 	if !reportsBackendReady() {
-		reportsUnavailable(w, fmt.Errorf("no report backend is configured"))
+		reportsUnavailable(w, r, fmt.Errorf("no report backend is configured"))
 		return
 	}
 	/* The profile needs a warehouse connection: reports_api scopes every

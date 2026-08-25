@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ip-house/iphouse-api/db"
 	"github.com/ip-house/iphouse-api/reportsapi"
@@ -233,14 +234,26 @@ var apiMeasure = map[string][]string{
 	"infringingRemoved": {"infringingRemoved"},
 	// `installs` has no counterpart: InstallCount is a column on the table but
 	// not a measure the service sums, so the tile is absent rather than zero.
-	"channelsSuspended":   {"channelsSuspended"},
-	"views":               {"views"},
+	"channelsSuspended": {"channelsSuspended"},
+	"views":             {"views"},
+	/* Views on the rows that are now down. Its own measure rather than anything
+	   derived here: the narrowing is `RemovalStatus = 'Dead'`, a test on rows
+	   this side never reads — the tile receives one summed number. */
+	"viewsImpacted": {"viewsImpacted"},
+	/* The broadcaster count. `totalChannels` is the channel that carried the
+	   stream; this is the station whose feed it was, and one report shows both —
+	   so they never share a measure. */
+	"totalTVChannels":     {"tvChannels"},
 	"viewsSaved":          {"viewsSaved"},
 	"impactedSubscribers": {"subscribers"},
 	"likes":               {"likes"},
 	"comments":            {"comments"},
 	"crawled":             {"crawled"},
 	"notices":             {"noticesSent", "enforcements"},
+	/* Delisting SUBMISSIONS, not delisted URLs. `delisted` above is how many
+	   links an engine dropped; this is how many batches we sent it, and the two
+	   sit on the same report — so they are never allowed to share a name. */
+	"delistingBatches": {"delistingBatches"},
 	// impactedTraffic has no counterpart: no dataset sums a traffic column, so
 	// the tile stays empty rather than claiming a number nothing produced.
 }
@@ -309,7 +322,62 @@ func apiTableShape(table string) tableShape {
 	for _, col := range ds.Columns {
 		shape.Columns[strings.ToLower(col)] = col
 	}
+	addRowOnlyColumns(table, shape.Columns)
 	return shape
+}
+
+/*
+rowOnlyColumns are columns reports_api RETURNS ON ITS ROWS but does not list in
+its catalogue.
+
+The two are separate lists over there, and for the sports raw datasets they
+disagree: /v1/sports/open-web hands back DelistingBatchId and HSPName on every
+row, /v1/sports/open-web-source hands back SourceDMCANoticeId and HSPName, and
+neither id appears in the dataset's declared column list.
+
+That gap is invisible and total. apiTableShape builds the shape FROM the
+catalogue, inferSpec derives the whole spec from the shape, and a column the
+shape does not have is a column that does not exist as far as this portal is
+concerned — so the enforcement panels were never built, the action trend card
+was never offered, and the report simply had no such visuals. Nothing failed and
+nothing was logged, because from the shape's point of view the sports tables
+carry no enforcement at all. The same panels drew perfectly on the Internet
+datasets, whose catalogue does list the ids, which is exactly what made this
+look like a bug in the panels.
+
+READ THIS BEFORE ADDING AN ENTRY. A column named here is only usable by code
+that walks the RAW ROWS. The service still will not group by it or aggregate it,
+so a breakdown or a measure asked for it comes back empty — see
+enforcementByGroup, which counts these off the rows for that reason. Filters are
+safe without thinking about it: inferSpec gates those on apiCanGroupBy, which
+asks the service rather than the shape.
+
+DELETE AN ENTRY the moment reports_api lists that column. The union below is a
+no-op then, and the catalogue is the better authority.
+*/
+var rowOnlyColumns = map[string][]string{
+	// The linking half: the batch submitted to the engines, and the provider
+	// answering for the host behind the link.
+	"dashboards.SportsURLRawData": {colDelistingBatchID, "HSPName"},
+	// The host half: the notice sent to the provider.
+	"dashboards.SportsSourceURLRawData": {colSourceNoticeID, "HSPName"},
+}
+
+// addRowOnlyColumns unions the list above into a shape's columns, leaving
+// anything the catalogue already declared exactly as the catalogue spelled it.
+func addRowOnlyColumns(table string, cols map[string]string) {
+	for _, col := range rowOnlyColumns[table] {
+		if col == "" {
+			continue
+		}
+		// The catalogue wins where the two overlap: its spelling is the one the
+		// rows come back keyed by, and overwriting it here would be this file
+		// second-guessing the service about its own columns.
+		if _, listed := cols[strings.ToLower(col)]; listed {
+			continue
+		}
+		cols[strings.ToLower(col)] = col
+	}
 }
 
 /*
@@ -708,10 +776,108 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 	   the one dataset that carries the columns for it. */
 	wantRows := needsRowRemovals(ds) && (hasProfileColumns(ds) || !aggRemovals)
 
+	/* The repeat-offenders panel needs the same rows for a different reason:
+	   "how many distinct days did this account appear on" is not a measure the
+	   service declares, and a breakdown cannot be grouped by two things at
+	   once. On the sports social dataset the rows are already being paged for
+	   the figures above, so the panel costs nothing there beyond the walk.
+
+	   Tracked SEPARATELY from wantRows rather than folded into it. wantRows
+	   also switches on computeRowMetrics, whose removal count then OVERRIDES
+	   the summary's — right for a dataset that declares no `removed` measure,
+	   and wrong for one that does, where it would quietly replace the
+	   authoritative figure with one counted off a capped page read. */
+	wantRepeat := false
+	for _, d := range s.Dimensions {
+		if d.Key == dimRepeatOffender && d.Column != "" {
+			wantRepeat = true
+			break
+		}
+	}
+
+	/* The enforcement figures need the rows for the same shape of reason: they
+	   are COUNT(DISTINCT id), and a breakdown has already aggregated the id
+	   away. Three figures come off the one walk — the tile, the daily series
+	   and the per-counterparty panel — so they are gated together.
+
+	   On the measure, never on the mode: the day reports_api declares
+	   `noticesSent` for these datasets, apiMeasureFor starts answering, this
+	   goes false, and the rows stop being paged at all. */
+	wantAction := s.ActionKey != "" && s.ActionCol != ""
+	if wantAction {
+		if _, served := apiMeasureFor(s.ActionKey, ds); served {
+			wantAction = false
+		}
+	}
+	if !wantAction {
+		for _, d := range s.Dimensions {
+			// Every enforcement panel — see isActionPanel, which is the one list
+			// both this gate and the breakdown below read.
+			if !isActionPanel(d.Key) {
+				continue
+			}
+			if d.CountDistinctCol == "" {
+				continue
+			}
+			if _, served := apiMeasureFor(d.APIMeasure, ds); !served {
+				wantAction = true
+				break
+			}
+		}
+	}
+	needRows := wantRows || wantRepeat || wantAction
+
+	/* ── How many distinct TV channels ────────────────────────────────────────
+
+	   Asked as a BREAKDOWN and counted here, rather than waiting for the service
+	   to declare a measure for it. The service already groups by this dimension —
+	   it is the same call behind any "top channels" panel — so the complete list
+	   of values is one query away, and its length is the distinct count.
+
+	   Which also makes the figure scope itself correctly with no further work:
+	   the breakdown carries the report's own filters and date range, and each
+	   table in a multi-table report answers for itself before runPlatform adds
+	   them up. Open Web alone gets Open Web's, Telegram alone gets Telegram's,
+	   the summary gets the sum.
+
+	   -1 rather than 0 for "not counted", because 0 is a real answer — a window
+	   in which nothing was found — and a tile must not report one as the other.
+
+	   The count is of NAMED values only: see countNamedGroups, which is the
+	   difference between this figure and the row count of the breakdown. */
+	tvChannels := int64(-1)
+	tvDim := tvChannelDim(ds)
+	if s.ExtraKPI["totalTVChannels"] == "" {
+		tvDim = ""
+	}
+
 	var (
 		deadSum map[string]any
 		deadTS  []map[string]any
 	)
+	if tvDim != "" {
+		phase1.Add(1)
+		go func() {
+			defer phase1.Done()
+			/* Every value, not a top slice: this is a cardinality, and the
+			   commonest 200 of 300 channels is not a count of channels. The
+			   fallback is for a service that still caps — and a CAPPED list is
+			   left unpublished rather than reported as a total, because an
+			   undercount on a tile is indistinguishable from the truth. */
+			rows, truncated, err := c.BreakdownFull(ctx, ds, scope, tvDim, reportsapi.BreakdownAll)
+			if err != nil {
+				rows, truncated, err = c.BreakdownFull(ctx, ds, scope, tvDim, maxAPIBreakdownRows)
+			}
+			if err != nil {
+				note(err)
+				return
+			}
+			if truncated {
+				return
+			}
+			atomic.StoreInt64(&tvChannels, countNamedGroups(rows))
+		}()
+	}
 	phase1.Add(2)
 	go func() { defer phase1.Done(); sumRes, sumErr = c.Summary(ctx, ds, scope) }()
 	go func() { defer phase1.Done(); tsRes, tsErr = c.Timeseries(ctx, ds, scope, "day") }()
@@ -734,7 +900,7 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			}
 		}()
 	}
-	if wantRows {
+	if needRows {
 		phase1.Add(1)
 		go func() { defer phase1.Done(); allRows() }()
 	}
@@ -803,6 +969,28 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		}
 		kpi["removalPct"] = roundTo(pct, 2)
 
+		/* ── Views on the rows that came down ─────────────────────────────
+
+		   Free: `deadSum` is the same window under the service's own removal
+		   filter, already fetched above to count the removals themselves. Its
+		   `views` is therefore views on removed rows by construction — the
+		   service's measure under the service's filter — so this figure cannot
+		   drift from the Removed tile beside it, which is read off the very same
+		   answer.
+
+		   Set before the loop below so a service that later declares a
+		   `viewsImpacted` measure of its own takes precedence: both compute the
+		   same number, and the one the service publishes is the one it is
+		   accountable for. */
+		if aggRemovals && deadSum != nil && s.ExtraKPI["viewsImpacted"] != "" {
+			if vm, ok := apiMeasureFor("views", ds); ok {
+				kpi["viewsImpacted"] = numOf(deadSum[vm])
+			}
+		}
+		if n := atomic.LoadInt64(&tvChannels); n >= 0 {
+			kpi["totalTVChannels"] = n
+		}
+
 		// The spec's extra tiles, each only where the dataset actually has it.
 		for name := range s.ExtraKPI {
 			if m, ok := apiMeasureFor(name, ds); ok {
@@ -824,6 +1012,28 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		if haveRowMx && hasProfileColumns(ds) {
 			kpi["profilesSuspended"] = rowMx.profilesSuspended
 			kpi["impactedSubscribers"] = rowMx.impactedSubscribers
+		}
+	}
+
+	/* The enforcement-action tile, counted off the rows where reports_api
+	   declares no measure for it — one distinct-count over rows already read
+	   for the panels below. Falls back to a warehouse query if the rows don't
+	   have the enforcement columns. See enforcementactions.go. */
+	if wantAction && s.ActionKey != "" {
+		if rows, _, err := allRows(); err != nil {
+			note(err)
+		} else if len(rows) > 0 {
+			if count := enforcementTotal(rows, s.ActionCol); count > 0 {
+				kpi[s.ActionKey] = count
+			} else if db.ReportsConfigured() {
+				// Rows don't have the enforcement column; fall back to warehouse.
+				where, args := specWhere(s, q)
+				if v, err := enforcementViaWarehouse(s.Table, s.ActionCol, where, args); err == nil {
+					kpi[s.ActionKey] = v
+				} else {
+					note(err)
+				}
+			}
 		}
 	}
 
@@ -851,9 +1061,23 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			if wantDelisted {
 				row["delisted"] = numOf(p["delisted"])
 			}
+			/* The action count per bucket, straight off the same points: the
+			   service returns EVERY measure it declares per bucket, so a
+			   dataset that declares `noticesSent` has already answered this and
+			   there is nothing extra to fetch. */
+			if s.ActionKey != "" {
+				if mk, ok := apiMeasureFor(s.ActionKey, ds); ok {
+					row[s.ActionKey] = numOf(p[mk])
+				}
+			}
 			daily = append(daily, row)
 		}
 	}
+
+	/* The day-wise action counts are a BREAKDOWN panel now (dimNoticesByDay,
+	   dimBatchesByDay below), not a patch onto the daily timeseries — the trend
+	   card that read the patched values was removed, so patching here would be
+	   a row walk and possibly a warehouse query with no card to show for it. */
 
 	// ── Breakdowns ──────────────────────────────────────────────────────────
 	breakdowns := map[string]any{}
@@ -947,6 +1171,64 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 	*/
 	buildPanel := func(d dimension) []map[string]any {
 
+		/* ── The two enforcement panels, counted off the rows ─────────────
+		   HSPName against distinct SourceDMCANoticeId, SearchEngineName against
+		   distinct DelistingBatchId — the grouping column and the id both taken
+		   from the spec, so each side counts the column inferSpec proved its own
+		   table has.
+
+		   NOT a breakdown. The service aggregates the id away, leaving one row
+		   per group carrying measures it does declare, and a DISTINCT over that
+		   is zero for every group — an empty panel that looks exactly like a
+		   provider nobody has noticed. The raw rows still carry the id. Falls back
+		   to warehouse if reports_api does not return the id columns. */
+		if isActionPanel(d.Key) {
+			if _, served := apiMeasureFor(d.APIMeasure, ds); !served {
+				if d.CountDistinctCol == "" {
+					return []map[string]any{}
+				}
+				// The day panels group by the date column with timestamps folded to
+				// their day and the bars in calendar order; the counterparty ones
+				// group by a name, busiest first. Same count either way.
+				byDay := d.Key == dimNoticesByDay || d.Key == dimBatchesByDay
+				rows, capped, err := allRows()
+				if err != nil {
+					note(err)
+					return []map[string]any{}
+				}
+				var result []map[string]any
+				if byDay {
+					result = enforcementDayPanel(rows, d.Column, d.CountDistinctCol)
+				} else {
+					result = enforcementByGroup(rows, d.Column, d.CountDistinctCol, d.Limit)
+				}
+				// If rows returned no data (empty or missing columns), fall back to warehouse
+				if len(result) == 0 && db.ReportsConfigured() {
+					where, args := specWhere(s, q)
+					var wr []map[string]any
+					var werr error
+					if byDay {
+						wr, werr = enforcementDayPanelViaWarehouse(s.Table, d.Column, d.CountDistinctCol, where, args)
+					} else {
+						wr, werr = enforcementGroupViaWarehouse(s.Table, d.Column, d.CountDistinctCol, where, args, d.Limit)
+					}
+					if werr == nil && len(wr) > 0 {
+						result = wr
+					} else if werr != nil {
+						note(werr)
+					}
+				}
+				/* A caveat, not a failure. The cap takes the oldest rows, so a
+				   provider first noticed late in the window can be short of
+				   actions it genuinely received. */
+				if capped && len(result) > 0 {
+					notice("%s was counted over the first %d rows of this window, "+
+						"so a count can be lower than its true one.", d.Label, len(rows))
+				}
+				return result
+			}
+		}
+
 		/* The three derived panels, all folded from the one request above.
 		   `mirrors` rides along on every row so the Table view can show the
 		   hostname count beside the volume whichever panel is being read. */
@@ -980,6 +1262,40 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 					d.Label, maxAPIBreakdownRows)
 			}
 			return out
+		}
+
+		/* ── Repeat offenders, counted off the rows ───────────────────────
+		   The service groups by a column and answers with the measures it
+		   declares. "How many distinct days did this account appear on" is
+		   neither: it is a count over a second column WITHIN each group, and no
+		   breakdown can be asked for it. The rows carry both columns, so the
+		   walk happens here — see repeatoffenders.go.
+
+		   The column is the one inferSpec resolved against this dataset's own
+		   catalogue, so a table spelling it ProfileURL and one spelling it
+		   ChannelURL both land on the right one. */
+		if d.Key == dimRepeatOffender {
+			rows, capped, err := allRows()
+			if err != nil {
+				note(err)
+				return []map[string]any{}
+			}
+			/* A CAVEAT, not a failure — the panel drew and its numbers are real
+			   for the rows it saw. It matters more here than on most panels:
+			   the cap takes the OLDEST rows, so an account that only started
+			   posting late in the window can be missing days it genuinely had,
+			   and the ranking under-reports it. */
+			if capped {
+				notice("Repeat offenders were counted over the first %d rows of this window, "+
+					"so an account's day count can be lower than its true one.", len(rows))
+			}
+			/* A pre-aggregated table counts with its own columns rather than
+			   with rows — Agg_Daily_Youtube_MasterNew carries ChannelURL, so it
+			   gets this panel, and each of its rows stands for a whole day's
+			   TotalCount. Resolved from the same measurePairs inferSpec uses,
+			   so this panel and the KPI band count the same way. */
+			identCol, removedCol := repeatMeasureColumns(ds.Columns)
+			return computeRepeatOffenders(rows, d.Column, dateColOf(ds), identCol, removedCol, d.Limit)
 		}
 
 		/* ── Turnaround, computed from the timestamps ─────────────────────
@@ -1066,8 +1382,21 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		/* And per group, so a panel's orange bars mean the same thing as the
 		   tile above them. Matched on `value` — the raw grouping value the
 		   service returned — because the label may have been resolved from a
-		   master since. */
+		   master since.
+
+		   ONLY where the panel has a removed series at all. A panel counting an
+		   ACTION does not: `removedKey` was emptied above precisely because a
+		   notice, or a de-indexing submission, has no removal figure of its own
+		   — what became of the URLs it covered is a different panel. Without
+		   this guard both branches below reached in and filled one anyway, off
+		   the URLs grouped under the same provider, and the card grew a second
+		   series measuring something its own title does not name. Its bars would
+		   have read "1,713 submissions, 257,956 removed", which is not a ratio
+		   of anything. */
 		switch {
+		case removedKey == "":
+			// Nothing to fill. Named as a case rather than an early return so the
+			// two branches below keep reading as the pair they are.
 		case aggRemovals:
 			/* The same grouping, scoped to what came down. One extra call per
 			   panel, run inside the same bounded pool as the panel itself —
@@ -1268,6 +1597,14 @@ func mergeSpecOptionsViaAPI(specs []reportSpec, clientID string, q map[string]st
 		}
 
 		for param, col := range s.Filters {
+			// A slicer whose values are never listed is never fetched — see
+			// unlistedFilterParams. This is one full breakdown per table per
+			// change to the window, and on an account-URL column it is every
+			// channel and profile the client has, for a dropdown that is not
+			// drawn.
+			if unlistedFilterParams[param] {
+				continue
+			}
 			if key, ok := ds.DimByColumn(col); ok {
 				jobs = append(jobs, job{spec: s, ds: ds, param: param, dim: key})
 			}

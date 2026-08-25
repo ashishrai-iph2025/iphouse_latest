@@ -19,6 +19,7 @@ exactly the shape of hole a "just a count" endpoint invites.
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -34,18 +35,105 @@ type RealtimePlatform struct {
 	Label  string `json:"label"`
 	Family string `json:"family"`
 	Count  int64  `json:"count"`
-	// The table and date column the count came from. Passed through because an
-	// operator asking "why is this zero" needs to know what was counted, and
-	// the answer is otherwise only in the service's logs.
+	/* How many of those are DOWN AGAIN.
+
+	   A POINTER, because three answers have to survive the trip and two of them
+	   look like zero: this platform reports removals and has none; this VIEW
+	   does not report removals at all (only sports does — war-room never asks);
+	   and the platform could not be counted, which the service answers with a
+	   null count and a null removed. Only the first is a zero worth drawing.
+	   The other two rendered as "0 removed" would be a claim neither answer
+	   made, on the card whose whole job is telling a quiet platform from an
+	   unwatched one. */
+	Removed *int64 `json:"removed,omitempty"`
+	/* WHAT the service counted as removed, as its own SQL predicate. Read here
+	   and blanked before the payload leaves, for the same reason Table is —
+	   see scrubRealtimeSchema. RemovalBasis is what survives it. */
+	RemovedWhen string `json:"removedWhen,omitempty"`
+	/* The same distinction in words, because the two are NOT the same fact and
+	   a card putting them in one column should say so: on Open Web a removal is
+	   an APPROVED DELISTING NOTICE — we asked and the host agreed — while
+	   everywhere else it is a URL the crawler can no longer reach. Derived, not
+	   sent: see removalBasis. */
+	RemovalBasis string `json:"removalBasis,omitempty"`
+	// The table and date column the count came from. Read off the service's
+	// answer so a "why is this zero" can be logged here, and dropped again
+	// before the payload leaves for the browser — warehouse schema is not a
+	// thing any portal user, staff included, is shown. See scrubRealtimeSchema.
 	Table      string `json:"table,omitempty"`
 	DateColumn string `json:"dateColumn,omitempty"`
 }
 
+/*
+Blanks the warehouse schema off a reading before it is served.
+
+The counts service names the table and the date column it counted, and that
+detail used to travel all the way to a tooltip on the card. It has no reader:
+nobody outside this codebase can act on "mediascan._InternetURLsNEW", and
+publishing the physical layout of the warehouse to every logged-in browser is
+the sort of thing that is only ever useful to someone mapping it.
+
+`removedWhen` joined them later and is the same kind of value in a friendlier
+coat: "d.InfringingRemovalStatus = 'Approved'" is a column name, a table alias
+and a magic string, sent to every browser holding the card. What a reader
+actually needs from it is which of the two things "removed" means here, so that
+is taken off it — see removalBasis — and the predicate itself is blanked with
+the rest.
+
+Blanked here rather than by dropping the fields, so the values are still parsed
+and available to log on this side of the boundary.
+*/
+func scrubRealtimeSchema(ps []RealtimePlatform) {
+	for i := range ps {
+		// Derived BEFORE the blanking, and from the same reading, so a platform
+		// whose predicate changes upstream cannot end up described by a stale
+		// mapping kept on this side.
+		ps[i].RemovalBasis = removalBasis(ps[i].RemovedWhen)
+		ps[i].RemovedWhen = ""
+		ps[i].Table = ""
+		ps[i].DateColumn = ""
+	}
+}
+
+/*
+removalBasis says, in words, what this platform's `removed` counts.
+
+Two spellings exist upstream and they are different claims. Thirteen platforms
+record the fact themselves — the crawler went back and the URL was gone — while
+Open Web has no such column and is joined to the delisting table, where what is
+counted is a notice somebody APPROVED. A card that stacked those in one bar
+without saying which is which would be reporting intent as outcome on the one
+platform that carries most of the volume.
+
+Anything it does not recognise gets no description rather than a guess: an
+unlabelled figure is read as "removed", which is true, and a wrongly labelled one
+is not.
+*/
+func removalBasis(when string) string {
+	w := strings.ToLower(when)
+	switch {
+	case w == "":
+		return ""
+	case strings.Contains(w, "delisting"), strings.Contains(w, "approved"):
+		return "approved delisting notice"
+	case strings.Contains(w, "dead"):
+		return "URL no longer reachable"
+	}
+	return ""
+}
+
 type realtimeResponse struct {
-	View      string             `json:"view"`
-	ClientID  string             `json:"clientId"`
-	Total     int64              `json:"total"`
-	Platforms []RealtimePlatform `json:"platforms"`
+	View     string `json:"view"`
+	ClientID string `json:"clientId"`
+	Total    int64  `json:"total"`
+	/* The removed half of the headline, and a POINTER for the reason Removed is
+	   — absent on the war-room view, which never asks. Passed through as the
+	   service sends it rather than summed from Platforms here: on a partial
+	   reading those rows carry nulls, and adding up what decoded to zero would
+	   turn "one platform could not be counted" into a smaller removal figure
+	   presented as exact. */
+	TotalRemoved *int64             `json:"totalRemoved"`
+	Platforms    []RealtimePlatform `json:"platforms"`
 }
 
 /*
@@ -82,12 +170,26 @@ scopeFromRequest reads the report's window off the query string.
 passed through to `until` unchanged: unlike MarkScan's, this service's bound is
 inclusive of the day — verified against it — so there is no final day to lose.
 */
-func scopeFromRequest(r *http.Request) realtimeScope {
+func scopeFromRequest(r *http.Request, view, clientID string) realtimeScope {
 	from := strings.TrimSpace(r.URL.Query().Get("from"))
 	to := strings.TrimSpace(r.URL.Query().Get("to"))
 
 	if from == "" {
 		from = time.Now().UTC().AddDate(0, 0, -realtimeFallbackDays+1).Format("2006-01-02")
+	}
+
+	/* The sports card sits above the sports report and must count the same
+	   window it does. Without this the card was the one number on the page not
+	   bound by the configured period — and being the LIVE number, it is the one
+	   a reader trusts when the two disagree. See sportsperiod.go. */
+	if view == "sports" {
+		// Resolved for THIS client, so a client with a window of its own gets the
+		// same one above the report as inside it.
+		if period := resolveSportsPeriod(clientID); period.active() {
+			win := map[string]string{"from": from, "to": to}
+			clampToSportsPeriod(win, period)
+			from, to = win["from"], win["to"]
+		}
 	}
 	sc := realtimeScope{since: from + " 00:00:00"}
 	if to != "" {
@@ -179,10 +281,14 @@ func Realtime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scope := scopeFromRequest(r)
+	scope := scopeFromRequest(r, view, clientID)
 	body, err := cachedRealtimeCount(ctx, view, clientID, assetIDs, scope)
 	if err != nil {
-		Fail(w, 502, "Realtime counts are unavailable: "+err.Error())
+		// Detail to the log for the same reason as above: a warehouse error is
+		// usually a failed statement, and the card renders whatever it is told
+		// straight onto the page.
+		log.Printf("[realtime] count failed view=%s client=%s: %v", view, clientID, err)
+		Fail(w, 502, "Realtime counts are unavailable")
 		return
 	}
 
@@ -193,8 +299,9 @@ func Realtime(w http.ResponseWriter, r *http.Request) {
 	   discoveries move between platforms. The page decides what to show; this
 	   decides the order. */
 	sortRealtime(body.Platforms)
+	scrubRealtimeSchema(body.Platforms)
 
-	OK(w, map[string]any{
+	out := map[string]any{
 		"ok": true, "view": view, "clientId": clientID,
 		"total": body.Total, "platforms": body.Platforms,
 		// How many assets the number covers, so the card can say "2 assets"
@@ -205,7 +312,16 @@ func Realtime(w http.ResponseWriter, r *http.Request) {
 		// When the count was taken, so the card can say how old it is rather
 		// than implying the moment it is read.
 		"asOf": time.Now().UTC().Format(time.RFC3339),
-	})
+	}
+	/* Only where the view reported it. Sending 0 on the war-room card would put
+	   "0 removed" beside a real discovery total on a screen that never counted
+	   removals — the strongest possible statement about enforcement, made by a
+	   field that was simply absent. Omitted, and the card draws no removal at
+	   all. See RealtimePlatform.Removed for the same rule per platform. */
+	if body.TotalRemoved != nil {
+		out["totalRemoved"] = *body.TotalRemoved
+	}
+	OK(w, out)
 }
 
 func sortRealtime(ps []RealtimePlatform) {
@@ -248,7 +364,11 @@ func realtimeAssetIDs(ctx context.Context, r *http.Request, clientID string) ([]
 
 	byName, err := assetIDsByName(ctx, clientID)
 	if err != nil {
-		return nil, fmt.Errorf("asset names could not be resolved: %w", err)
+		// The upstream text can carry the query that failed, table names and
+		// all. It goes to the log, where an operator can act on it; the caller
+		// gets a sentence a client can read.
+		log.Printf("[realtime] asset name lookup failed for client=%s: %v", clientID, err)
+		return nil, fmt.Errorf("asset names could not be resolved")
 	}
 
 	missing := []string{}

@@ -183,7 +183,18 @@ func usersUpdate(w http.ResponseWriter, r *http.Request) {
 		if b, isBool := isActive.(bool); isBool && b {
 			active = 1
 		}
-		db.Exec("UPDATE dcp_user_login SET is_active = ?, updated_at = UTC_TIMESTAMP() WHERE loginId = ?", active, loginID)
+		/* Activating also clears `deleted`, deactivating leaves it alone.
+		   `deleted = 1` means "not a live assignment" and the rest of the
+		   codebase relies on it implying is_active = 0 — that invariant is what
+		   lets every auth query keep testing is_active alone and still never see
+		   a removed row. Setting is_active = 1 on a deleted row would break it,
+		   so re-activating a login here is taken at face value: the row is live
+		   again, and Registrations shows it again. */
+		if active == 1 {
+			db.Exec("UPDATE dcp_user_login SET is_active = 1, deleted = 0, updated_at = UTC_TIMESTAMP() WHERE loginId = ?", loginID)
+		} else {
+			db.Exec("UPDATE dcp_user_login SET is_active = 0, updated_at = UTC_TIMESTAMP() WHERE loginId = ?", loginID)
+		}
 		ok(w, map[string]any{"success": true})
 		return
 	}

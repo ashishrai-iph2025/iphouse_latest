@@ -86,6 +86,22 @@ html, body {
 ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
+/* Horizontal strips that scroll only as an overflow fallback — the Configuration
+   section-filter chips, for instance. The row is still scrollable by wheel,
+   trackpad, drag and keyboard; it just does not carry a 6px bar across a
+   toolbar that is 32px tall. */
+.scrollbar-none { scrollbar-width: none; -ms-overflow-style: none; }
+.scrollbar-none::-webkit-scrollbar { display: none; }
+
+/* `type="search"` is worth keeping for the implicit searchbox role, but WebKit
+   draws its own grey cancel glyph on top of ours as soon as there is text.
+   Suppress the native one; the styled clear button stays. */
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 /* ── Spinner ───────────────────────────────── */
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes shrink { from { width: 100%; } to { width: 0%; } }
@@ -389,3 +405,55 @@ html, body {
 
 .dark .bg-slate-100      { background-color: rgba(148,163,184,0.16) !important; }
 .dark .text-slate-700    { color: #cbd5e1 !important; }
+
+/* ── Policy sliders ──────────────────────────────────────────────────────────
+   Range inputs on the Security Policy screen. Styled by hand because the native
+   control is drawn by the OS and ignores the palette entirely — on Windows it
+   is a grey bar that looks nothing like the rest of the admin.
+
+   The FILLED part of the track is painted with a gradient the component
+   computes per value (inline `background`), so the track shows how far along
+   the range a setting sits without a second element to keep in sync. */
+.policy-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+}
+.policy-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid var(--brand-orange);
+  box-shadow: 0 2px 8px rgba(20,37,74,0.25);
+  cursor: grab;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.policy-range::-webkit-slider-thumb:hover   { transform: scale(1.15); }
+.policy-range::-webkit-slider-thumb:active  { cursor: grabbing; transform: scale(1.05); }
+.policy-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--accent-ring); }
+
+.policy-range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid var(--brand-orange);
+  box-shadow: 0 2px 8px rgba(20,37,74,0.25);
+  cursor: grab;
+}
+.policy-range::-moz-range-track { background: transparent; }
+
+/* A slider parked at 0 means the rule is OFF. Greyed so that reads at a glance
+   rather than only from the "Off" label beside it. */
+.policy-range[data-off="true"]::-webkit-slider-thumb { border-color: #cbd5e1; }
+.policy-range[data-off="true"]::-moz-range-thumb     { border-color: #cbd5e1; }
+
+.dark .policy-range::-webkit-slider-thumb { background: #1a2d55; }
+.dark .policy-range::-moz-range-thumb     { background: #1a2d55; }

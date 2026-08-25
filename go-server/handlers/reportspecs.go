@@ -48,6 +48,16 @@ type dimension struct {
 	// promises a different one.
 	APIMeasure string
 
+	/* The column this panel counts DISTINCT VALUES of, as resolved against the
+	   table — the id in `COUNT(DISTINCT …)`, not the column it groups by.
+
+	   The direct path has it inside IdentOverride, already spelled into the SQL.
+	   The API path cannot: a breakdown returns one aggregated row per group, so
+	   the id is not on the rows it hands back and the count has to be walked over
+	   the RAW rows instead. Naming the column here is what makes that possible —
+	   see enforcementactions.go. */
+	CountDistinctCol string
+
 	// A dimension with no Column is SYNTHETIC: the page shows a panel for it but
 	// there is no GROUP BY behind it, because the rows are assembled from figures
 	// the report already has (see byDelistingStatus in runPlatform). The runner
@@ -94,6 +104,25 @@ type reportSpec struct {
 	// and the report tracks both. Empty where the table carries no delisting
 	// flags.
 	DelistedExpr string
+
+	/* The ENFORCEMENT ACTION this table records — the notice that was sent or
+	   the batch that was submitted, counted once each rather than once per URL
+	   it covered. See enforcementactions.go.
+
+	   ActionKey is the portal figure it is ("notices", "delistingBatches"),
+	   which is also the key the daily rows carry it under and the name the API
+	   path asks reports_api for. ActionExpr is the SQL for the direct path, and
+	   ActionLabel is what a card calls it. All three empty on a table that
+	   records no enforcement action of its own, which is every table but the two
+	   sports raw ones. */
+	ActionKey   string
+	ActionExpr  string
+	ActionLabel string
+	/* The id column ActionExpr counts distinct values of, on its own. The API
+	   path has no aggregate for it — reports_api declares no such measure — so
+	   the tile and the daily series are counted over the raw rows, and that walk
+	   needs the column NAME rather than the SQL wrapped around it. */
+	ActionCol string
 
 	// Optional extra KPI expressions, keyed by the name the UI reads.
 	ExtraKPI map[string]string
@@ -255,6 +284,51 @@ var reportSpecs = map[string]reportSpec{
 			"assetId": "AssetId", "platform": "Platform", "language": "LanguageId",
 			"genre": "GenreId", "infringementType": "InfringementTypeId",
 		},
+	},
+
+	// ── Open Web - Sports (enforcement actions) ──────────────────────────────
+	//
+	// TWO separate tables, treated as two halves of one report by the dashboard:
+	// the pages that LINK to infringing content and the ones that HOST it.
+	// Both carry enforcement action ids, so they report not just the URLs but
+	// the actions themselves, distinct-counted.
+	//
+	// The linking side (SportsURLRawData) tracks delisting batches.
+	// The host side (SportsSourceURLRawData) tracks notices.
+	"open-web-sports": {
+		Key: "open-web-sports", Label: "Open Web - Sports",
+		Table:     "dashboards.SportsURLRawData",
+		ClientCol: "ClientId", DateCol: "URLUploadDate", AssetCol: "AssetId",
+		IdentExpr:   "COUNT(*)",
+		RemovedExpr: "COUNT(CASE WHEN IsRemoved=1 THEN 1 END)",
+		// The linking side: delisting batches sent to search engines. A non-empty
+		// DelistedExpr forces this side to be "linking"; the absence of it would
+		// default to "host" and break the role pinning for the enforcement actions.
+		DelistedExpr: "0",
+		ActionKey:    "delistingBatches",
+		ActionLabel:  "De-Indexing",
+		ActionCol:    colDelistingBatchID,
+		Dimensions: []dimension{
+			{Key: "byDelistingBatchEngine", Column: "SearchEngineName", Label: "Engines - Batches", Limit: 10, CountDistinctCol: colDelistingBatchID},
+		},
+		Filters: map[string]string{},
+	},
+	// The host side: notices sent to hosting providers.
+	"open-web-sports-source": {
+		Key: "open-web-sports-source", Label: "Open Web - Sports (Source)",
+		Table:     "dashboards.SportsSourceURLRawData",
+		ClientCol: "ClientId", DateCol: "URLUploadDate", AssetCol: "AssetId",
+		IdentExpr:   "COUNT(*)",
+		RemovedExpr: "COUNT(CASE WHEN IsRemoved=1 THEN 1 END)",
+		// No DelistedExpr means this side is "host" — the default role for the
+		// host-side table. The action is pinned to this side by role matching.
+		ActionKey:   "notices",
+		ActionLabel: "Notices sent",
+		ActionCol:   colSourceNoticeID,
+		Dimensions: []dimension{
+			{Key: "byHSPNotices", Column: "HSPName", Label: "Hosts - Notices", Limit: 10, CountDistinctCol: colSourceNoticeID},
+		},
+		Filters: map[string]string{},
 	},
 }
 

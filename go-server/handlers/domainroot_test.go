@@ -1,6 +1,9 @@
 package handlers
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 /*
 The brand, on the hostnames this actually has to get right.
@@ -249,5 +252,43 @@ func TestSourceChannelNames(t *testing.T) {
 	}}
 	if got := sourceChannelsFor(one); len(got) != 1 {
 		t.Errorf("both open-web tables resolved to %d channels (%v), want 1", len(got), got)
+	}
+}
+
+/*
+The two "platform" panels answer different questions, and their names have to say
+which.
+
+byPlatform groups by the `Platform` column, which ONLY the social/UGC tables
+carry. On a report that also reads the open web it therefore lists a strict
+subset of where infringements were found — and titled "Platforms" it reads as the
+complete list, whose first missing entry anybody notices is Open Web.
+
+The channel split lives on bySourcePlatform instead, and TestSourceChannelNames
+above proves Open Web is in it. Open Web is deliberately NOT folded into
+byPlatform: those rows double as the Platform slicer's values, and no table
+carries `Platform = 'Open Web'` while the open-web tables declare no platform
+filter at all — so specHonoursFilters would drop every spec and clicking that row
+would empty the report.
+*/
+func TestThePlatformPanelSaysItIsSocialOnly(t *testing.T) {
+	var label string
+	for _, c := range dimensionCandidates {
+		if c.Key == "byPlatform" {
+			label = c.Label
+		}
+	}
+	if label == "" {
+		t.Fatal("no byPlatform dimension candidate")
+	}
+	if !strings.Contains(strings.ToLower(label), "social") {
+		t.Errorf("byPlatform is called %q — it lists only the platforms the social "+
+			"tables name, so a title that does not say so reads as the complete "+
+			"list and invites \"where is Open Web\"", label)
+	}
+	/* And the channel panel that DOES carry Open Web is a different key, so the
+	   two are never mistaken for one another. */
+	if dimSourcePlatform == "byPlatform" {
+		t.Error("the channel split and the social split share a key")
 	}
 }

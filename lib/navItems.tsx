@@ -33,6 +33,25 @@ export function dropdownFor(item: NavItem, allowed: AllowedModule[] | null): Nav
   return item.dropdown ?? []
 }
 
+/**
+ * The first page this login may actually open, in the order the nav shows them.
+ *
+ * Every sign-in path sends clients to /dashboard, which was safe while Dashboard
+ * was a floor every login had. It is an ordinary grant now, so that landing can
+ * be a page the account was never given — and the fix has to live somewhere that
+ * also catches a bookmark or a back-button, not just the redirect after login.
+ *
+ * Returns null when nothing is granted. That is a real state — an account set up
+ * but not yet given any module — and it needs to be SAID, not redirected around,
+ * which is why this reports it rather than picking a fallback of its own.
+ */
+export function firstAllowedHref(allowed: AllowedModule[] | null): string | null {
+  if (!allowed || allowed.length === 0) return null
+  const ordered = [...NAV_ITEMS].sort(
+    (a, b) => navOrderOf(a, allowed) - navOrderOf(b, allowed))
+  return ordered.find(it => isItemAllowed(it, allowed))?.href ?? null
+}
+
 // The client-nav order for an item's module (from module_permission.nav_order),
 // keyed by pageName. 0 (the default) preserves code order via a stable sort.
 export function navOrderOf(item: NavItem, allowed: AllowedModule[] | null): number {

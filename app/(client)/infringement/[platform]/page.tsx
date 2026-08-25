@@ -658,7 +658,7 @@ function PlatformDetail({ platform: slug }: { platform: string }) {
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {[
                     { label: 'Removal', status: modalFields.status, time: modalFields.removalTime, internetOnly: false },
-                    { label: 'Delisting', status: modalFields.delistStatus, time: modalFields.delistTime, internetOnly: true },
+                    { label: 'De-Indexed', status: modalFields.delistStatus, time: modalFields.delistTime, internetOnly: true },
                     { label: 'DMCA', status: modalFields.dmcaStatus, time: modalFields.dmcaTime, internetOnly: true },
                   ]
                     /* Wire value, not the label — the URL param stays "Internet". */

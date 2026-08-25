@@ -6,6 +6,12 @@
 // good, what is in it, and how do I make it refresh now.
 
 import { useEffect, useRef, useState } from 'react'
+/* The product's own dropdown. A native <select> draws its list in the operating
+   system's colours, which is the one thing on these panels that no stylesheet
+   here can reach — see the note in SportsPeriodPanel. `clearable={false}` on all
+   three below: each is a required setting with a current value, and the clear row
+   would hand back an empty string that `+''` turns into a real 0. */
+import SearchableSelect from '@/components/ui/SearchableSelect'
 
 interface Settings {
   addr: string; hasPassword: boolean; dbIndex: number; ttlMinutes: number
@@ -430,18 +436,24 @@ export default function ReportCachePanel() {
               not on the list is still shown and still kept. */}
           <Field label="Keep entries for"
             hint="How long a report stays servable. It is re-checked far sooner — see below.">
-            <select value={form.ttlMinutes} className={inputCls}
-              onChange={e => setForm({ ...form, ttlMinutes: +e.target.value })}>
-              {LIFETIMES.some(l => l.min === form.ttlMinutes) ||
-                <option value={form.ttlMinutes}>{form.ttlMinutes} minutes</option>}
-              {LIFETIMES.map(l => <option key={l.min} value={l.min}>{l.label}</option>)}
-            </select>
+            {/* A saved value that is not on the list is still offered, and still
+                kept — the same rule the old markup had, moved into the option
+                list rather than a stray <option> in front of it. */}
+            <SearchableSelect clearable={false}
+              value={String(form.ttlMinutes)}
+              onChange={v => setForm({ ...form, ttlMinutes: +v })}
+              options={[
+                ...(LIFETIMES.some(l => l.min === form.ttlMinutes)
+                  ? []
+                  : [{ key: String(form.ttlMinutes), label: `${form.ttlMinutes} minutes` }]),
+                ...LIFETIMES.map(l => ({ key: String(l.min), label: l.label })),
+              ]} />
           </Field>
           <Field label="Memory limit" hint="Applied to the running Redis on save">
-            <select value={form.maxMemoryMb} className={inputCls}
-              onChange={e => setForm({ ...form, maxMemoryMb: +e.target.value })}>
-              {SIZES.map(s => <option key={s.mb} value={s.mb}>{s.label}</option>)}
-            </select>
+            <SearchableSelect clearable={false}
+              value={String(form.maxMemoryMb)}
+              onChange={v => setForm({ ...form, maxMemoryMb: +v })}
+              options={SIZES.map(s => ({ key: String(s.mb), label: s.label }))} />
           </Field>
         </div>
 
@@ -545,12 +557,15 @@ export default function ReportCachePanel() {
           <div className="grid grid-cols-2 gap-3">
             <Field label="Re-check a report at most"
               hint="Per report, not per request — a report opened forty times an hour is checked a handful of times.">
-              <select value={form.recheckMinutes} className={inputCls}
-                onChange={e => setForm({ ...form, recheckMinutes: +e.target.value })}>
-                {RECHECKS.some(x => x.min === form.recheckMinutes) ||
-                  <option value={form.recheckMinutes}>Every {form.recheckMinutes} minutes</option>}
-                {RECHECKS.map(x => <option key={x.min} value={x.min}>{x.label}</option>)}
-              </select>
+              <SearchableSelect clearable={false}
+                value={String(form.recheckMinutes)}
+                onChange={v => setForm({ ...form, recheckMinutes: +v })}
+                options={[
+                  ...(RECHECKS.some(x => x.min === form.recheckMinutes)
+                    ? []
+                    : [{ key: String(form.recheckMinutes), label: `Every ${form.recheckMinutes} minutes` }]),
+                  ...RECHECKS.map(x => ({ key: String(x.min), label: x.label })),
+                ]} />
             </Field>
             <div className="self-end pb-1">
               <p className="text-[11px] text-gray-500">

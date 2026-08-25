@@ -43,6 +43,23 @@ interface Props {
   emptyLabel?:  string
   disabled?:    boolean
   dark?:        boolean
+  /** A shorter trigger, for a rail carrying a dozen of these at once.
+   *
+   *  Only the TRIGGER shrinks. The dropdown it opens keeps its own size and
+   *  spacing, because that is where the reading and the tapping happen — the
+   *  rail's problem is the twelve closed controls stacked down it, not the one
+   *  list that is open. */
+  compact?:     boolean
+  /** Whether the list offers a row that clears the value.
+   *
+   *  True for a FILTER, where "no filter" is a real choice and that row is how
+   *  it is made — which is why it lives IN the list rather than beside it.
+   *
+   *  False for a required field. A login has a login type; there is no "none".
+   *  Worse than useless there: the row hands back an empty string, and a caller
+   *  reading a number off it gets 0 — which is a real type — so the reader would
+   *  have picked "nothing" and been given "Email OTP" without being told. */
+  clearable?:   boolean
 }
 
 /** Room a dropdown wants below the trigger before it decides to open upwards. */
@@ -63,6 +80,7 @@ interface Pos {
 
 export default function SearchableSelect({
   options, value, onChange, placeholder = 'Select…', emptyLabel = '— All —', disabled = false, dark: darkProp,
+  compact = false, clearable = true,
 }: Props) {
   const [open,   setOpen]   = useState(false)
   const [query,  setQuery]  = useState('')
@@ -100,10 +118,15 @@ export default function SearchableSelect({
   }, [options, query])
 
   /* The clear row is part of the list, not a thing beside it — so ↑ from the
-     first option lands on "All" like any other row. */
+     first option lands on "All" like any other row. Absent where the field is
+     required, and then the first option IS row zero — see the highlight below,
+     which would otherwise skip it. */
   const rows = useMemo(
-    () => [{ key: '', label: emptyLabel, clear: true }, ...filtered.map(o => ({ ...o, clear: false }))],
-    [filtered, emptyLabel])
+    () => [
+      ...(clearable ? [{ key: '', label: emptyLabel, clear: true }] : []),
+      ...filtered.map(o => ({ ...o, clear: false })),
+    ],
+    [filtered, emptyLabel, clearable])
 
   const measure = useCallback(() => {
     const el = triggerRef.current
@@ -152,8 +175,10 @@ export default function SearchableSelect({
     }
   }, [open, measure])
 
-  // A new search is a new list, so the highlight goes back to the top of it.
-  useEffect(() => { setActive(query ? 1 : 0) }, [query])
+  /* A new search is a new list, so the highlight goes back to the top of it —
+     to the first OPTION, stepping over the clear row where there is one, since
+     nobody types a query in order to clear the field. */
+  useEffect(() => { setActive(query && clearable ? 1 : 0) }, [query, clearable])
 
   // Keep the highlighted row on screen when it is moved by the keyboard.
   useEffect(() => {
@@ -358,17 +383,31 @@ export default function SearchableSelect({
         title={selected ? selected.label : undefined}
         style={dark ? {
           width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          borderRadius: '0.75rem', padding: '10px 12px', fontSize: 14, height: 44, cursor: disabled ? 'not-allowed' : 'pointer',
+          borderRadius: compact ? '0.625rem' : '0.75rem',
+          padding: compact ? '5px 9px' : '10px 12px',
+          fontSize: compact ? 12.5 : 14,
+          height: compact ? 32 : 44, cursor: disabled ? 'not-allowed' : 'pointer',
           opacity: disabled ? 0.5 : 1, transition: 'all 0.15s',
           background: 'rgba(255,255,255,0.065)',
           border: open ? '1px solid rgba(249,115,22,0.5)' : '1px solid rgba(255,255,255,0.09)',
           boxShadow: open ? '0 0 0 3px rgba(249,115,22,0.1)' : 'none',
         } : {
           width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          borderRadius: '0.75rem', padding: '10px 12px', fontSize: 14, cursor: disabled ? 'not-allowed' : 'pointer',
+          borderRadius: compact ? '0.625rem' : '0.75rem',
+          padding: compact ? '5px 9px' : '10px 12px',
+          fontSize: compact ? 12.5 : 14,
+          // Light mode had no explicit height, so it grew out of its padding.
+          // Compact pins it, or a rail of them lands a pixel off the dark one.
+          ...(compact ? { height: 32 } : {}),
+          cursor: disabled ? 'not-allowed' : 'pointer',
           opacity: disabled ? 0.5 : 1, transition: 'all 0.15s', background: '#fff',
-          border: open ? '1px solid #3b82f6' : '1px solid #e5e7eb',
-          boxShadow: open ? '0 0 0 3px rgba(59,130,246,0.1)' : 'none',
+          /* Brand orange, matching the dark branch above and every text input
+             in the product. Light mode was on Tailwind's stock blue, which is
+             the one colour on the form that belongs to no part of this product
+             — and it sat next to inputs that focus orange, so an open dropdown
+             looked like a different application's control. */
+          border: open ? '1px solid #FC934C' : '1px solid #e5e7eb',
+          boxShadow: open ? '0 0 0 3px rgba(252,147,76,0.2)' : 'none',
         }}
       >
         <span style={{
@@ -376,14 +415,15 @@ export default function SearchableSelect({
             ? (selected ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.22)')
             : (selected ? '#1f2937' : '#9ca3af'),
           fontWeight: selected ? 500 : 400,
-          fontSize: dark ? '0.865rem' : 14,
+          fontSize: compact ? 12.5 : (dark ? '0.865rem' : 14),
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {selected ? selected.label : placeholder}
         </span>
         <svg
           style={{
-            width: 16, height: 16, flexShrink: 0, transition: 'transform 0.15s',
+            width: compact ? 13 : 16, height: compact ? 13 : 16,
+            flexShrink: 0, transition: 'transform 0.15s',
             transform: open ? 'rotate(180deg)' : 'none',
             color: dark ? 'rgba(255,255,255,0.3)' : '#9ca3af',
           }}

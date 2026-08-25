@@ -1094,8 +1094,25 @@ func ResetPassword(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 400, "Reset token has expired")
 		return
 	}
-	if len(body.Password) < 8 {
-		Fail(w, 422, "Password must be at least 8 characters")
+	if err := ValidatePassword(body.Password); err != nil {
+		Fail(w, 422, err.Error())
+		return
+	}
+
+	targetID := intFromAny(row["targetId"])
+	accountType := strFromAny(row["account_type"])
+
+	/* The history key is the identity the login authenticates on, which has to
+	   be looked up from the token's target id — the token carries a row, and
+	   for a client that row is one of several sharing a username.
+
+	   Resolved BEFORE the write so the reuse check can run against it; a reset
+	   is a password change like any other, and letting the forgotten-password
+	   route around the rule would leave the rule enforced only where people
+	   were not trying to get around it. */
+	historyKey := passwordHistoryKey(accountType, targetID)
+	if PasswordReused(historyAcctType(accountType), historyKey, body.Password) {
+		Fail(w, 422, reusedPasswordMessage())
 		return
 	}
 
@@ -1104,9 +1121,6 @@ func ResetPassword(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 500, "Hash error")
 		return
 	}
-
-	targetID := intFromAny(row["targetId"])
-	accountType := strFromAny(row["account_type"])
 
 	// Write the new hash to the table the token was issued against. If the write
 	// fails, do NOT burn the token or report success — the user would be locked
@@ -1133,6 +1147,7 @@ func ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	db.Exec("UPDATE dcp_password_resets SET used = 1 WHERE id = ?", intFromAny(row["id"]))
+	RecordPasswordHistory(historyAcctType(accountType), historyKey, hashed)
 
 	/* The clock restarts and the lockout clears, together.
 

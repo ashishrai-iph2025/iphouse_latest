@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,11 +42,30 @@ Cheap enough to do per request — specsForPlatform reads the dataset catalogue,
 which reportsapi caches — and it is on the request path only for reports that
 are cacheable at all.
 */
-func platformShape(p platformDef) string {
+func platformShape(p platformDef, clientID string) string {
 	parts := make([]string, 0, 16)
 	parts = append(parts, p.Tables...)
-	for _, d := range sectionDimensions(p) {
+	dims := sectionDimensions(p)
+	for _, d := range dims {
 		parts = append(parts, strFromAny(d["key"])+":"+strFromAny(d["viz"]))
+	}
+	/* The configured top-N is part of the shape, not part of the filter.
+
+	   Without it, changing a panel from ten rows to five kept serving the
+	   ten-row answer for the length of the retention window — long enough for
+	   somebody to change the setting, reload, see no difference and conclude
+	   the control does nothing. Folding it into the shape means the new setting
+	   simply has a different key, so it builds fresh and the old entries age
+	   out on their own. Sorted, because a map's order is not stable and an
+	   unstable shape is a cache that misses every time. */
+	limits := dimRowLimits(p.Key, clientID, dims)
+	keys := make([]string, 0, len(limits))
+	for k := range limits {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		parts = append(parts, k+"="+strconv.Itoa(limits[k]))
 	}
 	sum := sha1.Sum([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:8])
@@ -65,7 +86,7 @@ until the entry expired on its own, which made the TTL — not the data — the 
 thing that ever moved a number.
 */
 func cachedPlatformReport(p platformDef, q map[string]string, bg, force bool) map[string]any {
-	key, drill, cacheable := reportcache.KeyKind(p.Key, q["clientId"], platformShape(p), q)
+	key, drill, cacheable := reportcache.KeyKind(p.Key, q["clientId"], platformShape(p, q["clientId"]), q)
 	c := reportcache.Get()
 
 	if cacheable && c.Enabled() && !force {

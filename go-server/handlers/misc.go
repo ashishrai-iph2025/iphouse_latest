@@ -204,8 +204,13 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 		OK(w, map[string]any{"success": false, "error": "Both passwords are required"})
 		return
 	}
-	if len(body.NewPass) < 8 {
-		OK(w, map[string]any{"success": false, "error": "New password must be at least 8 characters"})
+	/* Complexity is checked here, before either branch below, because it does
+	   not depend on which table the account lives in. Reuse is checked INSIDE
+	   each branch instead — the history is keyed by the identity that branch
+	   authenticates on, and there is no single key that means the same thing
+	   for a Super Admin and for a client login. */
+	if err := ValidatePassword(body.NewPass); err != nil {
+		OK(w, map[string]any{"success": false, "error": err.Error()})
 		return
 	}
 
@@ -222,6 +227,10 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 			OK(w, map[string]any{"success": false, "error": "Current password is incorrect"})
 			return
 		}
+		if PasswordReused(AcctSuperAdmin, claims.LoginUsername, body.NewPass) {
+			OK(w, map[string]any{"success": false, "error": reusedPasswordMessage()})
+			return
+		}
 		hashed, err := ipauth.HashPassword(body.NewPass)
 		if err != nil {
 			Fail(w, 500, "Hash error")
@@ -231,6 +240,10 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 			Fail(w, 500, "Could not update your password. Please try again.")
 			return
 		}
+		// Recorded only after the write succeeded: a history entry for a
+		// password that was never stored would refuse a password the account
+		// does not actually have.
+		RecordPasswordHistory(AcctSuperAdmin, claims.LoginUsername, hashed)
 		// A new password starts a new expiry period — and clears any warning
 		// already sent about the old one.
 		StampPasswordChanged(AcctSuperAdmin, intFromAny(row["id"]))
@@ -257,6 +270,10 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if PasswordReused(AcctLogin, claims.LoginUsername, body.NewPass) {
+		OK(w, map[string]any{"success": false, "error": reusedPasswordMessage()})
+		return
+	}
 	hashed, err := ipauth.HashPassword(body.NewPass)
 	if err != nil {
 		Fail(w, 500, "Hash error")
@@ -266,6 +283,9 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 500, "Could not update your password. Please try again.")
 		return
 	}
+	// Keyed by username, matching the UPDATE above: the new hash went to every
+	// active row sharing it, so the history has to cover them all too.
+	RecordPasswordHistory(AcctLogin, claims.LoginUsername, hashed)
 	// Every row that took the new hash takes the new clock — stamping one would
 	// leave the others warning about a password that has just been changed.
 	StampPasswordChangedForUsername(claims.LoginUsername)
@@ -419,6 +439,14 @@ func UserDashboardData(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
 		Fail(w, 401, "Not authenticated")
+		return
+	}
+	/* Now that Dashboard is a grant rather than a floor, the endpoint has to
+	   check it. Withholding the module while still serving its PowerBI links to
+	   anyone who asks for them would make the permission cosmetic — hiding a
+	   nav item is not access control. */
+	if !mayOpenDashboard(claims) {
+		Fail(w, 403, "The Dashboard module is not enabled for this account")
 		return
 	}
 	logo, _ := db.QueryOne("SELECT userLogo, companyLogo FROM dcp_user WHERE userId = ? AND deleted = 0", claims.UserID)
@@ -617,16 +645,22 @@ func postJSONWithBearer(url, token string, payload any) (map[string]any, error) 
 /*
 ── Dashboard and Reports are one entitlement with two faces ──────────────────
 
-	They present the same client's figures, so a login is given exactly ONE of
-	them and never both:
+	They present the same client's figures, so a login never gets both:
 
 	  Reports granted        Reports. Dashboard is dropped even where it was
 	                         also ticked — two nav items for the same numbers
 	                         are two places to disagree and a choice that means
 	                         nothing to the person making it.
-	  Reports not granted    Dashboard, whether or not it was ticked. It is the
-	                         floor: a login that can sign in can see its own
-	                         figures somewhere.
+	  Reports not granted    Dashboard, IF it was granted. Otherwise neither.
+
+	Dashboard is a permission like any other. It was briefly a floor — synthesised
+	for every login that had not been given Reports — which meant the nav showed a
+	module nobody had granted and an admin could not take it away. A permission
+	that cannot be withheld is not a permission, and "nothing granted" is a
+	legitimate state: it says the account is not set up yet, which is worth seeing
+	rather than papering over.
+
+	So the rule now only ever REMOVES. Nothing is invented here.
 
 	Decided HERE, on the read, rather than when the permissions are saved. This
 	endpoint is what the nav and every client-side gate consult, so the rule
@@ -650,21 +684,21 @@ const (
 )
 
 func effectiveNavModules(granted []string) []string {
-	out := make([]string, 0, len(granted)+1)
-	reports := ""
+	hasReports := false
 	for _, n := range granted {
 		if strings.EqualFold(n, reportsPageName) {
-			reports = n
+			hasReports = true
 			break
 		}
 	}
-	if reports == "" {
-		// UserNav emits this one itself — see the pinned pageName there.
-		out = append(out, dashboardModuleName)
-	}
+
+	out := make([]string, 0, len(granted))
 	for _, n := range granted {
-		if strings.EqualFold(n, dashboardModuleName) {
-			continue // never taken from the grants — it is fallback or nothing
+		// The one subtraction: Reports supersedes Dashboard where both are
+		// ticked. Where Reports is absent, Dashboard stands or falls on its
+		// own grant like everything else in the list.
+		if hasReports && strings.EqualFold(n, dashboardModuleName) {
+			continue
 		}
 		out = append(out, n)
 	}
@@ -681,6 +715,33 @@ was choosing correctly and the assembly was mislabelling the answer.
 `byName` is the granted rows keyed by lower-cased ModuleName; `dropByParent` is
 the admin-configured dropdown children keyed by pageName.
 */
+/*
+mayOpenDashboard reports whether this login may read the dashboard's contents.
+
+Keyed on ModuleName rather than pageName, matching effectiveNavModules and the
+admin pickers — the seeded row's pageName is "DashboardAccess", which is exactly
+the mismatch that hid the tab, and repeating it here would hand a 403 to every
+login that legitimately has the grant.
+
+Staff pass: they administer these dashboards and reach them from /admin.
+*/
+func mayOpenDashboard(claims *ipauth.Claims) bool {
+	if claims == nil {
+		return false
+	}
+	if isStaff(claims) {
+		return true
+	}
+	row, _ := db.QueryOne(`
+		SELECT 1 AS ok
+		  FROM user_module_permission_test u
+		  JOIN module_permission m ON m.Id = u.moduleId
+		 WHERE u.loginId = ? AND u.allowed = 1 AND m.status = 0
+		   AND UPPER(m.ModuleName) = ?
+		 LIMIT 1`, claims.LoginID, strings.ToUpper(dashboardModuleName))
+	return row != nil
+}
+
 func navEntries(
 	granted []string,
 	byName map[string]map[string]any,
@@ -688,41 +749,33 @@ func navEntries(
 ) []map[string]any {
 	modules := []map[string]any{}
 	for _, name := range effectiveNavModules(granted) {
-		/* Dashboard is the FALLBACK, and it is emitted with the pageName the
-		   nav keys on — never with whatever the module_permission row happens
-		   to carry.
+		/* Dashboard is emitted with the pageName the NAV keys on, never with
+		   whatever the module_permission row happens to carry.
 
-		   This used to be an `if !ok` on the lookup below, on the reasoning
-		   that the fallback "has no grant row". It has one here: the seeded
-		   Dashboard module is ModuleName "Dashboard" with pageName
-		   "DashboardAccess", a spelling that predates the nav keying on
-		   pageName and appears nowhere in the code. So the lookup HIT for any
-		   login actually granted Dashboard, and the tab went out identified as
-		   "DashboardAccess" — which no NAV_ITEM matches, so the client dropped
-		   it and the login was left with neither Dashboard nor Reports.
+		   The seeded Dashboard module is ModuleName "Dashboard" with pageName
+		   "DashboardAccess" — a spelling that predates the nav keying on
+		   pageName and appears nowhere in the code. Passing the row's value
+		   through sent the tab out identified as something no NAV_ITEM matches,
+		   so the client dropped it and a login granted Dashboard saw no
+		   Dashboard.
 
-		   Backwards, and invisibly so: the fallback worked only for the logins
-		   that did not have the grant. Decided by name, because that is what
-		   effectiveNavModules returns and what the exclusivity rule is written
-		   in; the identifier is pinned regardless of what the row says. */
+		   Matched by NAME because that is what the grant, the exclusivity rule
+		   and the admin pickers are all written in. Only the identifier is
+		   overridden; the row still supplies the label and the order, so
+		   renaming or reordering on /admin/modules moves this tab like any
+		   other. */
 		if strings.EqualFold(name, dashboardModuleName) {
-			row := byName[strings.ToLower(dashboardModuleName)]
-			entry := map[string]any{
-				"moduleId": 0, "moduleName": dashboardModuleName,
-				"pageName": dashboardPageName, "navOrder": 0,
-				"dropdown": dropByParent[dashboardPageName],
+			row, ok := byName[strings.ToLower(name)]
+			if !ok {
+				continue // not granted — and there is no fallback any more
 			}
-			/* Where a row does exist, its name and order still apply: renaming
-			   or reordering the module on /admin/modules must move this tab
-			   like any other. Only the pageName is not the row's to give. */
-			if row != nil {
-				if n := strFromAny(row["ModuleName"]); n != "" {
-					entry["moduleName"] = n
-				}
-				entry["moduleId"] = intFromAny(row["moduleId"])
-				entry["navOrder"] = intFromAny(row["navOrder"])
-			}
-			modules = append(modules, entry)
+			modules = append(modules, map[string]any{
+				"moduleId":   intFromAny(row["moduleId"]),
+				"moduleName": name,
+				"pageName":   dashboardPageName,
+				"navOrder":   intFromAny(row["navOrder"]),
+				"dropdown":   dropByParent[dashboardPageName],
+			})
 			continue
 		}
 

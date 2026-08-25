@@ -136,74 +136,78 @@ export interface WarRoomFilters {
 }
 
 /* ─── TAT buckets ──────────────────────────────────────────────────────────
-   A bucket covers `lo < minutes <= hi`; the first bucket uses lo = -1 so 0 is
-   included, and the last uses hi = Infinity. Buckets are no longer a fixed
-   list: BASE_TAT_BUCKETS is only the starting grid, and buildTatBuckets()
-   collapses it against the actual data so empty buckets never render and no
-   surviving bucket holds less than MIN_TAT_SHARE of the rows. */
+   A bucket covers `lo < minutes <= hi`; the first uses lo = -1 so 0 is included,
+   and the last uses hi = Infinity.
+
+   FIXED BANDS, deliberately. These used to auto-fit: a five-cell grid of
+   quarter-hours that dropped empty cells and merged any cell holding less than
+   a fifth of the rows into a neighbour, repeatedly, until every survivor
+   cleared the threshold.
+
+   The intent was to never draw a near-empty bar. The effect was that a
+   concentrated distribution — which is what a healthy takedown pipeline looks
+   like — collapsed the whole chart. Enforcement → Removal with 3,099 rows
+   nearly all inside one band merged its way down to a single bucket spanning
+   everything, drawn as one full-width bar labelled "0 min+": a chart that had
+   thrown away the only thing it was there to show, and read as a bug rather
+   than as data.
+
+   Fixed bands cost an empty bar sometimes. That is the cheaper failure: an
+   empty "2 hr+" says nothing took over two hours, which is a fact worth
+   reading, and the axis now means the same thing on both cards and between one
+   filter and the next — so the two charts can actually be compared. */
 export interface TatBucket { label: string; lo: number; hi: number }
 
 export const inTatBucket = (b: TatBucket, m: number): boolean => m > b.lo && m <= b.hi
 
-// Smallest share of the total a bucket may hold before it is merged into a
-// neighbour (i.e. before its range is widened).
-export const MIN_TAT_SHARE = 0.2
+/**
+ * One edge of a band, in the unit that reads naturally at that size.
+ *
+ * Exported for the label helper below rather than inlined, because the two
+ * edges of a band have to agree about how they are spelled or the range reads
+ * as two different scales.
+ */
+function tatEdge(mins: number): string {
+  if (mins < 60) return `${mins} min`
+  const h = Math.floor(mins / 60)
+  const m = mins % 60
+  return m === 0 ? `${h} hr` : `${h} hr ${m} min`
+}
 
 export function tatBucketLabel(lo: number, hi: number): string {
-  if (!isFinite(hi)) return lo === 60 ? '1hr+' : `${lo + 1} min+`
-  return `${Math.max(0, lo + 1)}-${hi} min`
+  const from = Math.max(0, lo)
+  if (!isFinite(hi)) return `${tatEdge(from)}+`
+  // Both edges under the hour read as one range with the unit said once
+  // ("0-30 min"); a band that crosses into hours has to spell both, or "30-60"
+  // silently changes scale halfway through.
+  if (hi < 60) return `${from}-${hi} min`
+  return `${tatEdge(from)} - ${tatEdge(hi)}`
 }
 
 const mkBucket = (lo: number, hi: number): TatBucket => ({ label: tatBucketLabel(lo, hi), lo, hi })
 
+/**
+ * The bands every TAT chart draws.
+ *
+ * Half an hour, the rest of the hour, the second hour, then everything past it
+ * — the shape of the question actually asked of a takedown pipeline, which is
+ * "was this dealt with inside the hour, and if not, how far outside".
+ */
 export const BASE_TAT_BUCKETS: TatBucket[] = [
-  mkBucket(-1, 15), mkBucket(15, 30), mkBucket(30, 45), mkBucket(45, 60), mkBucket(60, Infinity),
+  mkBucket(-1, 30), mkBucket(30, 60), mkBucket(60, 120), mkBucket(120, Infinity),
 ]
 
 /**
- * Collapse BASE_TAT_BUCKETS against a set of TAT measurements so the rendered
- * distribution is self-adjusting:
- *   1. leading/trailing empty buckets are dropped outright (no data lives
- *      there, so widening into them would add nothing);
- *   2. any remaining bucket holding < MIN_TAT_SHARE of the rows is merged into
- *      its smaller neighbour, which widens that neighbour's range — repeated
- *      until every bucket clears the threshold.
- * Returns [] when there is no measurable data at all.
+ * Count a set of TAT measurements into the fixed bands.
+ *
+ * Returns [] when there is nothing measurable at all — which is a different
+ * statement from "every band is zero" and is what lets the card say "no TAT
+ * data" instead of drawing four empty bars.
  */
 export function buildTatBuckets(minutes: number[]): TatBucket[] {
   const valid = minutes.filter(m => m !== null && isFinite(m) && m >= 0)
-  const total = valid.length
-  if (total === 0) return []
-
-  let cells = BASE_TAT_BUCKETS.map(b => ({
-    lo: b.lo, hi: b.hi,
-    count: valid.reduce((n, m) => n + (inTatBucket(b, m) ? 1 : 0), 0),
-  }))
-
-  // 1. Trim empty buckets at both ends.
-  while (cells.length > 1 && cells[0].count === 0) cells = cells.slice(1)
-  while (cells.length > 1 && cells[cells.length - 1].count === 0) cells = cells.slice(0, -1)
-
-  // 2. Merge undersized buckets into the smaller adjacent one. Merging is
-  //    always between neighbours, so the buckets stay contiguous ranges.
-  while (cells.length > 1) {
-    let worst = -1
-    for (let i = 0; i < cells.length; i++) {
-      if (cells[i].count / total >= MIN_TAT_SHARE) continue
-      if (worst === -1 || cells[i].count < cells[worst].count) worst = i
-    }
-    if (worst === -1) break
-
-    const left  = worst > 0 ? cells[worst - 1] : null
-    const right = worst < cells.length - 1 ? cells[worst + 1] : null
-    // Prefer the lighter neighbour so the widened range stays as tight as it can.
-    const mergeLeft = !!left && (!right || left.count <= right.count)
-    const a = mergeLeft ? worst - 1 : worst
-    const b = a + 1
-    cells.splice(a, 2, { lo: cells[a].lo, hi: cells[b].hi, count: cells[a].count + cells[b].count })
-  }
-
-  return cells.map(c => mkBucket(c.lo, c.hi))
+  if (valid.length === 0) return []
+  return BASE_TAT_BUCKETS.map(b => ({ ...b }))
 }
 
 const parseTatTime = (v?: string | null): Date | null => {

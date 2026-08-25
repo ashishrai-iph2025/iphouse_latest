@@ -28,6 +28,9 @@ import (
 
 const securityPolicyTable = "dcp_security_policy"
 
+// Previous password hashes, so the last N cannot be used again.
+const passwordHistoryTable = "dcp_password_history"
+
 // SecurityPolicy is the whole of it. Days and hours rather than durations
 // because that is how it is written down in the document this implements.
 type SecurityPolicy struct {
@@ -46,6 +49,24 @@ type SecurityPolicy struct {
 
 	OTPMaxAttempts  int
 	OTPLockoutHours int
+
+	/* What a password has to LOOK like.
+
+	   Every count below is a minimum, and 0 means "not required" — the same
+	   off-switch the rest of this file uses. Expressed as counts rather than
+	   booleans because "at least one digit" and "at least two digits" are the
+	   same rule with a different number, and a boolean would need replacing the
+	   first time somebody asked for the second. */
+	PasswordMinLength  int
+	PasswordMinDigits  int
+	PasswordMinUpper   int
+	PasswordMinLower   int
+	PasswordMinSymbols int
+
+	/* How many previous passwords may not be used again. 0 switches reuse
+	   checking off; 3 means a new password is refused if it matches any of the
+	   last three. */
+	PasswordHistory int
 }
 
 // DefaultSecurityPolicy is what an install starts with, and what a row that
@@ -59,12 +80,33 @@ func DefaultSecurityPolicy() SecurityPolicy {
 		LockoutHours:       24,
 		OTPMaxAttempts:     5,
 		OTPLockoutHours:    24,
+
+		/* Length 8 with one digit is close to what the forms already asked for,
+		   so an existing install upgrades without every stored password
+		   becoming non-compliant overnight. Case and symbol requirements ship
+		   OFF: they are on the screen for an install that wants them, and
+		   turning one on is a decision somebody should make deliberately
+		   rather than inherit from a default. */
+		PasswordMinLength:  8,
+		PasswordMinDigits:  1,
+		PasswordMinUpper:   0,
+		PasswordMinLower:   0,
+		PasswordMinSymbols: 0,
+
+		PasswordHistory: 3,
 	}
 }
 
 var securityPolicyOnce sync.Once
 
 func ensureSecurityPolicySchema() {
+	// Nothing to create without a database, and every db call below would panic
+	// on the nil pool rather than return an error. Not memoised through the
+	// Once: a caller that runs before Init must not permanently mark the schema
+	// as done.
+	if !db.Ready() {
+		return
+	}
 	securityPolicyOnce.Do(func() {
 		if _, _, err := db.Exec(`
 			CREATE TABLE IF NOT EXISTS ` + securityPolicyTable + ` (
@@ -119,6 +161,50 @@ func ensureSecurityPolicySchema() {
 			  PRIMARY KEY (account_type, account_id, expires_on, warn_day)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`); err != nil {
 			log.Printf("[security-policy] create %s: %v", passwordNoticeTable, err)
+		}
+
+		/* The complexity and history columns arrived after the table did, and
+		   CREATE TABLE IF NOT EXISTS does nothing to a table that already
+		   exists. Added with the same values DefaultSecurityPolicy carries, so
+		   an upgraded install and a fresh one start from the same policy. */
+		for _, c := range []struct{ col, ddl string }{
+			{"password_min_length", "INT NOT NULL DEFAULT 8"},
+			{"password_min_digits", "INT NOT NULL DEFAULT 1"},
+			{"password_min_upper", "INT NOT NULL DEFAULT 0"},
+			{"password_min_lower", "INT NOT NULL DEFAULT 0"},
+			{"password_min_symbols", "INT NOT NULL DEFAULT 0"},
+			{"password_history", "INT NOT NULL DEFAULT 3"},
+		} {
+			if portalColumnExists(securityPolicyTable, c.col) {
+				continue
+			}
+			if _, _, err := db.Exec(
+				"ALTER TABLE " + securityPolicyTable + " ADD COLUMN " + c.col + " " + c.ddl); err != nil {
+				log.Printf("[security-policy] add %s.%s: %v", securityPolicyTable, c.col, err)
+			}
+		}
+
+		/* Previous passwords, so one cannot be used again.
+
+		   HASHES, never the passwords — the point of storing bcrypt is that a
+		   leak of this table tells an attacker no more than a leak of the login
+		   table does. Reuse is therefore tested by hashing the candidate
+		   against each stored salt, not by comparing strings.
+
+		   Keyed by the identity the LOGIN authenticates on: a client's password
+		   lives on every active row sharing a username, so keying this by
+		   loginId would let the same person cycle a password back by switching
+		   accounts. */
+		if _, _, err := db.Exec(`
+			CREATE TABLE IF NOT EXISTS ` + passwordHistoryTable + ` (
+			  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+			  account_type  VARCHAR(16)  NOT NULL COMMENT 'login | super_admin',
+			  account_key   VARCHAR(191) NOT NULL COMMENT 'login_username, or the super admin email',
+			  password_hash VARCHAR(255) NOT NULL,
+			  created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			  KEY idx_acct (account_type, account_key, created_at)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`); err != nil {
+			log.Printf("[security-policy] create %s: %v", passwordHistoryTable, err)
 		}
 
 		ensurePasswordChangedColumns()
@@ -217,6 +303,11 @@ func Policy() SecurityPolicy {
 
 	ensureSecurityPolicySchema()
 	p := DefaultSecurityPolicy()
+	if !db.Ready() {
+		// The shipped policy, uncached — so the real row is read as soon as
+		// there is a database to read it from.
+		return p
+	}
 	if row, err := db.QueryOne(
 		"SELECT * FROM " + securityPolicyTable + " WHERE id = 1 LIMIT 1"); err == nil && row != nil {
 		p.PasswordExpiryDays = intOr(row["password_expiry_days"], p.PasswordExpiryDays)
@@ -224,6 +315,12 @@ func Policy() SecurityPolicy {
 		p.LockoutHours = intOr(row["lockout_hours"], p.LockoutHours)
 		p.OTPMaxAttempts = intOr(row["otp_max_attempts"], p.OTPMaxAttempts)
 		p.OTPLockoutHours = intOr(row["otp_lockout_hours"], p.OTPLockoutHours)
+		p.PasswordMinLength = intOr(row["password_min_length"], p.PasswordMinLength)
+		p.PasswordMinDigits = intOr(row["password_min_digits"], p.PasswordMinDigits)
+		p.PasswordMinUpper = intOr(row["password_min_upper"], p.PasswordMinUpper)
+		p.PasswordMinLower = intOr(row["password_min_lower"], p.PasswordMinLower)
+		p.PasswordMinSymbols = intOr(row["password_min_symbols"], p.PasswordMinSymbols)
+		p.PasswordHistory = intOr(row["password_history"], p.PasswordHistory)
 		if v := ParseDayList(strFromAny(row["warn_days"])); len(v) > 0 {
 			p.WarnDays = v
 		}
@@ -304,18 +401,40 @@ func SavePolicy(p SecurityPolicy, who string) error {
 	p.OTPMaxAttempts = clampInt(p.OTPMaxAttempts, 0, 100)
 	p.OTPLockoutHours = clampInt(p.OTPLockoutHours, 0, 720)
 
+	/* A FLOOR of 4 on the length, not 0. Unlike expiry or lockout, "no minimum
+	   length" is not a policy anyone means to set, and a stray 0 left in that
+	   box would quietly start accepting one-character passwords. The ceiling is
+	   bcrypt's own: it ignores everything past 72 bytes, so a longer minimum
+	   would demand characters that make no difference to the hash. */
+	p.PasswordMinLength = clampInt(p.PasswordMinLength, 4, 72)
+	p.PasswordMinDigits = clampInt(p.PasswordMinDigits, 0, 72)
+	p.PasswordMinUpper = clampInt(p.PasswordMinUpper, 0, 72)
+	p.PasswordMinLower = clampInt(p.PasswordMinLower, 0, 72)
+	p.PasswordMinSymbols = clampInt(p.PasswordMinSymbols, 0, 72)
+	p.PasswordHistory = clampInt(p.PasswordHistory, 0, 24)
+
 	if err := db.MustExec(`
 		INSERT INTO `+securityPolicyTable+`
 		  (id, password_expiry_days, warn_days, email_warn_days,
-		   max_failed_logins, lockout_hours, otp_max_attempts, otp_lockout_hours, updated_by)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+		   max_failed_logins, lockout_hours, otp_max_attempts, otp_lockout_hours,
+		   password_min_length, password_min_digits, password_min_upper,
+		   password_min_lower, password_min_symbols, password_history, updated_by)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
 		  password_expiry_days=VALUES(password_expiry_days), warn_days=VALUES(warn_days),
 		  email_warn_days=VALUES(email_warn_days), max_failed_logins=VALUES(max_failed_logins),
 		  lockout_hours=VALUES(lockout_hours), otp_max_attempts=VALUES(otp_max_attempts),
-		  otp_lockout_hours=VALUES(otp_lockout_hours), updated_by=VALUES(updated_by)`,
+		  otp_lockout_hours=VALUES(otp_lockout_hours),
+		  password_min_length=VALUES(password_min_length),
+		  password_min_digits=VALUES(password_min_digits),
+		  password_min_upper=VALUES(password_min_upper),
+		  password_min_lower=VALUES(password_min_lower),
+		  password_min_symbols=VALUES(password_min_symbols),
+		  password_history=VALUES(password_history), updated_by=VALUES(updated_by)`,
 		p.PasswordExpiryDays, FormatDayList(p.WarnDays), FormatDayList(p.EmailWarnDays),
-		p.MaxFailedLogins, p.LockoutHours, p.OTPMaxAttempts, p.OTPLockoutHours, who); err != nil {
+		p.MaxFailedLogins, p.LockoutHours, p.OTPMaxAttempts, p.OTPLockoutHours,
+		p.PasswordMinLength, p.PasswordMinDigits, p.PasswordMinUpper,
+		p.PasswordMinLower, p.PasswordMinSymbols, p.PasswordHistory, who); err != nil {
 		return fmt.Errorf("could not save the security policy: %w", err)
 	}
 	InvalidatePolicy()

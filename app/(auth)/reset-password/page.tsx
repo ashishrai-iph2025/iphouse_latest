@@ -1,4 +1,5 @@
 ﻿'use client'
+import { usePasswordPolicy, checkPassword, PasswordRules } from '@/lib/passwordPolicy'
 
 import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from '@/lib/router'
@@ -30,10 +31,13 @@ function ResetPasswordForm() {
       .catch(() => setValidating(false))
   }, [token])
 
+  const policy = usePasswordPolicy()
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
-    if (password.length < 8) { setError('Password must be at least 8 characters'); return }
+    const bad = checkPassword(password, policy)
+    if (bad) { setError(bad); return }
     if (password !== confirm) { setError('Passwords do not match'); return }
     setLoading(true)
     try {
@@ -107,10 +111,11 @@ function ResetPasswordForm() {
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   required
-                  minLength={8}
-                  placeholder="Minimum 8 characters"
+                  minLength={policy.minLength}
+                  placeholder={`Minimum ${policy.minLength} characters`}
                   className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
+                <PasswordRules policy={policy} value={password} />
               </div>
 
               <div>

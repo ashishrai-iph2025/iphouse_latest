@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -15,7 +14,6 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	ipauth "github.com/ip-house/iphouse-api/auth"
@@ -23,11 +21,20 @@ import (
 	"github.com/ip-house/iphouse-api/db"
 )
 
-// Database backup — fully self-contained. The database is dumped over the app's
-// own MySQL connection (see backup_dump.go) and streamed straight to S3 with
-// the AWS SDK. No mysqldump binary and no aws CLI are required, so this works
-// unchanged inside a minimal container with the database hosted elsewhere.
-//
+/*
+Database backup — the LIST of what is already in S3, and nothing that creates one.
+
+Taking a backup was removed on request, on demand and on a schedule alike, and
+removed at the endpoint rather than only in the page: the dump ran over the app's
+own MySQL connection against whichever database the process booted against, which
+follows USE_PRODUCTION_DB and is named nowhere in the UI. A button that can dump
+production without saying so is worth deleting rather than hiding.
+
+What remains reads the bucket and reports what is there. The dump engine that
+produced these files was handlers/backup_dump.go and the scheduler
+handlers/backup_schedule.go; both are in the history if the capability is ever
+wanted back.
+*/
 // Super-Admin only (registered under saAuth in main.go). AWS credentials come
 // from the encrypted aws_credentials table; if none are stored, the SDK's
 // default chain (environment / instance IAM role) is used.
@@ -115,82 +122,6 @@ func (c backupCfg) key(file string) string {
 
 // backupMu ensures only one backup runs at a time (manual or scheduled).
 var backupMu sync.Mutex
-
-// performBackup dumps the database and uploads it to S3, recording the outcome
-// on the schedule row so the page can show last-run status. Shared by the
-// manual endpoint and the scheduler.
-func performBackup(ctx context.Context, trigger string) (file, dest, dur string, err error) {
-	cfg := loadBackupCfg()
-	if cfg.bucket == "" {
-		return "", "", "", fmt.Errorf("the backup S3 target is not configured")
-	}
-	client, cerr := s3ClientFor(ctx, cfg)
-	if cerr != nil {
-		return "", "", "", cerr
-	}
-
-	file = fmt.Sprintf("%s_%s.sql", cfg.name, time.Now().UTC().Format("2006-01-02_15-04-05"))
-	key := cfg.key(file)
-
-	// Stream the dump straight into the S3 uploader via an in-memory pipe — the
-	// full dump is never held in memory or written to the container's disk.
-	pr, pw := io.Pipe()
-	go func() { pw.CloseWithError(dumpDatabase(ctx, cfg.name, pw)) }()
-
-	start := time.Now()
-	uploader := manager.NewUploader(client)
-	_, uerr := uploader.Upload(ctx, &s3.PutObjectInput{
-		Bucket:      awssdk.String(cfg.bucket),
-		Key:         awssdk.String(key),
-		Body:        pr,
-		ContentType: awssdk.String("application/sql"),
-	})
-	if uerr != nil {
-		pr.CloseWithError(uerr)
-		log.Printf("[backup] (%s) FAILED after %s: %v", trigger, time.Since(start).Round(time.Second), uerr)
-		recordBackupRun("failed", file, tail(uerr.Error(), 500))
-		return file, "", "", uerr
-	}
-
-	dur = time.Since(start).Round(time.Second).String()
-	dest = fmt.Sprintf("s3://%s/%s", cfg.bucket, key)
-	log.Printf("[backup] (%s) uploaded %s in %s", trigger, dest, dur)
-	recordBackupRun("success", file, "")
-	return file, dest, dur, nil
-}
-
-// recordBackupRun stores the outcome of the most recent backup on the schedule
-// row (creating it with defaults if it doesn't exist yet).
-func recordBackupRun(status, file, errMsg string) {
-	db.Exec(`INSERT INTO backup_schedule (id, last_run_at, last_status, last_file, last_error)
-		VALUES (1, UTC_TIMESTAMP(), ?, ?, ?)
-		ON DUPLICATE KEY UPDATE last_run_at=UTC_TIMESTAMP(), last_status=?, last_file=?, last_error=?`,
-		status, file, errMsg, status, file, errMsg)
-}
-
-// POST /api/admin/backup/run — dump the database and upload it to S3.
-func RunBackup(w http.ResponseWriter, r *http.Request) {
-	if !backupMu.TryLock() {
-		Fail(w, 409, "A backup is already running. Please wait for it to finish.")
-		return
-	}
-	defer backupMu.Unlock()
-
-	// Detached from the request so a client/proxy disconnect can't abort an
-	// upload mid-stream; the handler still waits for the result.
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
-	defer cancel()
-
-	file, dest, dur, err := performBackup(ctx, "manual")
-	if err != nil {
-		Fail(w, 502, "Backup failed: "+tail(err.Error(), 300))
-		return
-	}
-	OK(w, map[string]any{
-		"success": true, "file": file, "destination": dest,
-		"duration": dur, "message": "Backup completed and uploaded to S3.",
-	})
-}
 
 // GET /api/admin/backup/list — list the backups already stored in S3.
 func ListBackups(w http.ResponseWriter, r *http.Request) {

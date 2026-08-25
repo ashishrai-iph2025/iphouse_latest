@@ -153,6 +153,56 @@ func sourceSummaryFor(p platformDef) []map[string]any {
 	return out
 }
 
+/*
+scrubReportPayload strips the warehouse's identity out of a rendered report.
+
+A report answer carries more than its figures. It names the tables it read
+(`tables`), the ones it could not (`skippedTables`), the single table behind an
+unmerged result (`table`), and its warning text quotes the table a query failed
+against — "3 of this report's queries failed against mediascan._InternetURLsNEW".
+The endpoint serving all of that, /api/reports/data, is open to every login that
+may open a report, a CLIENT login included. So the disclosure this file controls
+everywhere else was going out with every report anyone ran.
+
+What a reader can act on survives. That sources were skipped explains a figure
+that looks short, so it is kept as a COUNT; which sources they were is the part
+they could not act on anyway. Warning and notice text is redacted rather than
+dropped for the same reason — "a query failed" and "a panel was folded from a
+partial list" send a reader to different places, and only the names have to go.
+
+Mutates in place, which is safe because every caller holds a map built for that
+one response: a cache hit is unmarshalled fresh per read, and a miss is written
+to the cache BEFORE this runs, so what is stored stays whole for a reader who
+may see it.
+*/
+func scrubReportPayload(out map[string]any) {
+	if out == nil {
+		return
+	}
+	delete(out, "table")
+	delete(out, "tables")
+
+	if skipped := asStrings(out["skippedTables"]); len(skipped) > 0 {
+		out["skippedSources"] = len(skipped)
+	}
+	delete(out, "skippedTables")
+
+	const alias = "a data source"
+	if wv := strFromAny(out["queryWarning"]); wv != "" {
+		out["queryWarning"] = redactWarehouseNames(wv, alias)
+	}
+	if ev := strFromAny(out["error"]); ev != "" {
+		out["error"] = redactWarehouseNames(ev, alias)
+	}
+	if notices := asStrings(out["notices"]); len(notices) > 0 {
+		clean := make([]string, 0, len(notices))
+		for _, n := range notices {
+			clean = append(clean, redactWarehouseNames(n, alias))
+		}
+		out["notices"] = clean
+	}
+}
+
 // storedTablesFor reads a platform's table list straight from the store, in
 // order. Used to carry the list through a save made by someone who was never
 // shown it.

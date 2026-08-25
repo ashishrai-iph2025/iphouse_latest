@@ -1014,7 +1014,23 @@ func SharedLogins(w http.ResponseWriter, r *http.Request) {
 				MAX(ul.last_name)                                            AS last_name,
 				MAX(ul.designation)                                          AS designation,
 				GROUP_CONCAT(DISTINCT ul.userId)                             AS allUserIds,
+				/* Which login row belongs to which company, as "userId:loginId".
+
+				   A shared login is one dcp_user_login ROW PER COMPANY, and module
+				   grants hang off loginId — so "this person's permissions" is not a
+				   thing that exists: there are as many sets as companies. The list
+				   above collapses them to one row per person and reports MAX(loginId),
+				   which is fine for opening the editor and wrong for anything that
+				   WRITES per-login, because it silently names whichever company was
+				   added last. The pairs are what let the editor ask which one. */
+				GROUP_CONCAT(DISTINCT CONCAT(IFNULL(ul.userId,0), ':', ul.loginId)) AS assignments,
 				GROUP_CONCAT(DISTINCT u.name ORDER BY u.name SEPARATOR ', ') AS master_names,
+				/* Whether this person may sign in. MAX, not MIN: a shared login
+				   is one row per company and the switch is written across all of
+				   them at once, so they agree — except where /admin/users or a
+				   client admin has flipped a SINGLE company's row, and there
+				   "still has a way in" is the honest answer. */
+				MAX(ul.is_active)                                            AS is_active,
 				MAX(sa.role)                                                 AS portal_role
 			FROM dcp_user_login ul
 			LEFT JOIN dcp_user u ON u.userId = ul.userId AND u.deleted = 0
@@ -1022,7 +1038,11 @@ func SharedLogins(w http.ResponseWriter, r *http.Request) {
 				ON CONVERT(sa.email USING utf8mb4) COLLATE utf8mb4_general_ci
 				 = CONVERT(ul.login_username USING utf8mb4) COLLATE utf8mb4_general_ci
 				AND sa.is_active = 1
-			WHERE ul.is_active = 1
+			/* deleted, NOT is_active. Filtering on is_active would hide the very
+			   accounts this page now exists to show — the ones somebody marked
+			   Invalid and may want to mark Valid again. Live-but-barred rows
+			   stay; removed assignments and deleted accounts go. */
+			WHERE ul.deleted = 0
 			GROUP BY ul.login_username` + staffFilterHaving + `
 			ORDER BY loginId DESC`)
 		if err != nil {
@@ -1057,6 +1077,7 @@ func SharedLogins(w http.ResponseWriter, r *http.Request) {
 			LastName      string  `json:"last_name"`
 			Designation   string  `json:"designation"`
 			UserIDs       []int64 `json:"userIds"`
+			IsActive      bool    `json:"isActive"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 
@@ -1097,16 +1118,21 @@ func SharedLogins(w http.ResponseWriter, r *http.Request) {
 				}
 				hashed = h
 			} else {
-				row, _ := db.QueryOne("SELECT login_password FROM dcp_user_login WHERE login_username = ? AND is_active = 1 LIMIT 1", body.LoginUsername)
+				row, _ := db.QueryOne("SELECT login_password FROM dcp_user_login WHERE login_username = ? AND deleted = 0 LIMIT 1", body.LoginUsername)
 				if row != nil {
 					hashed = strVal(row["login_password"])
 				}
 			}
-			// Update credentials on existing rows
-			db.Exec(`UPDATE dcp_user_login SET login_password=?, login_type=?, twofa_secret=?, first_name=?, last_name=?, designation=?, updated_at=UTC_TIMESTAMP() WHERE login_username=? AND is_active=1`,
+			/* deleted = 0, not is_active = 1, throughout this branch: an account
+			   somebody has marked Invalid is still a live account and must stay
+			   editable. Keyed on is_active, editing one found no rows to update,
+			   read no current assignments, and so re-inserted every company as
+			   if new. None of these statements touch is_active — the Valid /
+			   Invalid switch is the only thing that writes it. */
+			db.Exec(`UPDATE dcp_user_login SET login_password=?, login_type=?, twofa_secret=?, first_name=?, last_name=?, designation=?, updated_at=UTC_TIMESTAMP() WHERE login_username=? AND deleted=0`,
 				hashed, body.LoginType, encNullStr(body.TwofaSecret), nullStr(body.FirstName), nullStr(body.LastName), nullStr(body.Designation), body.LoginUsername)
 			// Get current user IDs
-			currentRows, _ := db.Query("SELECT userId FROM dcp_user_login WHERE login_username = ? AND is_active = 1", body.LoginUsername)
+			currentRows, _ := db.Query("SELECT userId FROM dcp_user_login WHERE login_username = ? AND deleted = 0", body.LoginUsername)
 			currentMap := map[int64]bool{}
 			for _, r := range currentRows {
 				currentMap[intVal(r["userId"])] = true
@@ -1115,35 +1141,127 @@ func SharedLogins(w http.ResponseWriter, r *http.Request) {
 			for _, id := range body.UserIDs {
 				newMap[id] = true
 			}
+			/* A company added to an account that is currently marked Invalid
+			   must not hand that account a way back in. The new row inherits
+			   the person's own switch rather than assuming 1 — otherwise
+			   "assign one more dashboard" silently means "and let them sign in
+			   again", which is not what anybody clicked. Defaults to 1 when
+			   there is nothing to inherit from. */
+			newActive := 1
+			if st, _ := db.QueryOne("SELECT MAX(is_active) AS a FROM dcp_user_login WHERE login_username = ? AND deleted = 0", body.LoginUsername); st != nil && st["a"] != nil {
+				newActive = int(intVal(st["a"]))
+			}
 			// Insert new users
 			for _, uid := range body.UserIDs {
 				if !currentMap[uid] {
-					db.Exec(`INSERT INTO dcp_user_login (userId, login_username, login_password, login_type, twofa_secret, first_name, last_name, designation, is_active, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,1,UTC_TIMESTAMP(),UTC_TIMESTAMP())`,
+					db.Exec(`INSERT INTO dcp_user_login (userId, login_username, login_password, login_type, twofa_secret, first_name, last_name, designation, is_active, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP())`,
 						uid, body.LoginUsername, hashed, body.LoginType,
-						encNullStr(body.TwofaSecret), nullStr(body.FirstName), nullStr(body.LastName), nullStr(body.Designation))
+						encNullStr(body.TwofaSecret), nullStr(body.FirstName), nullStr(body.LastName), nullStr(body.Designation), newActive)
 				}
 			}
-			// Soft-delete removed users. uid 0 is an unassigned placeholder row
-			// (userId NULL, created by registration approval) — retire it now
-			// that real company assignments exist.
+			/* Retire removed companies. Both flags, always together: deleted
+			   takes the row out of this list and out of any future "mark Valid"
+			   sweep, is_active keeps it out of every auth query — which is what
+			   lets the rest of the codebase stay unaware that `deleted` exists.
+			   uid 0 is an unassigned placeholder row (userId NULL, created by
+			   registration approval) — retire it now that real company
+			   assignments exist. */
 			for _, r := range currentRows {
 				uid := intVal(r["userId"])
 				if uid == 0 {
-					db.Exec("UPDATE dcp_user_login SET is_active = 0, updated_at = UTC_TIMESTAMP() WHERE login_username = ? AND userId IS NULL", body.LoginUsername)
+					db.Exec("UPDATE dcp_user_login SET is_active = 0, deleted = 1, updated_at = UTC_TIMESTAMP() WHERE login_username = ? AND userId IS NULL", body.LoginUsername)
 					continue
 				}
 				if !newMap[uid] {
-					db.Exec("UPDATE dcp_user_login SET is_active = 0, updated_at = UTC_TIMESTAMP() WHERE login_username = ? AND userId = ?", body.LoginUsername, uid)
+					db.Exec("UPDATE dcp_user_login SET is_active = 0, deleted = 1, updated_at = UTC_TIMESTAMP() WHERE login_username = ? AND userId = ?", body.LoginUsername, uid)
 				}
 			}
 			ok(w, map[string]any{"success": true})
+
+		/*
+			set-active is the Valid / Invalid switch behind the Registrations
+			drawer. It writes is_active and nothing else, across every live row
+			of the account at once — a shared login is one row per company, and
+			"this person may not sign in" that left three of their five rows
+			open would not be a statement about the person at all.
+
+			deleted = 0 in the WHERE is what keeps re-activation honest: without
+			it, marking somebody Valid would also revive every company that had
+			ever been removed from them.
+		*/
+		case "set-active":
+			if body.LoginUsername == "" {
+				fail(w, 422, "login_username required")
+				return
+			}
+			/* Two checks in one round trip.
+
+			   Existence, because RowsAffected cannot answer it: MySQL reports 0
+			   rows affected when an UPDATE matches but changes nothing, so a
+			   second click on "Mark Valid" — or two tabs open on the same
+			   account — would read as "no such account" when the account is
+			   right there and already valid. An aggregate with no GROUP BY
+			   always returns exactly one row, so the test is a NULL loginId
+			   rather than a nil result.
+
+			   And staff, because the list this switch is reached from hides
+			   staff accounts (staffFilterHaving) while the endpoint would
+			   happily bar one for anybody who typed the username by hand. Same
+			   rule as the list, applied to one account instead of all of them. */
+			guard, _ := db.QueryOne(`
+				SELECT MAX(ul.loginId) AS lid,
+				       COALESCE(CASE MAX(sa.role) WHEN 'SuperAdmin' THEN 2 WHEN 'Admin' THEN 1 END, MAX(u.role), 0) AS staff
+				FROM dcp_user_login ul
+				LEFT JOIN dcp_user u ON u.userId = ul.userId AND u.deleted = 0
+				LEFT JOIN dcp_super_admin sa
+					ON CONVERT(sa.email USING utf8mb4) COLLATE utf8mb4_general_ci
+					 = CONVERT(ul.login_username USING utf8mb4) COLLATE utf8mb4_general_ci
+					AND sa.is_active = 1
+				WHERE ul.login_username = ? AND ul.deleted = 0`, body.LoginUsername)
+			if guard == nil || guard["lid"] == nil {
+				fail(w, 404, "No live login rows for this account")
+				return
+			}
+			if intVal(guard["staff"]) != 0 {
+				fail(w, 403, "This account is managed by IP House staff")
+				return
+			}
+			/* Barring an account also stamps force_logout_at, exactly as the
+			   Super Admin "Force logout" action does — the two say the same
+			   thing and must not drift apart.
+
+			   Be aware of what that buys today: nothing reads that column yet
+			   (grep it — superadmin.go writes it and no path tests it), so an
+			   already-open session survives being marked Invalid. is_active is
+			   checked at sign-in, which is why this blocks the NEXT one. Wiring
+			   enforcement is a separate change, and stamping here means Invalid
+			   inherits it for free the day it lands. */
+			var err error
+			if body.IsActive {
+				_, _, err = db.Exec("UPDATE dcp_user_login SET is_active = 1, updated_at = UTC_TIMESTAMP() WHERE login_username = ? AND deleted = 0",
+					body.LoginUsername)
+			} else {
+				_, _, err = db.Exec("UPDATE dcp_user_login SET is_active = 0, force_logout_at = UTC_TIMESTAMP(), updated_at = UTC_TIMESTAMP() WHERE login_username = ? AND deleted = 0",
+					body.LoginUsername)
+			}
+			if err != nil {
+				log.Printf("[shared-logins] set-active %q failed: %v", body.LoginUsername, err)
+				fail(w, 500, "Could not update this account")
+				return
+			}
+			active := 0
+			if body.IsActive {
+				active = 1
+			}
+			ok(w, map[string]any{"success": true, "isActive": active})
 
 		case "delete":
 			if body.LoginUsername == "" {
 				fail(w, 422, "login_username required")
 				return
 			}
-			db.Exec("UPDATE dcp_user_login SET is_active = 0, updated_at = UTC_TIMESTAMP() WHERE login_username = ?", body.LoginUsername)
+			// Both flags together — see the retire loop above for why.
+			db.Exec("UPDATE dcp_user_login SET is_active = 0, deleted = 1, updated_at = UTC_TIMESTAMP() WHERE login_username = ?", body.LoginUsername)
 			ok(w, map[string]any{"success": true})
 
 		default:

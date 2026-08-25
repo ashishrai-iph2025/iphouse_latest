@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -33,7 +34,17 @@ func SecurityPolicyConfig(w http.ResponseWriter, r *http.Request) {
 				"lockoutHours":       p.LockoutHours,
 				"otpMaxAttempts":     p.OTPMaxAttempts,
 				"otpLockoutHours":    p.OTPLockoutHours,
+				"passwordMinLength":  p.PasswordMinLength,
+				"passwordMinDigits":  p.PasswordMinDigits,
+				"passwordMinUpper":   p.PasswordMinUpper,
+				"passwordMinLower":   p.PasswordMinLower,
+				"passwordMinSymbols": p.PasswordMinSymbols,
+				"passwordHistory":    p.PasswordHistory,
 			},
+			// The same rules as sentences, so the screen can show an admin
+			// exactly what a user will be told to do — rather than leaving them
+			// to translate five numbers into an expectation.
+			"requirements": PasswordRequirements(),
 			// How many accounts are locked right now, so the screen can say so
 			// and offer to release them rather than leaving it to be discovered
 			// through a support call.
@@ -50,6 +61,12 @@ func SecurityPolicyConfig(w http.ResponseWriter, r *http.Request) {
 		LockoutHours       int    `json:"lockoutHours"`
 		OTPMaxAttempts     int    `json:"otpMaxAttempts"`
 		OTPLockoutHours    int    `json:"otpLockoutHours"`
+		PasswordMinLength  int    `json:"passwordMinLength"`
+		PasswordMinDigits  int    `json:"passwordMinDigits"`
+		PasswordMinUpper   int    `json:"passwordMinUpper"`
+		PasswordMinLower   int    `json:"passwordMinLower"`
+		PasswordMinSymbols int    `json:"passwordMinSymbols"`
+		PasswordHistory    int    `json:"passwordHistory"`
 	}
 	json.NewDecoder(r.Body).Decode(&in)
 
@@ -61,6 +78,12 @@ func SecurityPolicyConfig(w http.ResponseWriter, r *http.Request) {
 		LockoutHours:       in.LockoutHours,
 		OTPMaxAttempts:     in.OTPMaxAttempts,
 		OTPLockoutHours:    in.OTPLockoutHours,
+		PasswordMinLength:  in.PasswordMinLength,
+		PasswordMinDigits:  in.PasswordMinDigits,
+		PasswordMinUpper:   in.PasswordMinUpper,
+		PasswordMinLower:   in.PasswordMinLower,
+		PasswordMinSymbols: in.PasswordMinSymbols,
+		PasswordHistory:    in.PasswordHistory,
 	}
 
 	/* A lockout with no duration never lifts. The requirement is that an
@@ -75,6 +98,21 @@ func SecurityPolicyConfig(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 422, "An OTP lockout needs a duration — set the OTP lockout hours, or set OTP max attempts to 0 to switch it off")
 		return
 	}
+	/* The character classes have to FIT in the length.
+
+	   Asking for 12 characters of which 6 digits, 6 capitals and 6 symbols is
+	   a policy no password can satisfy, and it would present itself as every
+	   password change failing rather than as a settings mistake. Checked
+	   against the clamped floor so the message quotes the length that will
+	   actually be stored. */
+	minLen := clampInt(p.PasswordMinLength, 4, 72)
+	if need := p.PasswordMinDigits + p.PasswordMinUpper + p.PasswordMinLower + p.PasswordMinSymbols; need > minLen {
+		Fail(w, 422, fmt.Sprintf(
+			"Those character rules need at least %d characters, but the minimum length is %d — raise the length or lower the requirements",
+			need, minLen))
+		return
+	}
+
 	// A warning threshold longer than the period itself would fire on the day
 	// the password was set, every period, for everybody.
 	if p.PasswordExpiryDays > 0 {

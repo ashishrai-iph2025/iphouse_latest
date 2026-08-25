@@ -112,3 +112,8 @@ func trimSpace(s string) string {
 	}
 	return s
 }
+
+// EnsureSchema creates the activity log, login log and dashboard-access tables.
+// Exported for the startup schema manifest in package main; the lazy callers
+// inside this package still use the unexported form.
+func EnsureSchema() { ensureSchema() }

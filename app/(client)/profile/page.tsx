@@ -1,4 +1,5 @@
 ﻿'use client'
+import { usePasswordPolicy, checkPassword, PasswordRules } from '@/lib/passwordPolicy'
 
 import { useState, useRef } from 'react'
 import { useSession } from '@/lib/auth-client'
@@ -44,9 +45,14 @@ export default function ProfilePage() {
     reader.readAsDataURL(file)
   }
 
+  const pwPolicy = usePasswordPolicy()
+
   async function handlePasswordChange(e: React.FormEvent) {
     e.preventDefault()
     if (pwForm.newPass !== pwForm.confirm) { setPwMsg('❌ Passwords do not match'); return }
+    // The server decides; this only saves a round trip and words it the same way.
+    const bad = checkPassword(pwForm.newPass, pwPolicy)
+    if (bad) { setPwMsg(`❌ ${bad}`); return }
     setPwLoad(true); setPwMsg('')
     try {
       const res  = await fetch('/api/profile/change-password', {
@@ -240,8 +246,8 @@ export default function ProfilePage() {
               <form onSubmit={handlePasswordChange} className="space-y-4 w-full sm:max-w-md">
                 {[
                   { name: 'current', label: 'Current Password',    placeholder: 'Enter current password', min: 1 },
-                  { name: 'newPass', label: 'New Password',        placeholder: 'Minimum 8 characters',   min: 8 },
-                  { name: 'confirm', label: 'Confirm New Password', placeholder: 'Repeat new password',   min: 8 },
+                  { name: 'newPass', label: 'New Password',        placeholder: `Minimum ${pwPolicy.minLength} characters`, min: pwPolicy.minLength },
+                  { name: 'confirm', label: 'Confirm New Password', placeholder: 'Repeat new password',   min: pwPolicy.minLength },
                 ].map(f => (
                   <div key={f.name}>
                     <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">{f.label}</label>
@@ -250,6 +256,7 @@ export default function ProfilePage() {
                       onChange={e => setPwForm(p => ({ ...p, [f.name]: e.target.value }))}
                       required minLength={f.min}
                       className="w-full border border-gray-200 dark:border-white/10 dark:bg-white/5 dark:text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#FC934C]/30 focus:border-[#FC934C] transition-all" />
+                    {f.name === 'newPass' && <PasswordRules policy={pwPolicy} value={pwForm.newPass} />}
                   </div>
                 ))}
 

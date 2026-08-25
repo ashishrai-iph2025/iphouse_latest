@@ -7,7 +7,7 @@ import {
 } from 'recharts'
 import {
   aggregate, buildTatBuckets, inTatBucket, rowSubPlatform, rowChannelKey,
-  tatUrlToEnforcementMins, tatEnforcementToRemovalMins, MIN_TAT_SHARE,
+  tatUrlToEnforcementMins, tatEnforcementToRemovalMins,
   type WarRoomReport as Report, type WarRoomRow, type WarRoomFilters, type TatBucket,
   type Totals, type Funnel, type Removal, type Segment, type Breakdowns, type PlatformResult,
 } from '@/lib/warroom'
@@ -208,13 +208,15 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
     return true
   }
 
-  /* ── Auto-adjusting TAT buckets ───────────────────────────────────────────
-     The bucket RANGES are derived once from the rows that pass every
-     non-TAT filter. Deriving them there (rather than from the fully filtered
-     set) keeps the axis stable when a bucket is clicked, and keeps the two TAT
-     charts from depending on each other's filter — which would be circular.
-     buildTatBuckets drops empty buckets and widens any bucket holding less
-     than MIN_TAT_SHARE of the rows. */
+  /* ── TAT buckets ──────────────────────────────────────────────────────────
+     Fixed bands — 0-30 min, 30 min - 1 hr, 1 hr - 2 hr, 2 hr+ — so the axis
+     means the same thing on both cards and between one filter and the next.
+     See BASE_TAT_BUCKETS for why they stopped auto-fitting.
+
+     Still counted from the rows that pass every non-TAT filter rather than
+     from the fully filtered set: that keeps the totals stable when a band is
+     clicked, and keeps the two TAT charts from depending on each other's
+     filter, which would be circular. */
   const noTatFilters: WarRoomFilters = { ...filters, tatUrlEnf: '', tatEnfRem: '' }
   const tatBaseRows = useMemo(
     () => rows.filter(r => matchesFilters(r, noTatFilters)),
@@ -572,8 +574,8 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
     { key: 'language', label: 'Language' }, { key: 'country', label: 'Country' },
     { key: 'removalStatus', label: 'Removal status' }, { key: 'urlUploadDate', label: 'URL upload date' },
     { key: 'discoveryDoneAt', label: 'Discovery done at' }, { key: 'enforcementTime', label: 'Enforcement time' },
-    { key: 'removalTime', label: 'Removal time' }, { key: 'delistingStatus', label: 'Delisting status' },
-    { key: 'delistingTime', label: 'Delisting time' }, { key: 'searchEngine', label: 'Search engine' },
+    { key: 'removalTime', label: 'Removal time' }, { key: 'delistingStatus', label: 'De-Indexed status' },
+    { key: 'delistingTime', label: 'De-Indexing time' }, { key: 'searchEngine', label: 'Search engine' },
     { key: 'sourceURL', label: 'Host URL' }, { key: 'sourceDomain', label: 'Host domain' },
     { key: 'infringingURL', label: 'Linking URL' }, { key: 'infringingDomain', label: 'Linking domain' },
     { key: 'channelOrProfileUrl', label: 'Channel / profile URL' }, { key: 'channelId', label: 'Channel ID' },
@@ -1377,17 +1379,43 @@ function DonutCard({ title, icon, removed, pending, tone, extras, className = ''
   )
 }
 
+/*
+A category tick that stays on one line.
+
+Recharts' default tick is its own <Text>, which BREAKS ON WORDS to fit the
+axis width — so "30 min - 1 hr" rendered as "30 min - 1" over "hr", turning a
+band name into two lines and pushing the row labels out of alignment with their
+bars. Widening the axis only moves the point at which it happens; the wrapping
+is the behaviour, not the symptom.
+
+A plain <text> has no such logic. `textAnchor="end"` keeps the labels
+right-aligned against the bars as before, and dy centres them on the tick — the
+default <Text> did both by other means, so both have to be restated here.
+*/
+function TatTick({ x, y, payload }: any) {
+  return (
+    <text x={x} y={y} dy={4} textAnchor="end" fill="#64748b" fontSize={11}>
+      {payload?.value}
+    </text>
+  )
+}
+
 /* ── TAT bucket card (clickable, cross-filterable) ───────────────────── */
 function TatBucketCard({ buckets, active, onSelect }: {
   buckets: { label: string; count: number }[]
   active?: string
   onSelect: (label: string) => void
 }) {
-  // Ranges already auto-widen upstream (buildTatBuckets); this is the last
-  // guard so an empty bucket can never reach the screen — including one that
-  // only emptied because another filter narrowed the rows.
-  const shown = buckets.filter(b => b.count > 0 || b.label === active)
-  if (!shown.length) {
+  /* Every band is drawn, empty ones included.
+
+     Hiding them is what made this chart change shape from one filter to the
+     next and, when the data was concentrated, collapse to a single bar. An
+     empty "2 hr+" is a fact — nothing took over two hours — and a bar chart
+     whose categories come and go cannot be compared against itself.
+
+     A set with nothing in it at all is different, and still says so. */
+  const shown = buckets
+  if (!shown.length || shown.every(b => b.count === 0)) {
     return (
       <Card className="p-4 flex flex-col gap-3 flex-1">
         <div className="text-sm font-bold text-[#14254A]">TAT bucket distribution</div>
@@ -1403,7 +1431,7 @@ function TatBucketCard({ buckets, active, onSelect }: {
         <div>
           <div className="text-sm font-bold text-[#14254A]">TAT bucket distribution</div>
           <div className="text-[11px] text-gray-500">
-            {total.toLocaleString()} rows · {shown.length} auto-fitted bucket{shown.length === 1 ? '' : 's'} · click a bar to filter
+            {total.toLocaleString()} rows · {shown.length} bucket{shown.length === 1 ? '' : 's'} · click a bar to filter
           </div>
         </div>
         {hasActive && (
@@ -1416,8 +1444,10 @@ function TatBucketCard({ buckets, active, onSelect }: {
           <BarChart data={shown} layout="vertical" margin={{ top: 8, right: 10, bottom: 8, left: 0 }}
             style={{ cursor: 'pointer' }}>
             <XAxis type="number" hide />
+            {/* Width sized for the longest band name — "30 min - 1 hr" — now
+                that the tick renders it whole rather than folding it. */}
             <YAxis dataKey="label" type="category" axisLine={false} tickLine={false}
-              tick={{ fill: '#64748b', fontSize: 11 }} width={90} />
+              tick={<TatTick />} width={100} />
             <Tooltip cursor={{ fill: '#f8fafc' }} contentStyle={{ borderRadius: 10, border: '1px solid #e4e8f0', fontSize: 13 }} />
             <Bar dataKey="count" barSize={14} radius={[8, 8, 8, 8]}
               onClick={(data: any) => onSelect(data.label)}>

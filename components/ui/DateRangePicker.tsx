@@ -39,6 +39,10 @@ interface Props {
   anchor?: string
   accentColor?: string
   disabled?: boolean
+  /** A shorter trigger, to sit level with compact slicers in a filter rail.
+   *  The calendar panel it opens is unchanged — see SearchableSelect's own
+   *  `compact` for the same reasoning. */
+  compact?: boolean
 }
 
 const NAVY = '#14254A'
@@ -323,7 +327,7 @@ function Month({ m, lo, hi, accent, onSet, days, dayState, onPick, onHover }: {
 }
 
 export default function DateRangePicker({
-  value, onChange, max, min, anchor, accentColor = NAVY, disabled = false,
+  value, onChange, max, min, anchor, accentColor = NAVY, disabled = false, compact = false,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [mounted, setMounted] = useState(false)
@@ -442,8 +446,27 @@ export default function DateRangePicker({
     setOpen(false)
   }
 
+  /*
+  A preset is bounded by the same limits as a click.
+
+  The quick ranges are a function of the anchor alone, so "Last 90 days" over a
+  one-month window used to hand back sixty days its own calendar greys out — a
+  range the caller then has to clamp, or display as chosen when it was not. The
+  day grid has always refused those days; this makes the list beside it agree.
+
+  Clamped rather than hidden, so the list does not change shape with the limits
+  and every preset keeps meaning "as much of this as there is".
+  */
+  function clampToLimits(r: DateRange): DateRange {
+    const lo = min && r.from < min ? min : r.from
+    const hi = max && r.to > max ? max : r.to
+    // A preset entirely outside the limits collapses onto the nearest edge
+    // rather than inverting, which BETWEEN would answer with silence.
+    return { from: lo > hi ? hi : lo, to: hi }
+  }
+
   function usePreset(p: Preset) {
-    const r = p.range(anchorDate)
+    const r = clampToLimits(p.range(anchorDate))
     setDraft(r)
     onChange(r)
     setView(parseYMD(r.from) ?? new Date())
@@ -512,7 +535,8 @@ export default function DateRangePicker({
           }
           setOpen(o => !o)
         }}
-        className={`w-full flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm text-left border transition-colors
+        className={`w-full flex items-center gap-2 text-left border transition-colors ${
+          compact ? 'rounded-[0.625rem] px-2.5 h-8 text-[12.5px]' : 'rounded-xl px-3 py-2.5 text-sm'}
           bg-white dark:bg-white/5
           ${disabled ? 'opacity-50 cursor-not-allowed border-gray-200 dark:border-white/10'
                      : 'border-gray-200 hover:border-gray-300 dark:border-white/15 dark:hover:border-white/25 cursor-pointer'}

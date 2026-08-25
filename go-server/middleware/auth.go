@@ -12,6 +12,27 @@ type contextKey string
 
 const ClaimsKey contextKey = "claims"
 
+/*
+seen is called for every request that carries a valid session.
+
+A hook rather than a direct call because the work belongs to `handlers` — it
+writes to the portal database — and `handlers` already imports THIS package for
+ClaimsFrom. Importing back would be a cycle, so main.go joins the two ends: see
+middleware.OnSeen.
+
+A no-op by default, so a build that never registers one behaves exactly as this
+middleware did before.
+*/
+var seen = func(*ipauth.Claims) {}
+
+// OnSeen registers what to do when an authenticated request arrives. Called once
+// at startup; not safe to call afterwards, and there is no reason to.
+func OnSeen(fn func(*ipauth.Claims)) {
+	if fn != nil {
+		seen = fn
+	}
+}
+
 // JWT reads the JWT from the Authorization header or the "token" cookie.
 func JWT(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -39,6 +60,14 @@ func JWT(next http.Handler) http.Handler {
 			http.Error(w, `{"success":false,"error":"Session expired"}`, http.StatusUnauthorized)
 			return
 		}
+
+		/* This session is alive, whoever it belongs to.
+
+		   Here rather than in the login handlers, because the question the
+		   Active Sessions panel asks is "who is using the portal now" and a
+		   stamp written once at sign-in cannot answer it — nor did the staff
+		   sign-in write one at all. Throttled inside; see TouchLastSeen. */
+		seen(claims)
 
 		ctx := context.WithValue(r.Context(), ClaimsKey, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))

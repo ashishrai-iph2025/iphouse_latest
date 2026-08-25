@@ -375,49 +375,56 @@ export default function AdminHomeClient({ name, today, role }: { name: string; t
           </Card>
         </div>
 
-        {/* Module + Dashboard */}
+        {/* Who has access, beside who has been looking.
+
+            One row, on request. They answer adjacent questions — the modules a
+            login may open, and the reports logins actually opened — so reading
+            them side by side is the comparison worth having.
+
+            Stretched rather than top-aligned, which is what every other pair on
+            this page does: the views list scrolls inside itself to a fixed
+            height, so the row has a settled bottom edge and the bar chart simply
+            carries some air under it. Ragged card bottoms in a two-up row read
+            as a layout that broke. */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          {/* Horizontal bars, so the half-width is spent on label room
+              rather than lost — module names read rather than truncate. */}
           <Card className="p-5">
             <ChartTitle>Module Access Distribution</ChartTitle>
             <ChartSub>Users with access per module</ChartSub>
             {loading ? <Skeleton h={200} /> : <BarH items={moduleItems} />}
           </Card>
-          <Card className="p-5">
-            <ChartTitle>PowerBI Dashboard Views</ChartTitle>
-            <ChartSub>Most accessed reports</ChartSub>
-            {loading ? <Skeleton h={200} /> : (dashItems.length === 0 ? <EmptyState /> : <BarH items={dashItems} />)}
+
+          {/* Recent dashboard views */}
+          <Card>
+            <div className="px-5 py-4" style={{ borderBottom: `1px solid ${d.divider}` }}>
+              <p style={{ fontFamily: "'DM Sans', sans-serif", color: d.text, fontWeight: 600, fontSize: 14 }}>Recent Dashboard Views</p>
+              <p style={{ fontFamily: "'Inter', sans-serif", color: d.sub, fontSize: 11 }}>Who opened which PowerBI report</p>
+            </div>
+            {/* Scrolls inside itself, like the usage table and Recent Logins —
+                same maxHeight, so the three cards keep a common baseline instead
+                of each ending wherever its own list happens to. */}
+            <div className="overflow-y-auto" style={{ maxHeight: 360 }}>
+              {loading ? <Skeleton h={160} /> : (data?.recentDashboardViews ?? []).length === 0 ? <EmptyState /> : (data?.recentDashboardViews ?? []).map((v, i) => (
+                <div key={v.id} className="flex items-center gap-3 px-5 py-3"
+                  style={{ borderBottom: `1px solid ${d.rowBorder}`, background: i % 2 === 0 ? d.rowEven : d.rowOdd }}>
+                  <div className="w-8 h-8 rounded flex items-center justify-center text-xs font-bold flex-shrink-0"
+                    style={{ background: d.iconBg, color: d.text }}>
+                    {(v.client || v.username || 'U').charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium truncate" style={{ color: d.text }}>{v.client}</p>
+                    <p className="text-[10px] truncate" style={{ color: d.sub }}>{v.username || '—'}</p>
+                  </div>
+                  <div className="min-w-0 flex-1 text-right">
+                    <p className="text-xs font-medium truncate" style={{ color: ORANGE }}>{v.report}</p>
+                    <p className="text-[10px] truncate" style={{ color: d.sub }}>{v.viewedAt}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
           </Card>
         </div>
-
-        {/* Recent dashboard views */}
-        <Card>
-          <div className="px-5 py-4" style={{ borderBottom: `1px solid ${d.divider}` }}>
-            <p style={{ fontFamily: "'DM Sans', sans-serif", color: d.text, fontWeight: 600, fontSize: 14 }}>Recent Dashboard Views</p>
-            <p style={{ fontFamily: "'Inter', sans-serif", color: d.sub, fontSize: 11 }}>Who opened which PowerBI report</p>
-          </div>
-          {/* Scrolls inside itself, like the usage table and Recent Logins —
-              same maxHeight, so the three cards keep a common baseline instead
-              of each ending wherever its own list happens to. */}
-          <div className="overflow-y-auto" style={{ maxHeight: 360 }}>
-            {loading ? <Skeleton h={160} /> : (data?.recentDashboardViews ?? []).length === 0 ? <EmptyState /> : (data?.recentDashboardViews ?? []).map((v, i) => (
-              <div key={v.id} className="flex items-center gap-3 px-5 py-3"
-                style={{ borderBottom: `1px solid ${d.rowBorder}`, background: i % 2 === 0 ? d.rowEven : d.rowOdd }}>
-                <div className="w-8 h-8 rounded flex items-center justify-center text-xs font-bold flex-shrink-0"
-                  style={{ background: d.iconBg, color: d.text }}>
-                  {(v.client || v.username || 'U').charAt(0).toUpperCase()}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium truncate" style={{ color: d.text }}>{v.client}</p>
-                  <p className="text-[10px] truncate" style={{ color: d.sub }}>{v.username || '—'}</p>
-                </div>
-                <div className="min-w-0 flex-1 text-right">
-                  <p className="text-xs font-medium truncate" style={{ color: ORANGE }}>{v.report}</p>
-                  <p className="text-[10px] truncate" style={{ color: d.sub }}>{v.viewedAt}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
 
         {/* Top 20 tables */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">

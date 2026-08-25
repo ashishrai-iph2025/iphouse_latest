@@ -65,6 +65,12 @@ var knownFilterParams = []string{
 	// Sports: attributes of the asset rather than of the row — see the
 	// candidates in reportplatforms.go.
 	"franchiseName", "matchDay",
+	// The account behind the post, by URL. Picked off the repeat-offenders
+	// panel rather than from a dropdown — see panelOnlyFilters.
+	"channelUrl",
+	// The hosting provider a DMCA notice was sent to — see
+	// enforcementactions.go.
+	"hspName",
 }
 
 /* ── Panels ───────────────────────────────────────────────────────────────────
@@ -373,12 +379,16 @@ func summarySection(platforms []platformDef, clientID string) (map[string]any, b
 		"dimensions": dims, "filters": filters, "extraKpi": extras,
 		// The subset of `filters` that gets a dropdown in the rail — see the
 		// sections endpoint, which draws the same distinction.
-		"slicers":  slicers,
-		"kpiTiles": tiles,
+		"slicers": slicers,
+		// What Report Configuration renamed or described each slicer as.
+		"slicerMeta": sectionSlicerMeta(summaryKey, clientID, filters, paneCandidates),
+		"kpiTiles":   tiles,
 		// No table list — same reason as the per-platform sections above.
 		// The summary has no source roles of its own — it never draws a linking
 		// trend against a hosting one — so it takes the single merged trend.
-		"panels": sectionPanels(summaryKey, clientID, dims, nil, tiles),
+		// The summary merges several platforms into one set of totals, so it has
+		// no per-side action trend to draw — see actionsForPlatform.
+		"panels": sectionPanels(summaryKey, clientID, dims, nil, tiles, nil, nil),
 		// What the summary is actually adding up, so the page can say so rather
 		// than leaving the reader to guess the scope of a total.
 		"platforms": labels,

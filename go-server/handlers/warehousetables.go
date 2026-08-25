@@ -125,7 +125,7 @@ func WarehouseTablesList(w http.ResponseWriter, r *http.Request) {
 	   a second source for this list is how the two come to disagree about what
 	   exists. */
 	if !reportsViaAPI() {
-		reportsUnavailable(w, fmt.Errorf(
+		reportsUnavailable(w, r, fmt.Errorf(
 			"the warehouse table list comes from reports_api — set REPORTS_API_URL to read it"))
 		return
 	}
@@ -141,7 +141,7 @@ func WarehouseTablesList(w http.ResponseWriter, r *http.Request) {
 		   the far side, so the likely failure is "this portal is not on the
 		   admin allowlist" — a sentence that tells an operator exactly what to
 		   change, and which "warehouse unavailable" would have thrown away. */
-		reportsUnavailable(w, err)
+		reportsUnavailable(w, r, err)
 		return
 	}
 

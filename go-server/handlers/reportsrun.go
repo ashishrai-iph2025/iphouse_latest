@@ -77,7 +77,7 @@ func ReportsSections(w http.ResponseWriter, r *http.Request) {
 		   Open Web's domain filter serves both the linking and the hosting
 		   panel, and hiding one must not take the other's control with it. */
 		hidden := hiddenDimsFor(p.Key, clientID, dims, rolesForPlatform(p),
-			kpiTilesFor(platformExtraKPIs(p)))
+			kpiTilesFor(platformExtraKPIs(p)), actionsForPlatform(p), delistingForPlatform(p))
 		stillShown := map[string]bool{}
 		for _, d := range dims {
 			key := strFromAny(d["key"])
@@ -95,6 +95,7 @@ func ReportsSections(w http.ResponseWriter, r *http.Request) {
 		   starts from — but it is a default now, and Report Configuration can
 		   say otherwise in either direction. */
 		slicers := sectionSlicers(p.Key, clientID, params, stillShown)
+		slicerMeta := sectionSlicerMeta(p.Key, clientID, params, stillShown)
 		inPane := map[string]bool{}
 		for _, k := range slicers {
 			inPane[k] = true
@@ -117,7 +118,7 @@ func ReportsSections(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Strings(extras)
 
-		out = append(out, map[string]any{
+		entry := map[string]any{
 			"key": p.Key, "label": p.Label,
 			"dimensions": dims, "filters": filters, "extraKpi": extras,
 			/* `filters` is what the section UNDERSTANDS — every parameter a click
@@ -127,6 +128,9 @@ func ReportsSections(w http.ResponseWriter, r *http.Request) {
 			   is asked for, and hiding a slicer must not stop the panel beneath
 			   it cross-filtering the page. */
 			"slicers": slicers,
+			// What Report Configuration renamed or described each slicer as, where
+			// it did — see sectionSlicerMeta.
+			"slicerMeta": slicerMeta,
 			/* The table list is NOT published here.
 
 			   This endpoint is served to every authenticated login, client
@@ -139,8 +143,19 @@ func ReportsSections(w http.ResponseWriter, r *http.Request) {
 			// and at the widths this platform is configured for. `dimensions` is
 			// still here because the panel list references it by key.
 			"kpiTiles": kpiTilesFor(extras),
-			"panels":   sectionPanels(p.Key, clientID, dims, rolesForPlatform(p), kpiTilesFor(extras)),
-		})
+			"panels":   sectionPanels(p.Key, clientID, dims, rolesForPlatform(p), kpiTilesFor(extras), actionsForPlatform(p), delistingForPlatform(p)),
+		}
+		/* The window this report is bound to, where one is configured.
+
+		   Sent with the SECTION rather than as a setting of its own, because it
+		   is a property of the report: the page switches section by section and
+		   has to re-pin its calendar each time, and a separate lookup is a
+		   second thing to keep in step with the first. Absent means the section
+		   has the open calendar every report used to have. */
+		if period, governed := sportsPeriodFor(p, clientID); governed {
+			entry["period"] = map[string]any{"start": period.Start, "end": period.End}
+		}
+		out = append(out, entry)
 	}
 
 	// The summary is a virtual platform over everything above it, so it is added
@@ -183,7 +198,12 @@ func sectionDimensions(p platformDef) []map[string]any {
 			if viz == "" {
 				viz = "bars"
 			}
-			dims = append(dims, map[string]any{"key": d.Key, "label": d.Label, "viz": viz})
+			/* `limit` is the registry's own top-N cut, carried so the layout
+			   can offer to change it and can say what it is changing FROM. 0
+			   means this panel is a closed list — every day of the window,
+			   every platform — and must not be cut at all. */
+			dims = append(dims, map[string]any{
+				"key": d.Key, "label": d.Label, "viz": viz, "limit": d.Limit})
 		}
 	}
 	// Panels are collected table by table but read as one page, so they are put
@@ -288,7 +308,7 @@ func ReportsSpecCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !db.ReportsConfigured() {
-		reportsUnavailable(w, fmt.Errorf("reports database is not configured"))
+		reportsUnavailable(w, r, fmt.Errorf("reports database is not configured"))
 		return
 	}
 
@@ -347,6 +367,9 @@ func specWhere(s reportSpec, q map[string]string) (string, []any) {
 		params = append(params, param)
 	}
 	sort.Strings(params)
+	// EVERY declared filter applies here, the unlisted ones included: unlisted
+	// means "no dropdown, no value listing" — never "ignored". A chip that its
+	// own report does not honour is the worst kind of wrong number.
 	for _, param := range params {
 		if v := strings.TrimSpace(q[param]); v != "" {
 			conds = append(conds, s.Filters[param]+" = ?")
@@ -514,6 +537,15 @@ func runSpec(s reportSpec, q map[string]string, bg bool) map[string]any {
 		delistedSel = ", " + s.DelistedExpr + " AS delisted"
 		delistedKey = []string{"delisted"}
 	}
+	/* And the enforcement ACTION, where this table records one — how many
+	   notices went out that day, or how many batches were submitted. Counted in
+	   the same grouped pass as the volumes rather than in a query of its own:
+	   it is the same GROUP BY over the same rows, and running it separately
+	   would double the scan to answer half the card. See enforcementactions.go. */
+	if s.ActionExpr != "" {
+		delistedSel += ", " + s.ActionExpr + " AS " + s.ActionKey
+		delistedKey = append(delistedKey, s.ActionKey)
+	}
 	daily := mapRows(run(fmt.Sprintf(
 		`SELECT DATE(%s) AS date, %s AS urls, %s AS removed%s
 		   FROM %s %s GROUP BY DATE(%s) ORDER BY date ASC`,
@@ -539,6 +571,17 @@ func runSpec(s reportSpec, q map[string]string, bg bool) map[string]any {
 			if removedExpr == "" {
 				removedExpr = "0"
 			}
+		}
+
+		/* Repeat offenders carry a THIRD measure — how many distinct days the
+		   account was seen on — which no other panel has and the generic
+		   queries below cannot express. Its own statement, and its own row
+		   mapping, so `repeats` survives to the page. See repeatoffenders.go. */
+		if d.Key == dimRepeatOffender {
+			breakdowns[d.Key] = mapRows(
+				run(repeatOffenderSQL(s, d, where, identExpr, removedExpr)),
+				"label", "value", "urls", "removed", "repeats")
+			continue
 		}
 
 		var rows []map[string]any
@@ -745,6 +788,14 @@ func optionsForSpec(s reportSpec, clientID string, q map[string]string) map[stri
 
 	params := make([]string, 0, len(s.Filters))
 	for param := range s.Filters {
+		// A slicer whose values are never listed is never scanned for them —
+		// see unlistedFilterParams. This is a DISTINCT over the whole window,
+		// and on an account-URL column it is the most expensive query this
+		// endpoint would run, spent on a dropdown that is never drawn. The
+		// FILTER itself still applies — see specWhere.
+		if unlistedFilterParams[param] {
+			continue
+		}
 		params = append(params, param)
 	}
 	sort.Strings(params)
@@ -868,6 +919,43 @@ func max64(a, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+/*
+repeatOffenderSQL is the repeat-offenders panel as one grouped statement.
+
+Three things separate it from the generic breakdown query above:
+
+  - COUNT(DISTINCT DATE(...)) — the day count the panel ranks on. DATE() rather
+    than the raw column, because URLUploadDate is a datetime on some of these
+    tables and every row would otherwise be its own day.
+  - HAVING, so an account seen on a single day never reaches the chart. It is
+    not a repeat offender, and ten of them under this title would be a chart
+    that contradicts its own heading.
+  - ORDER BY the day count first. Volume breaks the tie, which is the same
+    order sortRepeatRows applies on the API path and after the per-platform
+    merge — the three have to agree or the same window draws two different
+    charts depending on which backend answered.
+
+The measures are passed in rather than read off the spec: a dimension may
+override them, and the caller has already resolved that.
+*/
+func repeatOffenderSQL(s reportSpec, d dimension, where, identExpr, removedExpr string) string {
+	limit := d.Limit
+	if limit <= 0 {
+		limit = repeatOffenderLimit
+	}
+	return fmt.Sprintf(
+		`SELECT COALESCE(%s,'Unknown') AS label, COALESCE(%s,'Unknown') AS value,
+		        %s AS urls, %s AS removed,
+		        COUNT(DISTINCT DATE(%s)) AS repeats
+		   FROM %s %s AND %s IS NOT NULL AND %s != ''
+		  GROUP BY %s
+		 HAVING repeats >= %d
+		  ORDER BY repeats DESC, urls DESC
+		  LIMIT %d`,
+		d.Column, d.Column, identExpr, removedExpr, s.DateCol,
+		s.Table, where, d.Column, d.Column, d.Column, minRepeatDays, limit)
 }
 
 // qualifyExpr prefixes bare column references in a measure expression with a

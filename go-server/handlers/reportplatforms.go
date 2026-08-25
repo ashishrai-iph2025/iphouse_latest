@@ -193,6 +193,17 @@ var (
 		// that counts something else needs to say which — otherwise it silently
 		// draws the section's identified count under a title promising notices.
 		APIMeasure string
+		/* The table SIDE this panel belongs to — "host" or "linking" — for the
+		   columns that exist on BOTH halves of a two-table report.
+
+		   Presence is not ownership. The two sports raw tables now share their
+		   enforcement columns, and a candidate matched purely on "the column is
+		   there" would build the same panel from both tables — after which
+		   runPlatform sums the two by label, and a notice whose id is stamped
+		   in both tables is one notice reported as two. Empty means any side,
+		   which is every panel whose column means the same thing wherever it
+		   appears. */
+		Role string
 	}{
 		// ORDER IS THE READING ORDER of the panels on the page — where in the
 		// world, against which titles, on which sites, delivered how, found by
@@ -267,9 +278,35 @@ var (
 		// named for what each side of the enforcement actually is.
 		{Key: "byDomain", Column: "InfringingDomain", Label: "Top 10 Linking Websites", Viz: "hbar"},
 		{Key: "byDomainSource", Column: "SourceDomain", Label: "Top 10 Host Websites", Viz: "hbar"},
-		{Key: "byPlatform", Column: "Platform", Label: "Platforms", Viz: "donut"},
+		/* SOCIAL platforms, and the name has to say so.
+
+		   It groups by the `Platform` column, which only the social/UGC tables
+		   carry — so on a platform that also reads the open web, Telegram or the
+		   app stores, this panel lists a strict SUBSET of where infringements
+		   were found while being titled as though it listed all of them. Read as
+		   a complete list it invites exactly one question: where is Open Web.
+
+		   Open Web is on bySourcePlatform ("Identification & Removal basis
+		   Platform"), which splits the report by CHANNEL and is the panel that
+		   answers that. It is not folded in here: these rows are also the
+		   Platform slicer's values, and a row nothing can filter on — no table
+		   carries `Platform = 'Open Web'`, and the open-web tables declare no
+		   platform filter at all — would empty the page when it was clicked.
+
+		   The built-in summary has always called this one "Top 10 Social Media
+		   Platforms"; this is the same correction for every other report. */
+		{Key: "byPlatform", Column: "Platform", Label: "Social Media Platforms", Viz: "donut"},
 		{Key: "byChannel", Column: "ChannelName", Alts: []string{"ChannelOrProfileName"},
 			Label: "Top 10 Channels", Viz: "hbar"},
+		/* ── The same accounts, ranked by PERSISTENCE rather than volume ──────
+		   Directly after the channel list, because it is the second question
+		   asked of it: not which account posted the most, but which one keeps
+		   coming back day after day. Grouped on the account's URL rather than
+		   its name — see repeatoffenders.go, which is also where the distinct-day
+		   count is computed, since neither backend has a measure for it. */
+		{Key: dimRepeatOffender,
+			Column: repeatURLColumns[0], Alts: repeatURLColumns[1:],
+			Label: "Repeat Offenders - Top 10 Channels / Profiles", Viz: "repeat"},
 		// How the infringing copy reaches the viewer — downloadable, streaming,
 		// torrent. One measure, so single-series bars rather than a grouped pair.
 		{Key: "byDeliveryType", Column: "DeliveryType", Label: "Delivery Type", Viz: "value"},
@@ -286,6 +323,64 @@ var (
 			APIMeasure: "notices"},
 		// The search terms the infringing pages were found under. A long tail cut
 		// to ten; the full list is behind the panel's table view.
+		/* ── Enforcement, per counterparty ───────────────────────────────────
+		   Who the action went TO, counted in ACTIONS rather than in URLs.
+
+		   Both count DISTINCT ids, and that is the whole point of them. A notice
+		   id is stamped on every source URL the notice listed and a batch id on
+		   every link in the submission, so the row count answers "how many links
+		   were covered" — a number four orders of magnitude larger, already on
+		   the page, and easy to mistake for this one. What an enforcement team
+		   is measured on is how many notices went out and how many batches were
+		   submitted.
+
+		   Single-series bars: a notice has no removal figure of its own. What
+		   became of the URLs it covered is the panel above it.
+
+		   Only the two sports raw tables carry these columns, so `Needs` is what
+		   keeps the panels off every other report — a table without the id
+		   matches no candidate and simply has no such card. */
+		{Key: dimHSPNotices, Column: "HSPName", Viz: "value",
+			Label: "Enforcement Notices - Hosting Provider",
+			Ident: "COUNT(DISTINCT %s)", Removed: "0",
+			Needs: colSourceNoticeID, APIMeasure: "notices", Role: "host"},
+		/* The same counterparty on the LINKING half, which carries HSPName on
+		   every row — 680 distinct providers against the host side's 469.
+
+		   It counts DE-INDEXING SUBMISSIONS, not notices, because that is the
+		   action the linking table records: there is no SourceDMCANoticeId on it
+		   and never will be, since a notice is sent to a host and a submission
+		   goes to the engines that indexed the link. Naming it for the notices
+		   panel above would have put two cards called "Enforcement Notices" on
+		   one page counting two different actions — the exact confusion
+		   actionMeasures pins roles to prevent. Renameable per platform in
+		   Report Configuration if a client's own wording differs.
+
+		   Declared HERE rather than at the end so dimensionRank lands it beside
+		   the host panel, which is the comparison it exists for. */
+		{Key: dimHSPDelisting, Column: "HSPName", Viz: "value",
+			Label: "De-Indexing - Hosting Provider",
+			Ident: "COUNT(DISTINCT %s)", Removed: "0",
+			Needs: colDelistingBatchID, APIMeasure: "delistingBatches", Role: "linking"},
+		{Key: dimEngineDelistingBatches, Column: "SearchEngineName", Alts: []string{"SearchEngine"},
+			Viz: "value", Label: "De-Indexing - Search Engine",
+			Ident: "COUNT(DISTINCT %s)", Removed: "0",
+			Needs: colDelistingBatchID, APIMeasure: "delistingBatches", Role: "linking"},
+		/* ── Enforcement, per DAY ────────────────────────────────────────────
+		   The same distinct counts grouped by URLUploadDate instead of by
+		   counterparty — how many notices went out each day, how many batches
+		   were submitted each day. Built exactly like the two panels above,
+		   because they are the same measure asked "when" instead of "to whom";
+		   the timestamps fold to their calendar day and the bars run in date
+		   order. These replaced the Day-on-Day action trend cards. */
+		{Key: dimNoticesByDay, Column: "URLUploadDate", Viz: "value",
+			Label: "Day-wise Enforcement Notices",
+			Ident: "COUNT(DISTINCT %s)", Removed: "0",
+			Needs: colSourceNoticeID, APIMeasure: "notices", Role: "host"},
+		{Key: dimBatchesByDay, Column: "URLUploadDate", Viz: "value",
+			Label: "Day-wise De-Indexing",
+			Ident: "COUNT(DISTINCT %s)", Removed: "0",
+			Needs: colDelistingBatchID, APIMeasure: "delistingBatches", Role: "linking"},
 		{Key: "byKeyword", Column: "Keyword", Alts: []string{"KeywordName"},
 			Label: "Top 10 Keywords", Viz: "hbar"},
 		// Columns: a handful of languages carrying wildly different volumes, where
@@ -371,6 +466,12 @@ var (
 		// the search-engine table's name for it and EnforcementCount the unified
 		// table's; without both, the notices figure — and the two Enforcement
 		// Notification cards that read it — never appears at all.
+		/* No COUNT(DISTINCT SourceDMCANoticeId) form here, deliberately: the
+		   enforcement-action KPIs are ROLE-PINNED and set by the action block
+		   in inferSpec, because their columns now exist on both sports raw
+		   tables and presence-matching would count the same actions on both
+		   sides. The SUM forms below stay — they are the per-row counters the
+		   other tables carry, and no second table shares those columns. */
 		{"notices", "SUM(NoticeCount)", "NoticeCount"},
 		{"notices", "SUM(NoticeSentCount)", "NoticeSentCount"},
 		{"notices", "SUM(EnforcementCount)", "EnforcementCount"},
@@ -422,6 +523,103 @@ var (
 		{"SiteStatus", "COUNT(DISTINCT CASE WHEN SiteStatus IN ('Suspended','Dead') THEN %s END)"},
 	}
 )
+
+/*
+sportsHeadlineKPIs are the two figures the sports reports asked for.
+
+Kept out of extraKPICandidates and out of inferSpec's body for one reason each:
+
+  - `viewsImpacted` needs a PAIR of columns, and that table matches on one. The
+    pair matters because of how getting it wrong fails: on a table with views and
+    no removal status the CASE has nothing to test, the figure quietly equals
+    total views, and the tile reads as "every view was taken down". An absent
+    tile is the right answer there; a plausible wrong number is not.
+
+  - the channel counts moved to channelKPIs, which owns both of them because the
+    two can collapse into one figure and something has to decide that in one
+    place.
+
+The warehouse records "this row came down" in two different spellings and which
+one a table uses is not something to assume — see removedRowTest. Whichever it
+carries is the one used.
+
+A function rather than inline code so it can be tested without a warehouse — see
+sportskpis_test.go.
+*/
+/*
+channelKPIs are the two channel counts, and whether this table has one of them or
+both.
+
+	totalChannels     the ACCOUNT — a URL where the table has one, else the name
+	totalTVChannels   the STATION — see tvChannelColumn, which is where "which
+	                  column is that" is answered for both code paths
+
+Both, on a table that records accounts and stations separately. ONE where they
+resolve to the same column, which happens on every table with no ChannelURL: the
+two figures would then be the identical number — 326 on Open Web sports — and two
+tiles reading 326 under two names is a report inviting the reader to hunt for a
+difference that does not exist. The NAMED one survives, because it says what it
+counts and it is the tile the sports reports were asked for.
+*/
+func channelKPIs(shape tableShape) map[string]string {
+	out := map[string]string{}
+	if ch := shape.firstOf([]string{colChannelURL, colChannelName}); ch != "" {
+		out["totalChannels"] = fmt.Sprintf("COUNT(DISTINCT %s)", ch)
+	}
+	if col := tvChannelColumn(shape.has); col != "" {
+		out["totalTVChannels"] = fmt.Sprintf("COUNT(DISTINCT %s)", col)
+		if out["totalTVChannels"] == out["totalChannels"] {
+			delete(out, "totalChannels")
+		}
+	}
+	return out
+}
+
+func sportsHeadlineKPIs(shape tableShape) map[string]string {
+	out := map[string]string{}
+	/* Both halves or neither.
+
+	   On a table with views and no removal marker the CASE would have nothing to
+	   test, the figure would quietly equal total views, and the tile would read
+	   "every view was taken down" — a plausible wrong number, which is worse
+	   than the absent tile. */
+	if v := shape.firstOf([]string{"Views", "TotalViews"}); v != "" {
+		if test := removedRowTest(shape); test != "" {
+			out["viewsImpacted"] = fmt.Sprintf("SUM(CASE WHEN %s THEN %s ELSE 0 END)", test, v)
+		}
+	}
+	return out
+}
+
+/*
+removedRowTest is how THIS table says a row came down.
+
+Two spellings exist in the warehouse and a table carries one or the other:
+
+	RemovalStatus = 'Dead'   the social and Telegram raw tables, where the
+	                         column also holds 'Active' and empty — checked
+	                         against the data, which is why this is an equality
+	                         and not a LIKE
+	IsRemoved = 1            the Open Web sports raw tables
+
+Empty for a table that records neither, and that is the important case: the
+daily ROLLUP tables (Youtube, Telegram master, the social dashboard, the unified
+BI table) carry a summed RemovedCount beside a summed TotalViews, and no row-level
+marker at all. On those, "views on the rows that came down" is not a number that
+exists — a row is "on this day, 100 URLs, 40 of them removed, 1M views" and there
+is nothing that says which views belonged to the 40. Returning empty is what keeps
+the tile off those reports instead of inventing an attribution. ViewsSaved is the
+warehouse's own answer to that question there, and it already has a tile.
+*/
+func removedRowTest(shape tableShape) string {
+	if shape.has("RemovalStatus") {
+		return "RemovalStatus = 'Dead'"
+	}
+	if shape.has("IsRemoved") {
+		return "IsRemoved = 1"
+	}
+	return ""
+}
 
 type tableShape struct {
 	Table   string
@@ -613,6 +811,11 @@ func inferRole(shape tableShape) (role, label string) {
 		return "linking", "Linking"
 	case shape.has("SourceDomain"):
 		return "host", "Host"
+	// Sports tables: DelistingBatchId on linking side, SourceDMCANoticeId on host side
+	case shape.has("DelistingBatchId"):
+		return "linking", "Linking"
+	case shape.has("SourceDMCANoticeId"):
+		return "host", "Host"
 	}
 	return "", ""
 }
@@ -681,7 +884,6 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 	if len(shape.Columns) == 0 {
 		return reportSpec{}, false
 	}
-
 	client := shape.firstOf(clientColCandidates)
 	date := shape.firstOf(dateColCandidates)
 	if client == "" || date == "" {
@@ -729,6 +931,34 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 		s.DelistedExpr = "COUNT(CASE WHEN IsGoogleDelisted=1 OR IsBingDelisted=1 THEN 1 END)"
 	}
 
+	/* The ENFORCEMENT ACTION this table records, counted per day beside the
+	   volumes — see actionMeasures. One per table by construction: the notice id
+	   is on the host table and the batch id on the linking one, which is why the
+	   two halves of Open Web each get their own action trend rather than sharing
+	   a card that would have to explain which column it was drawing. */
+	for _, a := range actionMeasures {
+		// Pinned to the table's side, not to whichever column happens to
+		// exist: the two raw tables now share these columns, and matching on
+		// presence alone would give both sides the FIRST action in this list —
+		// the same number drawn twice under two titles.
+		if a.Role != "" && a.Role != s.Role {
+			continue
+		}
+		if col := shape.firstOf([]string{a.Column}); col != "" {
+			s.ActionKey = a.Key
+			s.ActionCol = col
+			s.ActionExpr = fmt.Sprintf("COUNT(DISTINCT %s)", col)
+			s.ActionLabel = a.Label
+			/* And the headline tile, from the same resolution. Declared here
+			   rather than in extraKPICandidates because those match on column
+			   presence, which is no longer enough to say whose figure it is —
+			   one pinned decision drives the tile, the daily series and the
+			   trend card, so they cannot disagree. */
+			s.ExtraKPI[a.Key] = s.ActionExpr
+			break
+		}
+	}
+
 	// Distinct-count KPIs that only make sense when the column is there.
 	if dom := shape.firstOf([]string{"InfringingDomain", "SourceDomain", "Domain"}); dom != "" {
 		s.ExtraKPI["totalDomains"] = fmt.Sprintf("COUNT(DISTINCT %s)", dom)
@@ -742,8 +972,11 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 	if s.AssetCol != "" {
 		s.ExtraKPI["totalAssets"] = fmt.Sprintf("COUNT(DISTINCT %s)", s.AssetCol)
 	}
-	if ch := shape.firstOf([]string{"ChannelURL", "ChannelName"}); ch != "" {
-		s.ExtraKPI["totalChannels"] = fmt.Sprintf("COUNT(DISTINCT %s)", ch)
+	for k, expr := range channelKPIs(shape) {
+		s.ExtraKPI[k] = expr
+	}
+	for k, expr := range sportsHeadlineKPIs(shape) {
+		s.ExtraKPI[k] = expr
 	}
 	if shape.has("ChannelStatus") && shape.has("ChannelURL") {
 		// 'Dead' is the warehouse's spelling for a suspended channel. It was
@@ -774,6 +1007,11 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 		if seen[d.Key] || labelSeen[d.Label] {
 			continue
 		}
+		// A side-pinned panel matches only the table of its side, however many
+		// tables carry its columns — see the Role field above.
+		if d.Role != "" && d.Role != s.Role {
+			continue
+		}
 		col := shape.firstOf(append([]string{d.Column}, d.Alts...))
 		if col == "" {
 			continue
@@ -784,8 +1022,9 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 		   counts the column it just proved exists rather than a differently
 		   spelled one that does not. */
 		ident := d.Ident
+		needed := ""
 		if d.Needs != "" {
-			needed := shape.firstOf(append([]string{d.Needs}, d.NeedsAlts...))
+			needed = shape.firstOf(append([]string{d.Needs}, d.NeedsAlts...))
 			if needed == "" {
 				continue
 			}
@@ -815,6 +1054,12 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 		// Closed sets — every value is a panel row, so no cut-off.
 		case "byTAT", "byGroupType", "byQuality", "bySearchEngine", "byPlatform",
 			"byDeliveryType", "byGenre", "byGenreId", "bySearchEngineNotices",
+			// Two or three engines, and the point is the comparison between
+			// them — a top-N would be the whole list wearing a cut-off's name.
+			dimEngineDelistingBatches,
+			// Day-wise action counts show every day of the chosen window; a
+			// top-N here would silently drop days off the calendar.
+			dimNoticesByDay, dimBatchesByDay,
 			// A season's fixtures and a league's franchises are both closed
 			// lists, and a report asked for "removal per match day" means every
 			// match day — a top 15 would silently drop the rest of the season.
@@ -826,7 +1071,10 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 			"byDomain", "byDomainSource", "byChannel",
 			// Brands are a long tail too — thousands of them, and the panel
 			// says "Top 10" by being one.
-			"byDomainRoot", "byDomainRootMirrors":
+			"byDomainRoot", "byDomainRootMirrors",
+			// Accounts are the longest tail of the lot, and this panel keeps
+			// only the ten most persistent of them.
+			dimRepeatOffender:
 			limit = 10
 		}
 		s.Dimensions = append(s.Dimensions, dimension{
@@ -834,6 +1082,9 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 			LookupTable: lkTable, LookupIDCol: lkID, LookupName: lkName,
 			IdentOverride: ident, RemovedOverride: d.Removed,
 			APIMeasure: d.APIMeasure,
+			// The id this panel counts distinct values of, where it counts one at
+			// all — carried through so the API path can walk the raw rows for it.
+			CountDistinctCol: needed,
 		})
 		/* First candidate to claim a slicer keeps it — so "language" filters on
 		   LanguageName rather than being overwritten by LanguageId further down
@@ -850,12 +1101,25 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 		}
 	}
 
+	/* The provider slicer, on BOTH halves. The panel that groups by provider
+	   is pinned to the host side, but the COLUMN exists on the linking table
+	   too — and a filter only one spec declares EXCLUDES the other spec from a
+	   filtered report entirely (see specHonoursFilters), so picking a provider
+	   would amputate the linking half of the page rather than narrow it. The
+	   panel is one side's; the filter belongs to every table that can honour
+	   it. */
+	if col := shape.firstOf([]string{"HSPName"}); col != "" && apiCanGroupBy(table, col) {
+		if _, taken := s.Filters["hspName"]; !taken {
+			s.Filters["hspName"] = col
+		}
+	}
+
 	// Synthetic panel: the delisting comparison is three figures the KPI query
 	// already returns, not a GROUP BY — so it is declared here (with no column,
 	// which the runner skips) and assembled in runPlatform.
 	if s.DelistedExpr != "" {
 		s.Dimensions = append(s.Dimensions, dimension{
-			Key: "byDelistingStatus", Label: "Search Engine Delisting - Identification & Removal",
+			Key: "byDelistingStatus", Label: "Search Engine De-Indexing - Identification & Removal",
 			Viz: "value",
 		})
 	}
@@ -891,6 +1155,24 @@ func DIMFilterParam(dimKey string) string {
 		return "platform"
 	case "byChannel":
 		return "channel"
+	/* The provider a notice was sent to. Its own parameter — "domain" is the
+	   site the content sits on, which is not the same party as the host that
+	   answers the notice for it. */
+	case dimHSPNotices, dimHSPDelisting:
+		/* ONE slicer for both halves. The two panels count different actions
+		   against the same party, and "show me this provider" means the same
+		   thing on either — so clicking a bar on one narrows the other, rather
+		   than the page carrying two provider filters that can disagree. */
+		return "hspName"
+	/* The engine a batch went to is the same engine `bySearchEngine` groups by,
+	   so the two panels share one slicer and clicking either filters both. */
+	case dimEngineDelistingBatches:
+		return "searchEngine"
+	/* Its own parameter, not "channel": that one filters on the display NAME,
+	   and this panel's rows are URLs. Sending a URL to a name filter selects
+	   nothing and empties the page. */
+	case dimRepeatOffender:
+		return "channelUrl"
 	case "byGroupType":
 		return "groupType"
 	case "byQuality", "byQualityId":
@@ -1232,6 +1514,28 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 		}
 	}
 
+	/* The configured top-N, applied to the SPEC rather than to the answer.
+
+	   Before a single query runs, because the limit decides how many rows are
+	   ASKED for. Trimming the result instead would leave "Top 5" costing
+	   exactly what "Top 50" costs, on a warehouse where these are the expensive
+	   panels.
+
+	   This changes N and nothing else. A platform reading several tables still
+	   takes each table's own top-N and merges them, which is an approximation
+	   of the overall top-N — it can miss a value that is eleventh everywhere
+	   and first in total. That is how the default already worked at ten; the
+	   approximation is not introduced here, and it is no worse at five. */
+	if limits := dimRowLimits(p.Key, q["clientId"], sectionDimensions(p)); len(limits) > 0 {
+		for i := range specs {
+			for j := range specs[i].Dimensions {
+				if n, ok := limits[specs[i].Dimensions[j].Key]; ok && n > 0 {
+					specs[i].Dimensions[j].Limit = n
+				}
+			}
+		}
+	}
+
 	merged := map[string]any{}
 	kpi := map[string]int64{}
 	// The preceding window, merged exactly as the current one is — a platform
@@ -1260,6 +1564,10 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	roleKPI := map[string]map[string]int64{}
 	roleDaily := map[string]map[string]map[string]int64{}
 	roleLabels := map[string]string{}
+	// The enforcement action each side records, by role — see
+	// enforcementactions.go. At most one per role, because at most one of a
+	// role's tables carries an action id at all.
+	roleAction := map[string]string{}
 
 	/* ── The platform's tables, together ──────────────────────────────────
 	   A platform reading two tables ran them one after the other, so Open Web
@@ -1315,6 +1623,9 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 		role := s.Role
 		if role != "" {
 			roleLabels[role] = s.RoleLabel
+			if s.ActionKey != "" {
+				roleAction[role] = s.ActionKey
+			}
 			if roleKPI[role] == nil {
 				roleKPI[role] = map[string]int64{}
 			}
@@ -1377,6 +1688,12 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 			roleDaily[role][d]["urls"] += numOf(row["urls"])
 			roleDaily[role][d]["removed"] += numOf(row["removed"])
 			roleDaily[role][d]["delisted"] += numOf(row["delisted"])
+			/* The enforcement action, under its own key. Summed like the rest
+			   and safe to sum: only ONE table per role records an action, so
+			   there is never a second source counting the same notice again. */
+			if s.ActionKey != "" {
+				roleDaily[role][d][s.ActionKey] += numOf(row[s.ActionKey])
+			}
 		}
 		if bd, ok := part["breakdowns"].(map[string]any); ok {
 			for key, rows := range bd {
@@ -1393,6 +1710,20 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 					}
 					breakdowns[key][label]["urls"] += numOf(row["urls"])
 					breakdowns[key][label]["removed"] += numOf(row["removed"])
+					/* Recurrence is a DAY COUNT, so it is merged by taking the
+					   largest rather than by adding.
+
+					   Two tables that both saw an account on the same Saturday
+					   saw it on one day, not two, and summing them can hand the
+					   panel more days than the window holds — a figure the card
+					   presents as a fact about the calendar. The largest of the
+					   two is the most days any one source can actually vouch
+					   for, and it can only understate. Absent from every other
+					   panel's rows, where numOf reads the missing key as 0 and
+					   this is a no-op. */
+					if v := numOf(row["repeats"]); v > breakdowns[key][label]["repeats"] {
+						breakdowns[key][label]["repeats"] = v
+					}
 					if v := strFromAny(row["value"]); v != "" {
 						if dimValues[key] == nil {
 							dimValues[key] = map[string]string{}
@@ -1458,7 +1789,23 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 			if v := dimValues[key][label]; v != "" {
 				row["value"] = v
 			}
+			if key == dimRepeatOffender {
+				row["repeats"] = m["repeats"]
+			}
 			rows = append(rows, row)
+		}
+		/* Ranked by RECURRENCE, then cut to ten — the order and the cut this one
+		   panel exists for. Sorting it by volume like the others and then taking
+		   the top fifteen would keep the fifteen busiest accounts and rank them
+		   by a measure the chart does not draw, which is a different card under
+		   the same title. */
+		if key == dimRepeatOffender {
+			sortRepeatRows(rows)
+			if len(rows) > repeatOffenderLimit {
+				rows = rows[:repeatOffenderLimit]
+			}
+			bdOut[key] = rows
+			continue
 		}
 		sort.Slice(rows, func(i, j int) bool { return numOf(rows[i]["urls"]) > numOf(rows[j]["urls"]) })
 		if len(rows) > 15 && !closedSetDims[key] {
@@ -1520,6 +1867,13 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 			"role": role, "label": roleLabels[role],
 			"identified": rk["identified"], "removed": rk["removed"],
 		}
+		/* The enforcement ACTION total this side records, if any. The day-wise
+		   figures are breakdown panels now (dimNoticesByDay, dimBatchesByDay), so
+		   no actionKey is emitted — emitting it is what made the page draw the
+		   Day-on-Day trend cards this replaced. */
+		if key := roleAction[role]; key != "" {
+			src["actionTotal"] = rk[key]
+		}
 		// Only the linking side has a delisting figure, and it is what its trend
 		// is drawn against — so the page is told which second series to use
 		// rather than inferring it from the role.
@@ -1551,8 +1905,8 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 		}
 		bdOut["byDelistingStatus"] = []map[string]any{
 			{"label": "Infringing URL", "urls": linking},
-			{"label": "Delisting Status Bing", "urls": kpi["bingDelisted"]},
-			{"label": "Delisting Status Google", "urls": kpi["googleDelisted"]},
+			{"label": "De-Indexed Status Bing", "urls": kpi["bingDelisted"]},
+			{"label": "De-Indexed Status Google", "urls": kpi["googleDelisted"]},
 		}
 	}
 
