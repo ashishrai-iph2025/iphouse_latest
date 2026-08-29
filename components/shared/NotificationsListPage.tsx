@@ -13,6 +13,13 @@ import {
   sourceOf, parseMeta, relativeTime, exactTime, SOURCE_META,
   type PortalNotification, type Scope,
 } from './notificationMeta'
+/* The product's own dropdown. A native <select> draws its option list in the
+   OPERATING SYSTEM's colours — square corners, its own blue highlight, its own
+   font — and that list is the one thing on this card no stylesheet here can
+   reach, so beside a toolbar that rounds at 12px and focuses in brand orange it
+   read as a control borrowed from another application. Same picker every other
+   filter in the product opens. */
+import SearchableSelect from '@/components/ui/SearchableSelect'
 
 const PER_PAGE = 20
 
@@ -114,16 +121,23 @@ export default function NotificationsListPage({ basePath }: { basePath: string }
             Unread only
           </label>
           <div className="flex items-center gap-2 flex-wrap ml-auto">
-            <select value={type} onChange={e => setType(e.target.value)}
-              className="border border-gray-200 dark:border-white/10 dark:bg-white/5 dark:text-white rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-[#14254A]/20">
-              <option value="">All sources</option>
-              {Object.entries(SOURCE_META).map(([k, v]) => (
-                <option key={k} value={k}>{v.label}</option>
-              ))}
-            </select>
+            {/* `compact`, because this sits in a toolbar next to a search box
+                rather than in a form; the list it opens keeps its full size.
+                Clearable — "no filter" is a real choice here, and the clear row
+                is how it is made, so the empty value lives IN the list instead
+                of needing a reset button beside it. */}
+            <div className="w-44">
+              <SearchableSelect compact
+                options={Object.entries(SOURCE_META).map(([k, v]) => ({ key: k, label: v.label }))}
+                value={type} onChange={setType}
+                placeholder="All sources" emptyLabel="– All sources –" />
+            </div>
+            {/* h-8 and a 10px radius to sit level with the trigger beside it,
+                which pins both; orange focus so the two agree on what focus
+                looks like. */}
             <input type="text" placeholder="Search notifications…"
               value={search} onChange={e => setSearch(e.target.value)}
-              className="border border-gray-200 dark:border-white/10 dark:bg-white/5 dark:text-white rounded-xl px-3 py-2 text-xs w-56 focus:outline-none focus:ring-2 focus:ring-[#14254A]/20" />
+              className="h-8 border border-gray-200 dark:border-white/10 dark:bg-white/5 dark:text-white rounded-[0.625rem] px-3 text-xs w-56 transition-colors focus:outline-none focus:border-[#FC934C] focus:ring-2 focus:ring-[#FC934C]/20" />
           </div>
         </div>
 

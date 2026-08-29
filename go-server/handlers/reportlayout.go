@@ -1141,6 +1141,60 @@ func stillShownParams(panels []panelDef) map[string]bool {
 }
 
 /*
+adminHiddenPanels is the set of panel keys the SHARED default switches off.
+
+It is what IP House has decided this report does not show — before any one
+client is considered. Two callers need it, and they are the two halves of one
+rule: the client-facing editor lists only what is NOT in here, and the
+client-facing save puts back everything that IS.
+
+The second half is not belt-and-braces, it is required. layoutFor consults the
+shared default ONLY while a client has no rows of its own — so the moment a
+client saves anything, the default stops applying to that client entirely. A
+save carrying just the panels the client can see would therefore leave every
+admin-hidden panel with no row at all, and a panel with no row falls back to the
+registry default, which is visible. Hiding a panel from a client would have
+un-hidden it for them.
+
+Computed from the all-clients layout rather than read from the table, because
+"hidden" is a property of the merged layout: a panel with no stored row is
+hidden or not according to the registry, and the filter pane's default depends
+on which charts survived.
+*/
+func adminHiddenPanels(platformKey string) map[string]bool {
+	out := map[string]bool{}
+	in, ok := layoutInputsFor(platformKey)
+	if !ok {
+		return out
+	}
+	defaults := defaultPanels(platformKey, in.Dims, in.Roles, in.Tiles, in.Actions, in.Delisting,
+		mergesReports(platformKey))
+	base := applyLayout(platformKey, layoutAllClients, defaults)
+	for _, p := range base {
+		if p.Hidden {
+			out[p.Key] = true
+		}
+	}
+	// The slicer pane, on the same terms — and it has to be read AFTER the
+	// overlay, because which slicers a platform gets by default depends on
+	// which charts survived it. Same order as ReportLayoutGet.
+	stillShown := map[string]bool{}
+	if in.FollowPanels {
+		stillShown = stillShownParams(base)
+	} else {
+		for _, param := range in.Params {
+			stillShown[param] = true
+		}
+	}
+	for _, p := range filterPanels(platformKey, layoutAllClients, in.Params, stillShown) {
+		if p.Hidden {
+			out[p.Key] = true
+		}
+	}
+	return out
+}
+
+/*
 ── GET /api/admin/report-layout?platform=&clientId= ─────────────────────────
 
 	The configuration page's view: every panel this platform has, in its current
@@ -1196,11 +1250,19 @@ func ReportLayoutGet(w http.ResponseWriter, r *http.Request) {
 		defaultPos[p.Key] = i
 	}
 
+	/* What the SHARED default says about each panel, sent alongside what THIS
+	   client's layout says. The configuration screen ignores it — an admin is
+	   looking at the layout they control. The client-facing editor lists only
+	   the panels it marks visible, so a client can rearrange what IP House
+	   chose to show them without being offered what IP House chose not to. */
+	adminHidden := adminHiddenPanels(key)
+
 	out := make([]map[string]any, 0, len(panels))
 	for i, p := range panels {
 		row := p.asMap()
 		row["position"] = i
 		row["hidden"] = p.Hidden
+		row["adminHidden"] = adminHidden[p.Key]
 		row["defaultSpan"] = defaultSpan[p.Key]
 		if p.Kind == panelDim {
 			row["defaultViz"] = defaultViz[p.Key]

@@ -10,9 +10,23 @@ import { ThemeCustomizerProvider } from '@/lib/ThemeCustomizerContext'
 import ThemeCustomizer from '@/components/ui/ThemeCustomizer'
 import ClientAccessSearch from './ClientAccessSearch'
 import NotificationBell from '@/components/shared/NotificationBell'
+import FullscreenToggle from '@/components/shared/FullscreenToggle'
 import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner'
 
-type NavItem = { label: string; href: string; icon: string }
+type NavItem = {
+  label: string
+  href: string
+  icon: string
+  /** Kept out of the sidebar, kept in this list.
+   *
+   *  navGroups is read twice: once to draw the rail, once to name the current
+   *  page in the top bar. Deleting an entry to hide the link would also delete
+   *  the page's NAME — /admin/users still routes and is still linked to from
+   *  Clients and Super Admin, and it would sit there with the header reading
+   *  "Admin / Admin". So the route stays described here and only the rail
+   *  filters it out. */
+  hideInNav?: boolean
+}
 type NavGroup = { label: string; items: NavItem[]; superAdminOnly?: boolean }
 
 const navGroups: NavGroup[] = [
@@ -26,7 +40,7 @@ const navGroups: NavGroup[] = [
     label: 'Client Management',
     items: [
       { href: '/admin/clients',       icon: '🏢', label: 'Clients'       },
-      { href: '/admin/users',         icon: '👥', label: 'Users'         },
+      { href: '/admin/users',         icon: '👥', label: 'Users',         hideInNav: true },
       { href: '/admin/registrations', icon: '📝', label: 'Registrations' },
       { href: '/admin/registration-requests', icon: '📋', label: 'Reg. Requests' },
     ],
@@ -79,7 +93,14 @@ function AdminShellInner({ children }: { children: React.ReactNode }) {
   // page content never shifts); it collapses again when the pointer leaves.
   const effectiveCollapsed = sidebarCollapsed && !hovered
 
-  const visibleGroups = navGroups.filter(g => !g.superAdminOnly || isSuperAdmin)
+  /* Two filters, in this order: drop the groups this role may not see, then the
+     individual items marked hideInNav — and drop any group left with nothing in
+     it, so hiding the last item of a group does not leave its heading behind
+     with empty space under it. */
+  const visibleGroups = navGroups
+    .filter(g => !g.superAdminOnly || isSuperAdmin)
+    .map(g => ({ ...g, items: g.items.filter(i => !i.hideInNav) }))
+    .filter(g => g.items.length > 0)
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#eef2f7] dark:bg-[#0f1f3d]">
@@ -220,6 +241,10 @@ function AdminShellInner({ children }: { children: React.ReactNode }) {
             <ClientAccessSearch />
             {/* Portal activity — staff see every client's events */}
             <NotificationBell variant="admin" />
+
+            {/* The same full-screen control as the client bar: staff read these
+                reports too, off the same wide grid. */}
+            <FullscreenToggle />
             {/* Dark / Light toggle — plain icon, no box */}
             <button
               onClick={toggle}

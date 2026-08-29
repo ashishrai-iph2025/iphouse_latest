@@ -88,6 +88,23 @@ export function selectAllRespectingRule(
   return all.filter(id => nameOf(id, modules) !== DASHBOARD)
 }
 
+/**
+ * Whether a selection includes Reports.
+ *
+ * Here rather than in the picker for the same reason as everything else in this
+ * file: REPORTS is a database name compared case-insensitively, and a second
+ * copy of that comparison is one that will be missed when the name changes.
+ *
+ * Used to decide whether the layout grant is offered on an account — see
+ * LoginModuleAccess.
+ */
+export function isReportsSelected(
+  selected: number[],
+  modules: { id: number; name: string }[],
+): boolean {
+  return selected.some(id => nameOf(id, modules) === REPORTS)
+}
+
 /** The message both pickers show. One sentence, in one place. */
 export const DASHBOARD_REPORTS_HINT =
   'Dashboard and Reports show the same figures — pick one. Reports takes precedence.'

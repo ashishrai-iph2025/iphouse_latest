@@ -77,12 +77,6 @@ const ICONS: Record<string, Paths> = {
     <path d="m3.5 7 7.4 5.3a2 2 0 0 0 2.2 0L20.5 7" />
   </>,
 
-  /* Session Timeout — a clock */
-  'idle-timeout': <>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M12 7v5.2l3.2 2" />
-  </>,
-
   /* Registration Requests — a clipboard with lines */
   'registration-requests': <>
     <path d="M9 4.5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-12a2 2 0 0 0-2-2h-2" />
@@ -131,14 +125,6 @@ const ICONS: Record<string, Paths> = {
   'email-event-types': <>
     <path d="M18 9a6 6 0 1 0-12 0c0 5-2 6.5-2 6.5h16S18 14 18 9" />
     <path d="M13.7 19a2 2 0 0 1-3.4 0" />
-  </>,
-
-  /* Client Admins — a pair of people */
-  'client-admins': <>
-    <circle cx="9.5" cy="8" r="3.2" />
-    <path d="M3.5 19.5a6 6 0 0 1 12 0" />
-    <path d="M16 5.2a3.2 3.2 0 0 1 0 5.6" />
-    <path d="M17.5 14.2a6 6 0 0 1 3 5.3" />
   </>,
 
   /* Security Policy — a shield with a keyhole */

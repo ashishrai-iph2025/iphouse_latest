@@ -16,6 +16,15 @@ function LoginForm() {
   const [password,   setPassword]   = useState('')
   const [showPw,     setShowPw]     = useState(false)
   const [error,      setError]      = useState('')
+  /* What the server said about the lockout, kept apart from the message.
+
+     The sentence in `error` already names the count, but a page that had to
+     read the number back out of that sentence would break the day somebody
+     rewords it. These are the same facts as fields, so the meter below is
+     drawn from data. Null whenever lockout is switched off, or when the
+     failure had nothing to do with a password. */
+  const [attempts,   setAttempts]   = useState<
+    { remaining: number; max: number; hours: number; locked: boolean } | null>(null)
   const [loading,    setLoading]    = useState(false)
   const [idleBanner, setIdleBanner] = useState(false)
   const [validationErrors, setValidationErrors] = useState<string[]>([])
@@ -34,7 +43,7 @@ function LoginForm() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    setError('')
+    setError(''); setAttempts(null)
     setValidationErrors([])
     setLoading(true)
 
@@ -72,7 +81,18 @@ function LoginForm() {
         body:    JSON.stringify({ username: sanitizedUsername, password }),
       })
       const checkData = await checkRes.json()
-      if (!checkData.success) { setError(checkData.error || 'Invalid username or password'); return }
+      if (!checkData.success) {
+        setError(checkData.error || 'Invalid username or password')
+        if (typeof checkData.maxAttempts === 'number' && checkData.maxAttempts > 0) {
+          setAttempts({
+            remaining: Number(checkData.remaining) || 0,
+            max:       Number(checkData.maxAttempts),
+            hours:     Number(checkData.lockoutHours) || 0,
+            locked:    !!checkData.locked,
+          })
+        }
+        return
+      }
 
       const loginType = checkData.login_type as number
       const role      = checkData.role as number | null
@@ -432,6 +452,34 @@ function LoginForm() {
           padding: 10px 13px; border-radius: 10px; margin-bottom: 14px;
           background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; font-size: 13px;
         }
+        /* The unfilled track is a lighter step of the SAME hue as the fill,
+           so the state reads across the whole bar rather than only where it
+           happens to stop. */
+        .lp-attempts {
+          padding: 9px 13px 11px; border-radius: 10px; margin-bottom: 14px;
+          background: #f8fafc; border: 1px solid #e2e8f0; color: #475569; font-size: 12.5px;
+        }
+        .lp-attempts-row {
+          display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+          margin-bottom: 7px;
+        }
+        .lp-attempts-row strong { color: #0f172a; font-weight: 700; }
+        .lp-attempts-note { font-size: 11px; color: #94a3b8; white-space: nowrap; }
+        .lp-attempts-track {
+          height: 4px; border-radius: 999px; background: #e2e8f0; overflow: hidden;
+        }
+        .lp-attempts-track > span {
+          display: block; height: 100%; border-radius: 999px; background: #64748b;
+          transition: width .3s ease;
+        }
+        .lp-attempts-last {
+          background: #fffbeb; border-color: #fde68a; color: #92400e;
+        }
+        .lp-attempts-last .lp-attempts-row strong { color: #92400e; }
+        .lp-attempts-last .lp-attempts-note { color: #b45309; }
+        .lp-attempts-last .lp-attempts-track { background: #fde68a; }
+        .lp-attempts-last .lp-attempts-track > span { background: #d97706; }
+
         .lp-idle {
           display: flex; align-items: flex-start; gap: 8px;
           padding: 10px 13px; border-radius: 10px; margin-bottom: 14px;
@@ -632,6 +680,43 @@ function LoginForm() {
               <div className="lp-error">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
                 {error}
+              </div>
+            )}
+
+            {/* How much room is left, as a count AND as a bar.
+
+                Under the message rather than inside it: the message says what
+                went wrong, this says what happens next, and somebody who has
+                mistyped their password twice is scanning for the second. The
+                bar is there because "2 of 5" is a fraction, and a fraction is
+                read faster as a length than as arithmetic.
+
+                It goes amber at one remaining rather than counting down through
+                colours — a scale that changes hue every attempt spends its
+                urgency early and has nothing left for the attempt that matters.
+
+                Nothing is drawn once the account is locked: the message then
+                carries the time it lifts, and a meter reading zero beside it
+                would only repeat that in a form nobody can act on. */}
+            {attempts && !attempts.locked && attempts.remaining > 0 && (
+              <div className={`lp-attempts ${attempts.remaining === 1 ? 'lp-attempts-last' : ''}`}>
+                <div className="lp-attempts-row">
+                  <span>
+                    <strong>{attempts.remaining}</strong> of {attempts.max} attempt
+                    {attempts.max === 1 ? '' : 's'} remaining
+                  </span>
+                  {attempts.hours > 0 && (
+                    <span className="lp-attempts-note">
+                      then locked {attempts.hours}h
+                    </span>
+                  )}
+                </div>
+                <div className="lp-attempts-track"
+                  role="meter" aria-valuemin={0} aria-valuemax={attempts.max}
+                  aria-valuenow={attempts.remaining}
+                  aria-label={`${attempts.remaining} of ${attempts.max} sign-in attempts remaining`}>
+                  <span style={{ width: `${(attempts.remaining / attempts.max) * 100}%` }} />
+                </div>
               </div>
             )}
 

@@ -6,6 +6,7 @@ import { useSession } from '@/lib/auth-client'
 import UserPicker, { type MasterUser } from './UserPicker'
 import SearchableSelect from '@/components/ui/SearchableSelect'
 import LoginSecurityPanel from './LoginSecurityPanel'
+import LoginClientAdmin from './LoginClientAdmin'
 import LoginModuleAccess, { type LoginAssignment } from './LoginModuleAccess'
 
 interface LoginGroup {
@@ -31,6 +32,10 @@ interface LoginGroup {
      account marked Invalid stays here, greyed, and can be marked Valid again. */
   is_active: number
   portal_role: string | null   // 'Admin' | 'SuperAdmin' | null — role of the PERSON, not any one client company
+  /* Whether the lockout is currently barring sign-in, across every one of this
+     person's login rows and both counters — see the shared-logins query. */
+  is_locked?: number
+  locked_until?: string | null
 }
 
 // portal_role is granted to the shared login (the person) itself, independent
@@ -477,6 +482,8 @@ export default function SharedLoginsClient() {
      landing on Security because that is where the last visit ended would put
      the read-only pane in front of somebody who came to change a name. */
   const [pane,        setPane]        = useState<PaneKey>('person')
+  /** The account whose lock is being lifted, so only its own button waits. */
+  const [unlocking,   setUnlocking]   = useState<string | null>(null)
   const [sortCol, setSortCol] = useState('')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
 
@@ -512,6 +519,33 @@ export default function SharedLoginsClient() {
 
   function openAdd() {
     setForm({ ...BLANK_FORM }); setSaveMsg(''); setPane('person'); setModal('add')
+  }
+
+  /* Clears the lockout for every row this person has — see AdminUnlockLogin.
+
+     The list is reloaded rather than patched in place: unlocking clears counters
+     this table does not model, and re-reading is one request against a page that
+     has just had a deliberate action taken on it. */
+  async function unlock(row: LoginGroup) {
+    setUnlocking(row.login_username)
+    try {
+      const res = await fetch('/api/admin/unlock-login', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ loginUsername: row.login_username }),
+      })
+      const data = await res.json()
+      if (data?.success) {
+        setError('')
+        load()
+      } else {
+        setError(data?.error || 'Could not unlock this account')
+      }
+    } catch {
+      setError('Could not unlock this account — the request did not complete.')
+    }
+    setUnlocking(null)
   }
 
   function openEdit(row: LoginGroup) {
@@ -713,7 +747,6 @@ export default function SharedLoginsClient() {
                   <th className="cursor-pointer select-none" onClick={() => handleSort('designation')}>Designation<>{si('designation')}</></th>
                   <th className="cursor-pointer select-none" onClick={() => handleSort('login_username')}>Login Username<>{si('login_username')}</></th>
                   <th className="cursor-pointer select-none" onClick={() => handleSort('login_type')}>Login Type<>{si('login_type')}</></th>
-                  <th>TOTP Secret</th>
                   <th className="cursor-pointer select-none" onClick={() => handleSort('master_names')}>Assigned Dashboards<>{si('master_names')}</></th>
                   {isSuperAdmin && <th>Portal Access</th>}
                   <th className="cursor-pointer select-none" onClick={() => handleSort('is_active')}>Status<>{si('is_active')}</></th>
@@ -722,7 +755,7 @@ export default function SharedLoginsClient() {
               </thead>
               <tbody>
                 {paginated.length === 0 ? (
-                  <tr><td colSpan={isSuperAdmin ? 10 : 9} className="text-center py-10 text-brand-muted">No login accounts found</td></tr>
+                  <tr><td colSpan={isSuperAdmin ? 9 : 8} className="text-center py-10 text-brand-muted">No login accounts found</td></tr>
                 ) : paginated.map((row, i) => {
                   const lt = typeInfo(row.login_type)
                   return (
@@ -744,12 +777,6 @@ export default function SharedLoginsClient() {
                       <td className="text-sm text-gray-600">{row.designation || <span className="text-gray-300">—</span>}</td>
                       <td><code className="text-xs bg-gray-100 px-2 py-0.5 rounded font-mono">{row.login_username}</code></td>
                       <td><span className={`badge ${lt.badge}`}>{lt.label}</span></td>
-                      <td>
-                        {row.twofa_secret
-                          ? <code className="text-xs bg-gray-100 px-2 py-0.5 rounded font-mono text-gray-600 max-w-[120px] truncate block">{row.twofa_secret}</code>
-                          : <span className="text-gray-300 text-sm">—</span>
-                        }
-                      </td>
                       <td className="text-sm text-gray-600 max-w-[200px]">
                         {row.master_names
                           ? <span className="truncate block" title={row.master_names}>{row.master_names}</span>
@@ -774,12 +801,46 @@ export default function SharedLoginsClient() {
                         )
                       })()}
                       <td>
-                        {/* Same two badge classes /admin/users uses for the same
-                            column — it is one flag on one table, and it should
-                            not look like two different facts. */}
-                        <span className={`badge ${row.is_active === 1 ? 'badge-success' : 'badge-danger'}`}>
-                          {row.is_active === 1 ? 'Activate' : 'De-Activate'}
-                        </span>
+                        {/* THE LOCK FIRST, WHEN THERE IS ONE.
+
+                            Three states share this column and they are not
+                            three equal options: a locked account is the only
+                            one with something to do about it, and it is also
+                            the only one whose reason is invisible everywhere
+                            else in the console. So it wins the cell, with the
+                            action beside it rather than behind an edit drawer.
+
+                            It does not replace the active flag — a lock only
+                            bars an account that was otherwise allowed in, so a
+                            de-activated account still reads De-Activate. */}
+                        {Number(row.is_locked) === 1 ? (
+                          <div className="flex items-center gap-2">
+                            <span className="badge badge-danger inline-flex items-center gap-1"
+                              title={row.locked_until
+                                ? `Locked until ${new Date(row.locked_until.replace(' ', 'T') + 'Z').toLocaleString()}`
+                                : 'Locked by too many failed sign-in attempts'}>
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                                <rect x="4" y="11" width="16" height="9" rx="2" />
+                                <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+                              </svg>
+                              Locked
+                            </span>
+                            <button onClick={() => unlock(row)} disabled={unlocking === row.login_username}
+                              className="text-[11px] font-bold uppercase tracking-wider text-blue-600
+                                hover:text-blue-800 disabled:opacity-50 transition-colors"
+                              title="Clear the failed attempts and let this account sign in again">
+                              {unlocking === row.login_username ? 'Unlocking…' : 'Unlock'}
+                            </button>
+                          </div>
+                        ) : (
+                          /* Same two badge classes /admin/users uses for the same
+                             column — it is one flag on one table, and it should
+                             not look like two different facts. */
+                          <span className={`badge ${row.is_active === 1 ? 'badge-success' : 'badge-danger'}`}>
+                            {row.is_active === 1 ? 'Activate' : 'De-Activate'}
+                          </span>
+                        )}
                       </td>
                       <td className="text-right">
                         <div className="flex items-center justify-end gap-2">
@@ -1011,6 +1072,26 @@ export default function SharedLoginsClient() {
                       onSet={handleSetActive} />
                   )}
                   <SignInSection form={form} setForm={setForm} isEdit={modal === 'edit'} />
+
+                  {/* Client Admin, below the credential rather than beside the
+                      module grants.
+
+                      It belongs to this pane because it is about SIGNING IN and
+                      what the account is when it does — the same question the
+                      Valid/Invalid switch at the top of this pane answers. The
+                      Module access pane is about which screens exist for them;
+                      this is about whether they administer their company's
+                      logins at all.
+
+                      Edit only, for the reason the switch above gives: the
+                      grant is keyed to login rows an account being created does
+                      not have yet. */}
+                  {modal === 'edit' && editTarget && (
+                    <LoginClientAdmin
+                      loginIds={parseAssignments(editTarget.assignments, masterUsers)
+                        .filter(a => a.loginId > 0 && a.userId > 0)
+                        .map(a => a.loginId)} />
+                  )}
                 </div>
                 <div className={pane === 'access' ? '' : 'hidden'}>
                   <AccessSection form={form} setForm={setForm}
@@ -1027,7 +1108,8 @@ export default function SharedLoginsClient() {
                     <div className={pane === 'modules' ? '' : 'hidden'}>
                       <LoginModuleAccess
                         assignments={parseAssignments(editTarget.assignments, masterUsers)}
-                        pendingUserIds={form.userIds} />
+                        pendingUserIds={form.userIds}
+                        loginUsername={editTarget.login_username} />
                     </div>
                     <div className={pane === 'security' ? '' : 'hidden'}>
                       <LoginSecurityPanel loginId={editTarget.loginId} />

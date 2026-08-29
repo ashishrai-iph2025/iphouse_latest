@@ -107,12 +107,17 @@ export default function ClientsPageClient({ clients, totalClients, totalDashboar
         {/* ── LEFT COLUMN ── */}
         <div className="w-full md:w-52 flex-shrink-0 space-y-3">
 
-          {/* Stat: Total Clients */}
+          {/* Stat: Total Clients — a figure, not a link.
+
+              It pointed at /admin/clients/add, which is not where a count of
+              clients leads: the number answers "how many", and the click
+              answered "make another". The list it counts is already on this
+              page, so there is nowhere for it to go — and Add New Client is its
+              own button at the foot of this rail, which is where that action
+              belongs. */}
           <div className="rounded-2xl p-4 bg-white border border-gray-100 shadow-sm">
             <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide mb-1">Total Clients</p>
-            <Link to="/admin/clients/add">
-              <p className="text-3xl font-bold text-[#14254A] hover:opacity-70 transition-opacity">{totalClients}</p>
-            </Link>
+            <p className="text-3xl font-bold text-[#14254A]">{totalClients}</p>
             <p className="text-xs text-gray-400 mt-1">Active accounts</p>
           </div>
 
@@ -128,7 +133,9 @@ export default function ClientsPageClient({ clients, totalClients, totalDashboar
           {/* Stat: Dashboard Modules */}
           <div className="rounded-2xl p-4 bg-white border border-gray-100 shadow-sm">
             <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide mb-1">Dashboard Modules</p>
-            <p className="text-3xl font-bold text-[#14254A]">{totalModules}</p>
+            <Link to="/admin/dashboard-modules">
+              <p className="text-3xl font-bold text-[#14254A] hover:opacity-70 transition-opacity">{totalModules}</p>
+            </Link>
             <p className="text-xs text-gray-400 mt-1">Active modules</p>
           </div>
 

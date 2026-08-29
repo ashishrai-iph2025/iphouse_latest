@@ -410,23 +410,42 @@ export default function ConfigurationPage() {
               )}
             </div>
 
-            {/* Section filter */}
-            <div className="flex items-center gap-1.5 overflow-x-auto lg:flex-1 lg:justify-end
-                            -mx-1 px-1 pb-0.5 scrollbar-none">
-              <FilterChip label="All" count={allowed.length} active={group === 'all'} onClick={() => setGroup('all')} />
-              {CONFIG_GROUPS.map(g => {
-                const n = allowed.filter(m => m.group === g.key).length
-                if (!n) return null
-                return (
-                  <FilterChip
-                    key={g.key} label={g.label} count={n} dot={accent(g.color, dark)}
-                    active={group === g.key} onClick={() => setGroup(group === g.key ? 'all' : g.key)}
-                  />
-                )
-              })}
+            {/* Section filter, and the view toggle beside it.
+
+                TWO BOXES, NOT ONE, and the nesting is the point: the chips
+                scroll and the toggle does not.
+
+                They were one row — `overflow-x-auto` with `justify-end` and the
+                toggle as its last child — which fails in both directions at
+                once. `justify-end` on a scroll container pushes the overflow
+                off the START, where there is no way to scroll back to it, and
+                the toggle, being last, was the first thing carried past the
+                right edge: on a wide screen it sat half-clipped against the
+                gutter, which is what it looked like.
+
+                So the toggle is a sibling of the scroller and never inside it.
+                The scroller takes `min-w-0` so it may shrink below its content
+                and scroll from its natural left edge; the outer box carries the
+                `justify-end`, which now only ever right-aligns things that
+                fit. */}
+            <div className="flex items-center gap-2 min-w-0 lg:flex-1 lg:justify-end">
+              <div className="flex items-center gap-1.5 min-w-0 overflow-x-auto
+                              -mx-1 px-1 py-0.5 scrollbar-none">
+                <FilterChip label="All" count={allowed.length} active={group === 'all'} onClick={() => setGroup('all')} />
+                {CONFIG_GROUPS.map(g => {
+                  const n = allowed.filter(m => m.group === g.key).length
+                  if (!n) return null
+                  return (
+                    <FilterChip
+                      key={g.key} label={g.label} count={n} dot={accent(g.color, dark)}
+                      active={group === g.key} onClick={() => setGroup(group === g.key ? 'all' : g.key)}
+                    />
+                  )
+                })}
+              </div>
 
               {/* Density toggle */}
-              <div className="ml-1 flex-shrink-0 flex items-center p-0.5 rounded-lg bg-white border border-gray-200 shadow-card">
+              <div className="flex-shrink-0 flex items-center p-0.5 rounded-lg bg-white border border-gray-200 shadow-card">
                 {(['grid', 'list'] as const).map(v => (
                   <button
                     key={v}

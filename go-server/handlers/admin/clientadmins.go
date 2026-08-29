@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/ip-house/iphouse-api/activity"
 	"github.com/ip-house/iphouse-api/db"
@@ -69,9 +70,11 @@ func flagOn(v any) bool {
 // an ordinary user of another. See db.Migrate for why this is a flag rather than
 // a value on the dcp_user.role ladder.
 //
-// Granting is staff-only: it is reachable through the "client-admins"
-// Configuration module, so a Super Admin must share that module with an Admin
-// before they can use it (Super Admins hold every module implicitly).
+// Granting is staff-only. It is set from the Sign-in pane of the Edit Login
+// Account drawer on /admin/registrations and gated as that page is — any
+// Admin or Super Admin. It used to be a Configuration module of its own; the
+// grant is a fact about one account, and it now sits with the rest of them
+// rather than on a roster reached by remembering the roster exists.
 
 // GET /api/admin/client-admins        — logins, optionally filtered by company
 // PUT /api/admin/client-admins        — grant or revoke the flag for one login
@@ -88,6 +91,10 @@ func ClientAdmins(w http.ResponseWriter, r *http.Request) {
 
 func clientAdminsList(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
+	/* The account editor asks for one person's rows by naming them, because
+	   "this person" is not a filter the other two express: userId is one
+	   company, and no filter at all is every login in the portal. */
+	loginIDs := idListOf(r.URL.Query().Get("loginIds"))
 
 	// Staff logins are surfaced but flagged: an Admin/Super Admin already has
 	// portal-wide access, so marking them Client Admin would be meaningless and
@@ -111,7 +118,17 @@ func clientAdminsList(w http.ResponseWriter, r *http.Request) {
 
 	var rows []map[string]any
 	var err error
-	if userID != "" {
+	if len(loginIDs) > 0 {
+		holes := make([]string, len(loginIDs))
+		args := make([]any, len(loginIDs))
+		for i, id := range loginIDs {
+			holes[i] = "?"
+			args[i] = id
+		}
+		rows, err = db.Query(
+			query+" AND l.loginId IN ("+strings.Join(holes, ",")+") ORDER BY u.name ASC",
+			args...)
+	} else if userID != "" {
 		rows, err = db.Query(query+" AND l.userId = ? ORDER BY u.name ASC, l.first_name ASC", userID)
 	} else {
 		rows, err = db.Query(query + " ORDER BY u.name ASC, l.first_name ASC")
@@ -123,9 +140,28 @@ func clientAdminsList(w http.ResponseWriter, r *http.Request) {
 		rows = []map[string]any{}
 	}
 	logClientAdmins(r, actClientAdminListView, map[string]any{
-		"rowCount": len(rows), "clientFilter": userID,
+		"rowCount": len(rows), "clientFilter": userID, "loginFilter": loginIDs,
 	})
 	ok(w, map[string]any{"success": true, "users": rows})
+}
+
+/*
+idListOf parses a comma-separated id list, dropping anything that is not a
+positive integer.
+
+Parsed rather than interpolated: these ids reach a SQL IN list, and the only
+safe way to build one of variable length is to bind every element. A value that
+is not a number is dropped rather than failing the request — the caller is a
+checklist, and one stale id in it is not a reason to show the reader nothing.
+*/
+func idListOf(raw string) []int64 {
+	out := []int64{}
+	for _, part := range strings.Split(raw, ",") {
+		if n, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil && n > 0 {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func clientAdminsUpdate(w http.ResponseWriter, r *http.Request) {

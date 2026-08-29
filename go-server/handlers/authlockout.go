@@ -227,11 +227,35 @@ The credential itself is never described. "Invalid credentials" for a wrong
 password and for an unknown user, always, so the response cannot be used to
 learn which accounts exist.
 */
+/*
+failResp is a failed sign-in as the browser receives it: the sentence, plus the
+numbers behind it.
+
+Both, deliberately. The sentence is what a person reads and has to stand alone
+for a client that ignores the rest; the numbers are so the page can draw "2 of 5
+attempts left" as its own element rather than parsing English out of an error
+string — which is the kind of coupling that breaks the day somebody rewords the
+message.
+
+Omitted entirely when lockout is switched off, so a page cannot render a counter
+that counts towards nothing.
+*/
+func failResp(st LockState, msg string) map[string]any {
+	m := map[string]any{"success": false, "error": msg}
+	if st.MaxAttempts > 0 {
+		m["locked"] = st.Locked
+		m["remaining"] = st.Remaining
+		m["maxAttempts"] = st.MaxAttempts
+		m["lockoutHours"] = st.LockoutHrs
+	}
+	return m
+}
+
 func failedLoginMessage(st LockState) string {
 	if st.Locked {
 		return LockMessage(st)
 	}
-	if st.MaxAttempts > 0 && st.Remaining > 0 && st.Remaining <= 2 {
+	if st.MaxAttempts > 0 && st.Remaining > 0 {
 		return fmt.Sprintf(
 			"Invalid credentials. %d attempt%s left before this account is locked for %d hours.",
 			st.Remaining, map[bool]string{true: "", false: "s"}[st.Remaining == 1], st.LockoutHrs)

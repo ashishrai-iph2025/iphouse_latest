@@ -138,6 +138,164 @@ var migrations = []Migration{
 			`UPDATE dcp_user_login SET deleted = 1 WHERE is_active = 0`,
 		},
 	},
+	/*
+		003 gives the server an opinion about the Theme Customizer's layout
+		controls, which it had never had.
+
+		Nav layout, sidebar size and layout width lived only in localStorage
+		under `ip_customizer`: every client could change all three, the choice
+		never left the browser, and no admin could see or set it. This table is
+		the grant behind them — per client COMPANY, the same grain as the War
+		Room and idle-timeout settings, because "which layout this client's
+		people get" is a property of the client rather than of one person's
+		browser. Colour, theme preset and dark mode stay ungated; they are
+		personal comfort, and nothing structural moves when they change.
+
+		Default deny, expressed as a DEFAULT of 0 and NO backfill: an absent row
+		and a 0 row have to mean the same thing, so a client company created
+		long after this ships is denied without anyone writing a row for it.
+	*/
+	{
+		Version: 3,
+		Name:    "client_layout_settings: per-client layout-change grant",
+		Statements: []string{
+			`CREATE TABLE IF NOT EXISTS client_layout_settings (
+				user_id        INT NOT NULL PRIMARY KEY,
+				layout_enabled TINYINT(1) NOT NULL DEFAULT 0,
+				updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		},
+	},
+	/*
+		004 moves the layout grant from the client company to the LOGIN, and
+		gives it somewhere to keep the layout itself.
+
+		003 held this per company, which was the wrong grain twice over. The
+		grant is a decision about a person — it is administered from the Edit
+		Login Account drawer on /admin/registrations, beside the rest of what
+		that account may do — and the layout it governs is not a company-wide
+		fact either.
+
+		The key is login_username rather than loginId, and that is the whole
+		point of it. A shared login is one dcp_user_login ROW PER COMPANY; a
+		loginId names one of those rows, so keying on it would give the same
+		person a different layout per company and would silently follow
+		whichever row MAX(loginId) happened to name. login_username is what the
+		Shared Logins list itself groups by, and it is the identity the people
+		sharing an account actually share — so a layout stored against it is
+		seen by everyone signing in with it, on any of its companies, which is
+		the behaviour asked for.
+
+		The three layout columns are NULL when nothing has been chosen, and null
+		means "use the product default". That keeps "never set" distinct from
+		"deliberately set to the default", which matters the day a default
+		changes: the first should follow it and the second should not.
+
+		003's table is dropped rather than migrated. It never shipped, nothing
+		reads it, and it is keyed on something this feature no longer has an
+		opinion about. 003 itself stays as written because a recorded step is
+		history — see the APPEND ONLY note above.
+	*/
+	{
+		Version: 4,
+		Name:    "login_layout_settings: per-login layout grant and stored layout",
+		Statements: []string{
+			`CREATE TABLE IF NOT EXISTS login_layout_settings (
+				login_username VARCHAR(191) NOT NULL PRIMARY KEY,
+				layout_enabled TINYINT(1) NOT NULL DEFAULT 0,
+				nav_layout     VARCHAR(32) NULL DEFAULT NULL,
+				sidebar_size   VARCHAR(32) NULL DEFAULT NULL,
+				layout_width   VARCHAR(32) NULL DEFAULT NULL,
+				updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+			`DROP TABLE IF EXISTS client_layout_settings`,
+		},
+	},
+	/*
+		005 drops the three layout columns 004 added.
+
+		They were the wrong layout. 004 stored navLayout, sidebarSize and
+		layoutWidth — the Theme Customizer's chrome, which is the nav rail and
+		the page width. What this grant is actually for is the REPORT layout:
+		the arrangement of KPI cards, charts and slicers on /reports, which
+		already has a home in report_panel_layout and an editor in Report
+		Configuration.
+
+		So this table keeps only the grant — who may rearrange — and the
+		arrangement itself stays in report_panel_layout, keyed per platform and
+		client as it already was. The two are separate on purpose: the
+		permission is per PERSON (a login may or may not be trusted to
+		rearrange) and the result is per CLIENT (everyone reading that client's
+		report sees the same page). Storing the layout here would have made it
+		per-person, and one report per reader is not what a shared report is.
+	*/
+	{
+		Version: 5,
+		Name:    "login_layout_settings: drop the nav-chrome columns",
+		Statements: []string{
+			`ALTER TABLE login_layout_settings DROP COLUMN nav_layout`,
+			`ALTER TABLE login_layout_settings DROP COLUMN sidebar_size`,
+			`ALTER TABLE login_layout_settings DROP COLUMN layout_width`,
+		},
+	},
+	/*
+		006 gives a dashboard module a CATEGORY, and a person a subset of the
+		modules carrying it.
+
+		── The column ───────────────────────────────────────────────────────────
+
+		dcp_module is the report catalogue an admin maintains on
+		/admin/dashboard-modules, and until now its rows were a flat list. The
+		reports themselves are not flat: half of them are one subject cut two
+		ways — the open web read for a VOD client and the open web read for a
+		sports one are different reports over different fixtures — and the cut
+		lived only inside the name, as the tail of "Open Web - VOD". Something
+		you have to parse out of a label is something nothing can filter on.
+
+		Empty string, not NULL, and no backfill. '' means "not categorised", one
+		spelling of it rather than two, so every query can compare with = and no
+		caller has to remember which of NULL or '' this install happens to use.
+		Every existing row starts there, which is honest: nobody has said what
+		category they are.
+
+		VARCHAR rather than an ENUM or a lookup table. The vocabulary is three
+		words that the picker and the admin table both need to agree on, and it
+		lives in lib/dashboardCategories.ts where both of them read it; an ENUM
+		would put a schema migration in the way of adding a fourth, and a lookup
+		table would add a join and a second screen to maintain for a list that
+		fits on one line.
+
+		── The table ────────────────────────────────────────────────────────────
+
+		login_dashboard_access is which of those modules a person may open.
+
+		Keyed on login_username for the reason spelled out in 004: a shared login
+		is one dcp_user_login ROW PER COMPANY, so a loginId names one of them and
+		a grant stored against it would give the same person a different report
+		list depending on which company they had signed into. The Shared Logins
+		list groups by login_username, the layout grant beside this one is keyed
+		on it, and so is this.
+
+		NO ROWS MEANS EVERY MODULE. That is the same convention report_access
+		already uses and it is chosen for the same reason: this table is empty on
+		the day it ships, and the alternative reading would take every report
+		away from every existing login at once. "Explicitly none" is still
+		sayable — it is the sentinel row module_id = 0, which matches no module.
+	*/
+	{
+		Version: 6,
+		Name:    "dcp_module.category + login_dashboard_access",
+		Statements: []string{
+			`ALTER TABLE dcp_module ADD COLUMN category VARCHAR(32) NOT NULL DEFAULT ''`,
+			`CREATE TABLE IF NOT EXISTS login_dashboard_access (
+				login_username VARCHAR(191) NOT NULL,
+				module_id      INT          NOT NULL,
+				granted_by     VARCHAR(191) NOT NULL DEFAULT '',
+				created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				PRIMARY KEY (login_username, module_id)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		},
+	},
 }
 
 /*
@@ -161,6 +319,11 @@ var expected = []struct{ Table, Column string }{
 	   errors, db.Query logs and hands back nil, and the page renders an empty
 	   table that looks like a portal with no accounts in it. */
 	{"dcp_user_login", "deleted"},
+	/* Silent in the same way: the dashboard-modules list would drop the column
+	   from its SELECT nowhere — it would fail the whole query, and db.Query
+	   logs and hands back nil, so the catalogue renders as a portal with no
+	   report modules in it. */
+	{"dcp_module", "category"},
 }
 
 const migrationsTable = "schema_migrations"

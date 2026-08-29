@@ -63,9 +63,32 @@ func clientsList(w http.ResponseWriter, r *http.Request) {
 		ok(w, map[string]any{"success": true, "items": rows})
 		return
 	}
-	// ClientID_MS3 is the analytics client this company reads in Reports. Listed
-	// here because the edit form is populated from this response.
-	rows, _ := db.Query("SELECT userId, name, email, role, deleted, createdOn, userLogo, companyLogo, ClientID_MS3 FROM dcp_user WHERE (role IS NULL OR role != 1) ORDER BY userId DESC")
+	/* ClientID_MS3 is the analytics client this company reads in Reports, and
+	   api_user_name is half of the MarkScan credential. Both are listed because
+	   THE EDIT FORM IS POPULATED FROM THIS RESPONSE — and api_user_name was not.
+
+	   That omission was not cosmetic. The form showed an empty API Username for
+	   every client because the field never arrived, then posted that empty
+	   string back on save, and the update wrote it. Renaming a company erased
+	   its MarkScan username as a side effect, and with it the token every data
+	   page depends on.
+
+	   api_password is deliberately NOT here. It is write-only: the form says
+	   "leave blank to keep" and the update below now honours that, so the stored
+	   secret never has to reach a browser to survive a save. */
+	rows, _ := db.Query(`
+		SELECT userId, name, email, role, deleted, createdOn, userLogo, companyLogo,
+		       ClientID_MS3, api_user_name,
+		       /* PRESENCE, never the value. The edit form has to be able to say
+		          "a password is already stored, leave this blank to keep it" —
+		          which it cannot do from an empty box, because an empty box is
+		          also what "none set" looks like. The same test the session
+		          uses to decide APIAccess, and the same one ClientAdmins
+		          exposes for its own warning. */
+		       (api_password IS NOT NULL AND api_password != '') AS has_api_password
+		FROM dcp_user
+		WHERE (role IS NULL OR role != 1)
+		ORDER BY userId DESC`)
 	if rows == nil {
 		rows = []map[string]any{}
 	}
@@ -149,39 +172,83 @@ func clientsCreate(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{"success": true, "userId": lid})
 }
 
+/*
+clientsUpdate writes ONLY the fields the request actually carried.
+
+Pointers, not strings, and that is the whole point of them here. Every field was
+written unconditionally before, so a key the caller omitted decoded as "" and the
+update stored "" — which is to say an absent field ERASED the column. The edit
+form omits apiPassword whenever it is left blank, exactly as its own "leave blank
+to keep" label promises, and the save then wiped the stored password. Combined
+with the missing api_user_name in clientsList above, editing a company's name
+destroyed both halves of its MarkScan credential and took its data access with
+them.
+
+nil now means "not supplied, leave it"; a supplied value — including an empty
+one — still means "set it to this", so clearing a field on purpose still works.
+The difference is that the caller has to say so.
+*/
 func clientsUpdate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		UserID      int64  `json:"userId"`
-		Name        string `json:"name"`
-		Email       string `json:"email"`
-		APIUserName string `json:"apiUserName"`
-		APIPassword string `json:"apiPassword"`
-		Deleted     int    `json:"deleted"`
+		UserID      int64   `json:"userId"`
+		Name        *string `json:"name"`
+		Email       *string `json:"email"`
+		APIUserName *string `json:"apiUserName"`
+		APIPassword *string `json:"apiPassword"`
+		Deleted     *int    `json:"deleted"`
 		// The analytics client this company's Reports read. See
 		// handlers.ClientIDColumn — a wrong value here shows one company another
 		// company's data, which is why it is validated rather than trusted.
-		ClientIDMS3 string `json:"clientIdMs3"`
+		ClientIDMS3 *string `json:"clientIdMs3"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.UserID == 0 {
 		fail(w, 422, "userId required")
 		return
 	}
-	cid := strings.Trim(strings.TrimSpace(body.ClientIDMS3), "{}\"'")
-	if cid != "" && !isUUID36(cid) {
-		fail(w, 422, "Reporting Client ID must be a 36-character UUID")
+
+	set := make([]string, 0, 6)
+	args := make([]any, 0, 7)
+	if body.Name != nil {
+		set, args = append(set, "name=?"), append(args, *body.Name)
+	}
+	if body.Email != nil {
+		set, args = append(set, "email=?"), append(args, *body.Email)
+	}
+	if body.APIUserName != nil {
+		set, args = append(set, "api_user_name=?"), append(args, *body.APIUserName)
+	}
+	if body.APIPassword != nil {
+		set, args = append(set, "api_password=?"), append(args, *body.APIPassword)
+	}
+	if body.Deleted != nil {
+		set, args = append(set, "deleted=?"), append(args, *body.Deleted)
+	}
+	if body.ClientIDMS3 != nil {
+		cid := strings.Trim(strings.TrimSpace(*body.ClientIDMS3), "{}\"'")
+		if cid != "" && !isUUID36(cid) {
+			fail(w, 422, "Reporting Client ID must be a 36-character UUID")
+			return
+		}
+		// NULL rather than '' when cleared, so "never set" and "deliberately
+		// blank" are not two different empty values to test for later.
+		var stored any
+		if cid != "" {
+			stored = cid
+		}
+		set, args = append(set, "ClientID_MS3=?"), append(args, stored)
+	}
+
+	if len(set) == 0 {
+		// Nothing to write is not a failure — and it must not become an UPDATE
+		// with an empty SET, which is a syntax error.
+		ok(w, map[string]any{"success": true})
 		return
 	}
-	// NULL rather than '' when cleared, so "never set" and "deliberately blank"
-	// are not two different empty values to test for later.
-	var stored any
-	if cid != "" {
-		stored = cid
-	}
-	db.Exec(
-		"UPDATE dcp_user SET name=?, email=?, api_user_name=?, api_password=?, deleted=?, ClientID_MS3=?, updated_at=UTC_TIMESTAMP() WHERE userId=?",
-		body.Name, body.Email, body.APIUserName, body.APIPassword, body.Deleted, stored, body.UserID,
-	)
+
+	set = append(set, "updated_at=UTC_TIMESTAMP()")
+	args = append(args, body.UserID)
+	db.Exec("UPDATE dcp_user SET "+strings.Join(set, ", ")+" WHERE userId=?", args...)
 	ok(w, map[string]any{"success": true})
 }
 

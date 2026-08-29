@@ -184,6 +184,13 @@ func main() {
 	mux.Handle("GET /api/user/nav", auth(handlers.UserNav))
 	mux.Handle("GET /api/user/dashboard-data", auth(handlers.UserDashboardData))
 	mux.Handle("GET /api/user/idle-timeout", auth(handlers.UserIdleTimeout))
+	// May this login rearrange its own report, and the endpoint it does it
+	// through. The layout itself lives in report_panel_layout and is keyed per
+	// client; only the permission is per login. See handlers/clientlayout.go.
+	mux.Handle("GET /api/user/layout-access", auth(handlers.UserLayoutAccess))
+	mux.Handle("GET /api/user/report-layout", auth(handlers.UserReportLayout))
+	mux.Handle("PUT /api/user/report-layout", auth(handlers.UserReportLayout))
+	mux.Handle("DELETE /api/user/report-layout", auth(handlers.UserReportLayout))
 	mux.Handle("POST /api/profile/change-password", auth(handlers.ChangePassword))
 	mux.Handle("POST /api/ip-tracking", auth(handlers.IPTracking))
 	mux.Handle("GET /api/ip-tracking/client-details", auth(handlers.IPTrackingClientDetails))
@@ -231,8 +238,11 @@ func main() {
 	mux.Handle("POST /api/admin/users", adminAuth(admin.Users))
 	mux.Handle("PUT /api/admin/users", adminAuth(admin.Users))
 
-	mux.Handle("GET /api/admin/client-admins", cfg("client-admins", admin.ClientAdmins))
-	mux.Handle("PUT /api/admin/client-admins", cfg("client-admins", admin.ClientAdmins))
+	// Set from the Sign-in pane of the Edit Login Account drawer on
+	// /admin/registrations, so it is gated exactly as that page is. There is no
+	// longer a Configuration screen for it.
+	mux.Handle("GET /api/admin/client-admins", adminAuth(admin.ClientAdmins))
+	mux.Handle("PUT /api/admin/client-admins", adminAuth(admin.ClientAdmins))
 
 	mux.Handle("GET /api/admin/modules", cfg("modules", admin.Modules))
 	mux.Handle("POST /api/admin/modules", cfg("modules", admin.Modules))
@@ -306,15 +316,31 @@ func main() {
 	mux.Handle("POST /api/admin/settings", cfg("settings", admin.Settings))
 	mux.Handle("PUT /api/admin/settings", cfg("settings", admin.Settings))
 
-	mux.Handle("GET /api/admin/idle-timeout", cfg("idle-timeout", admin.AdminIdleTimeout))
-	mux.Handle("POST /api/admin/idle-timeout", cfg("idle-timeout", admin.AdminIdleTimeout))
-	mux.Handle("DELETE /api/admin/idle-timeout", cfg("idle-timeout", admin.AdminIdleTimeout))
+	// Set on the client's own edit page now, so it is gated as that page is.
+	// There is no longer a Configuration screen for it.
+	mux.Handle("GET /api/admin/idle-timeout", adminAuth(admin.AdminIdleTimeout))
+	mux.Handle("POST /api/admin/idle-timeout", adminAuth(admin.AdminIdleTimeout))
+	mux.Handle("DELETE /api/admin/idle-timeout", adminAuth(admin.AdminIdleTimeout))
 
 	mux.Handle("GET /api/admin/asset-access", cfg("asset-access", admin.AssetAccess))
 	mux.Handle("POST /api/admin/asset-access", cfg("asset-access", admin.AssetAccess))
 
 	mux.Handle("GET /api/admin/warroom-settings", cfg("war-room-assets", admin.WarRoomSettings))
 	mux.Handle("POST /api/admin/warroom-settings", cfg("war-room-assets", admin.WarRoomSettings))
+
+	// Set from the Edit Login Account drawer on /admin/registrations, so it is
+	// gated exactly as that page is: plain admin auth, not a Configuration
+	// module grant. There is no Configuration screen for it.
+	mux.Handle("GET /api/admin/layout-access", adminAuth(admin.LayoutAccessSettings))
+	mux.Handle("POST /api/admin/layout-access", adminAuth(admin.LayoutAccessSettings))
+	/* Which report modules a login account may open, granted per PERSON from the
+	   same Module access pane as the layout switch above. adminAuth rather than
+	   the report-config grant: this is set while editing an account on
+	   /admin/registrations, and requiring Report Configuration would put half of
+	   that drawer out of reach of the people who administer accounts. The
+	   catalogue it grants from is dcp_module — see handlers/dashboardaccess.go. */
+	mux.Handle("GET /api/admin/dashboard-access", adminAuth(handlers.DashboardAccess))
+	mux.Handle("POST /api/admin/dashboard-access", adminAuth(handlers.DashboardAccess))
 
 	mux.Handle("GET /api/admin/activity-stats", adminAuth(admin.ActivityStats))
 	mux.Handle("GET /api/admin/tracking", cfg("tracking", admin.Tracking))
@@ -394,6 +420,8 @@ func main() {
 	// What the security policy currently says about one login — expiry dates,
 	// which warning emails went out, and any lock. Read-only.
 	mux.Handle("GET /api/admin/login-security", adminAuth(handlers.LoginSecurityDetail))
+	// Lifting a sign-in lockout, from the account list that reports it.
+	mux.Handle("POST /api/admin/unlock-login", adminAuth(handlers.AdminUnlockLogin))
 	mux.Handle("GET /api/admin/shared-logins", adminAuth(admin.SharedLogins))
 	mux.Handle("POST /api/admin/shared-logins", adminAuth(admin.SharedLogins))
 

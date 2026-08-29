@@ -124,7 +124,9 @@ export default function DashboardsPageClient({ dashboards, totalClients, totalDa
 
           <div className="rounded-2xl p-4 bg-white border border-gray-100 shadow-sm">
             <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide mb-1">Dashboard Modules</p>
-            <p className="text-3xl font-bold text-[#14254A]">{totalModules}</p>
+            <Link to="/admin/dashboard-modules">
+              <p className="text-3xl font-bold text-[#14254A] hover:opacity-70 transition-opacity">{totalModules}</p>
+            </Link>
             <p className="text-xs text-gray-400 mt-1">Active modules</p>
           </div>
 

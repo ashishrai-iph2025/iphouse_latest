@@ -48,7 +48,6 @@ const AdminClientEditPage  = lazy(() => import('@/app/admin/clients/[id]/edit/pa
 const AdminClientsAddPage  = lazy(() => import('@/app/admin/clients/add/page'))
 const AdminUsersPage       = lazy(() => import('@/app/admin/users/page'))
 const AdminUsersAddPage    = lazy(() => import('@/app/admin/users/add/page'))
-const AdminClientAdminsPage = lazy(() => import('@/app/admin/client-admins/page'))
 const AdminGuidelinesPage   = lazy(() => import('@/app/admin/guidelines/page'))
 const AdminNotificationsPage = lazy(() => import('@/app/admin/notifications/page'))
 const AdminNotificationDetail = lazy(() => import('@/app/admin/notifications/detail'))
@@ -66,7 +65,6 @@ const ModulesPage          = lazy(() => import('@/app/admin/modules/page'))
 const DashboardModulesPage = lazy(() => import('@/app/admin/dashboard-modules/page'))
 const ModulePermsPage      = lazy(() => import('@/app/admin/module-permissions/page'))
 const SettingsPage         = lazy(() => import('@/app/admin/settings/page'))
-const IdleTimeoutPage      = lazy(() => import('@/app/admin/idle-timeout/page'))
 const AssetAccessPage      = lazy(() => import('@/app/admin/asset-access/page'))
 const WarRoomAssetsPage    = lazy(() => import('@/app/admin/war-room-assets/page'))
 const PlatformBriefPage    = lazy(() => import('@/app/admin/platform-brief/page'))
@@ -525,7 +523,6 @@ export default function App() {
           <Route path="/admin/clients/:id/edit"           element={<AdminClientEditRoute />} />
           <Route path="/admin/users"                      element={<AdminUsersPage />} />
           <Route path="/admin/users/add"                  element={<AdminUsersAddPage />} />
-          <Route path="/admin/client-admins"              element={<AdminClientAdminsPage />} />
           <Route path="/admin/guidelines"                 element={<AdminGuidelinesPage />} />
           <Route path="/admin/notifications"              element={<AdminNotificationsPage />} />
           <Route path="/admin/notifications/:id"          element={<AdminNotificationDetailRoute />} />
@@ -543,7 +540,6 @@ export default function App() {
           <Route path="/admin/dashboard-modules"          element={<DashboardModulesPage />} />
           <Route path="/admin/module-permissions"         element={<ModulePermsPage />} />
           <Route path="/admin/settings"                   element={<SettingsPage />} />
-          <Route path="/admin/idle-timeout"               element={<IdleTimeoutPage />} />
           <Route path="/admin/asset-access"               element={<AssetAccessPage />} />
           <Route path="/admin/war-room-assets"            element={<WarRoomAssetsPage />} />
           <Route path="/admin/platform-brief"             element={<PlatformBriefPage />} />

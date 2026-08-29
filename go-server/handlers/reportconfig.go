@@ -126,7 +126,7 @@ func maySeeReport(claims *ipauth.Claims, kind string) bool {
 	if claims == nil {
 		return false
 	}
-	allowed := reportsAllowedFor(claims.LoginID)
+	allowed := reportsAllowedForClaims(claims)
 	return allowed == nil || allowed[kind]
 }
 

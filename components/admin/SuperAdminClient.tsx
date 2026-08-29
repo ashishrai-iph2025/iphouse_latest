@@ -464,7 +464,7 @@ function AdminAccountsTab() {
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-card overflow-hidden">
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
-          <p className="font-semibold text-[#14254A] text-sm">dcp_super_admin — {accounts.length} account{accounts.length !== 1 ? 's' : ''}</p>
+          <p className="font-semibold text-[#14254A] text-sm">{accounts.length} account{accounts.length !== 1 ? 's' : ''}</p>
           <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-violet-50 text-violet-700 border border-violet-200">
             {saCount} active Super Admin{saCount !== 1 ? 's' : ''}
           </span>

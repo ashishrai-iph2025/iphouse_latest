@@ -66,13 +66,48 @@ func Modules(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+/*
+dashboardCategories mirrors DASHBOARD_CATEGORIES in lib/dashboardCategories.ts.
+
+Two copies on purpose. The browser one decides what a picker can OFFER; this one
+decides what the column may HOLD, and a value the UI cannot offer can still
+arrive from a hand-written request. Anything not in this list — bar the empty
+string, which is the uncategorised state every existing row starts in — is
+refused rather than stored, because a category nothing can filter on is a row
+that quietly drops out of every list built on it.
+*/
+var dashboardCategories = []string{"VOD", "Sports", "War Room"}
+
+// cleanCategory trims a submitted category and returns it with whether it is
+// storable. "" is storable and means uncategorised.
+func cleanCategory(v string) (string, bool) {
+	c := strings.TrimSpace(v)
+	if c == "" {
+		return "", true
+	}
+	for _, known := range dashboardCategories {
+		// Case-insensitive so "vod" stores as "VOD" rather than as a fourth
+		// category that looks identical in a list and matches none of the
+		// filters built on the other three.
+		if strings.EqualFold(known, c) {
+			return known, true
+		}
+	}
+	return "", false
+}
+
 // GET/POST/PUT/DELETE /api/admin/dashboard-modules — CRUD for the dcp_module table
 // (the PowerBI dashboard module catalog: Internet, Social Media, Telegram, etc.).
+//
+// `category` files each module under VOD, Sports or War Room — see migration 006.
+// It is what /admin/registrations narrows by when granting a person a subset of
+// the report catalogue, so it is carried on every read here rather than fetched
+// separately.
 func DashboardModules(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		showDeleted := r.URL.Query().Get("showDeleted") == "1"
-		q := "SELECT moduleId, moduleName, moduleIcon, deleted FROM dcp_module"
+		q := "SELECT moduleId, moduleName, moduleIcon, category, deleted FROM dcp_module"
 		if !showDeleted {
 			q += " WHERE deleted = 0"
 		}
@@ -93,14 +128,20 @@ func DashboardModules(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			ModuleName string `json:"moduleName"`
 			ModuleIcon string `json:"moduleIcon"`
+			Category   string `json:"category"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.ModuleName == "" {
 			fail(w, 422, "moduleName required")
 			return
 		}
-		_, _, err := db.Exec("INSERT INTO dcp_module (moduleName, moduleIcon, deleted) VALUES (?, ?, 0)",
-			body.ModuleName, nullStr(body.ModuleIcon))
+		category, okCat := cleanCategory(body.Category)
+		if !okCat {
+			fail(w, 422, "Unknown category")
+			return
+		}
+		_, _, err := db.Exec("INSERT INTO dcp_module (moduleName, moduleIcon, category, deleted) VALUES (?, ?, ?, 0)",
+			body.ModuleName, nullStr(body.ModuleIcon), category)
 		if err != nil {
 			fail(w, 500, "Could not create module")
 			return
@@ -112,6 +153,7 @@ func DashboardModules(w http.ResponseWriter, r *http.Request) {
 			ModuleID   int64  `json:"moduleId"`
 			ModuleName string `json:"moduleName"`
 			ModuleIcon string `json:"moduleIcon"`
+			Category   string `json:"category"`
 			Restore    bool   `json:"restore"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
@@ -126,8 +168,13 @@ func DashboardModules(w http.ResponseWriter, r *http.Request) {
 				fail(w, 422, "moduleName required")
 				return
 			}
-			db.Exec("UPDATE dcp_module SET moduleName = ?, moduleIcon = ? WHERE moduleId = ?",
-				body.ModuleName, nullStr(body.ModuleIcon), body.ModuleID)
+			category, okCat := cleanCategory(body.Category)
+			if !okCat {
+				fail(w, 422, "Unknown category")
+				return
+			}
+			db.Exec("UPDATE dcp_module SET moduleName = ?, moduleIcon = ?, category = ? WHERE moduleId = ?",
+				body.ModuleName, nullStr(body.ModuleIcon), category, body.ModuleID)
 		}
 		ok(w, map[string]any{"success": true})
 

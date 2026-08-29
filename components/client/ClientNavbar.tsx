@@ -9,6 +9,7 @@ import { useCustomizer, NAVBAR_HEX } from '@/lib/ThemeCustomizerContext'
 import { NAV_ITEMS, CLIENT_ADMIN_NAV_ITEM, isNavItemActive, isSidebarLayout, isApiIndependentItem, isItemAllowed, navLabel, navOrderOf, dropdownFor, type NavItem, type NavDropdownItem } from '@/lib/navItems'
 import { useModuleAccess } from '@/lib/moduleAccess'
 import NotificationBell from '@/components/shared/NotificationBell'
+import FullscreenToggle from '@/components/shared/FullscreenToggle'
 import CountryPicker from '@/components/shared/CountryPicker'
 
 function isActive(item: NavItem, pathname: string): boolean {
@@ -130,6 +131,14 @@ export default function ClientNavbar() {
             {/* Notifications — the server scopes the feed: a Client Admin
                 sees their whole company, everyone else sees their own actions. */}
             <NotificationBell variant="client" tone={navIsColored ? 'light' : 'dark'} />
+
+            {/* Hand the whole display to the page.
+
+                Here rather than on the report itself because it is about the
+                window, not about reports — and because a control that appears
+                only on one page is a control nobody finds. It renders nothing
+                where the browser refuses full-screen. */}
+            <FullscreenToggle tone={navIsColored ? 'light' : 'dark'} />
 
             {/* Which clock the portal reads UTC data in — see lib/timezone.tsx */}
             <CountryPicker tone={navIsColored ? 'light' : 'dark'} />

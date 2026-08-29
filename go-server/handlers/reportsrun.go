@@ -26,12 +26,12 @@ import (
 */
 func ReportsSections(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
-	// An allow-list of nil means unrestricted, which is the default for every
-	// login — see reportsAllowedFor.
-	var allowed map[string]bool
-	if claims != nil {
-		allowed = reportsAllowedFor(claims.LoginID)
-	}
+	/* An allow-list of nil means unrestricted, which is the default for every
+	   login. Two grants can narrow it and this returns their intersection —
+	   the per-company allow-list from Report Configuration, and the per-person
+	   dashboard-module grant set on the Edit Login Account drawer. See
+	   reportsAllowedForClaims in dashboardaccess.go. */
+	allowed := reportsAllowedForClaims(claims)
 
 	if !mayOpenReports(claims) {
 		Fail(w, 403, "The Reports module is not enabled for this account")

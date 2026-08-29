@@ -218,16 +218,88 @@ function Skeleton({ h }: { h: number }) {
   return <div className="rounded-sm animate-pulse" style={{ height: h, background: d.skeleton }} />
 }
 
-function KpiBox({ label, value, icon, loading }: { label: string; value?: number; icon: string; loading: boolean }) {
+/* ─── KPI tiles ─────────────────────────────────────────────────────────────
+
+   Line icons, not emoji — the same argument ConfigIcon.tsx already makes and
+   wins for the Configuration cards: emoji are a different artwork per platform,
+   they carry their own colour (which fights the tile's accent), they sit on
+   their own baseline, and half of them render flat on Windows and glossy on
+   macOS. One stroked set at one weight makes eight tiles read as one row.
+
+   Drawn on a 24×24 grid in `currentColor` so the tile sets size and colour. */
+const KPI_ICONS: Record<string, React.ReactNode> = {
+  clients: <><path d="M3 21h18" /><path d="M5 21V6l7-3 7 3v15" /><path d="M9 9h2M13 9h2M9 13h2M13 13h2M9 17h2M13 17h2" /></>,
+  people:  <><circle cx="9" cy="8" r="3.2" /><path d="M3.5 20a5.5 5.5 0 0 1 11 0" /><path d="M16.5 5.3a3.2 3.2 0 0 1 0 5.4" /><path d="M18 20a5.5 5.5 0 0 0-2.6-4.7" /></>,
+  shield:  <><path d="M12 3l7 3v5.5c0 4.4-3 8.2-7 9.5-4-1.3-7-5.1-7-9.5V6z" /><path d="M9 12l2 2 4-4" /></>,
+  crown:   <><path d="M4 8l3.5 3L12 5l4.5 6L20 8l-1.5 9h-13z" /><path d="M5.5 20h13" /></>,
+  key:     <><circle cx="8" cy="12" r="4" /><path d="M12 12h9" /><path d="M17 12v3.5" /><path d="M20 12v2.5" /></>,
+  check:   <><circle cx="12" cy="12" r="9" /><path d="M8 12.5l2.5 2.5L16 9.5" /></>,
+  week:    <><rect x="3" y="5" width="18" height="16" rx="2.5" /><path d="M3 10h18" /><path d="M8 3v4M16 3v4" /><path d="M7.5 14h3M13.5 14h3" /></>,
+  month:   <><path d="M3 20h18" /><path d="M5 16l4.5-5 3.5 3L20 6" /><path d="M15.5 6H20v4.5" /></>,
+}
+
+/* Compact above five figures, grouped below it.
+
+   `331` and `1,284` are read at a glance; `1284` is not, and `12.9K` beats
+   `12,860` on a tile whose whole job is the order of magnitude. Proportional
+   figures rather than `tabular-nums`: tabular gives every digit the width of a
+   `0`, which at 30px leaves a number like `331` visibly gappy. Tabular belongs
+   in columns that must align, not on a standalone figure. */
+function kpiNum(n: number): string {
+  if (n >= 100000) return (n / 1000).toFixed(n >= 1000000 ? 1 : 0).replace(/\.0$/, '') + 'K'
+  return n.toLocaleString()
+}
+
+function KpiBox({ label, value, icon, accent, loading }: {
+  label: string; value?: number; icon: keyof typeof KPI_ICONS
+  /** The tile's hue. Where the same entity also appears in a donut below, this
+      is that donut's colour — Client Accounts orange, Admins navy, Super Admins
+      yellow, Active green — so one thing keeps one colour down the page. The
+      rest take a distinct hue each; nothing is cycled. */
+  accent: string
+  loading: boolean
+}) {
   const isDark = useDark(); const d = dk(isDark)
+  const [hover, setHover] = useState(false)
   return (
-    <div className="flex items-center gap-4 p-5 rounded-xl" style={{ background: d.kpiBg, border: `1.5px solid ${d.cardBorder}` }}>
-      <div className="w-11 h-11 rounded-lg flex items-center justify-center text-xl flex-shrink-0" style={{ background: d.iconBg }}>{icon}</div>
-      <div>
-        <p className="font-bold" style={{ color: ORANGE, fontSize: 26, fontFamily: "'Inter', sans-serif", lineHeight: 1 }}>
-          {loading ? <span className="inline-block w-8 h-6 rounded animate-pulse" style={{ background: d.skeleton }} /> : (value ?? 0)}
+    <div
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      className="relative flex items-center gap-4 p-5 rounded-2xl overflow-hidden transition-all duration-200"
+      style={{
+        background: d.card,
+        border: `1px solid ${hover ? accent : d.cardBorder}`,
+        boxShadow: hover
+          ? `0 10px 24px -14px ${isDark ? '#00000090' : 'rgba(13,36,75,0.35)'}`
+          : `0 1px 2px ${isDark ? '#00000040' : 'rgba(13,36,75,0.05)'}`,
+        transform: hover ? 'translateY(-2px)' : 'none',
+      }}>
+
+      {/* The accent as a rule down the leading edge rather than on the number.
+
+          The value used to be ORANGE on all eight tiles, which is a colour
+          doing no work: eight identical highlights say nothing about eight
+          different quantities, and it left the figure — the one thing the tile
+          exists to show — competing with its own decoration. Text wears text
+          ink; the accent identifies the tile. */}
+      <span aria-hidden className="absolute left-0 top-0 bottom-0 w-[3px]" style={{ background: accent }} />
+
+      <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+        style={{ background: isDark ? `${accent}26` : `${accent}1f`, color: accent }}>
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          {KPI_ICONS[icon]}
+        </svg>
+      </div>
+
+      <div className="min-w-0">
+        <p className="font-bold" style={{ color: d.text, fontSize: 30, ...BODY_FONT, lineHeight: 1.05 }}>
+          {loading
+            ? <span className="inline-block w-12 h-7 rounded-md animate-pulse align-middle" style={{ background: d.skeleton }} />
+            : kpiNum(value ?? 0)}
         </p>
-        <p style={{ color: d.sub, fontSize: 11, fontFamily: "'Inter', sans-serif", marginTop: 3 }}>{label}</p>
+        <p className="truncate" style={{ color: d.sub, fontSize: 11.5, ...BODY_FONT, marginTop: 5, letterSpacing: '0.01em' }}>
+          {label}
+        </p>
       </div>
     </div>
   )
@@ -316,20 +388,29 @@ export default function AdminHomeClient({ name, today, role }: { name: string; t
           </div>
         </div>
 
-        {/* KPI Row 1 */}
+        {/* KPI Row 1 — who exists.
+
+            The accents are not decoration picked per tile: where a tile's
+            entity is also a segment of a donut further down, it takes that
+            segment's colour, so Client Accounts is orange in both places and
+            the eye can carry a quantity from the tile to its breakdown. */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <KpiBox label="Total Clients"   value={counts.totalClients}   icon="🏢" loading={loading} />
-          <KpiBox label="Client Accounts" value={counts.clientAccounts} icon="👤" loading={loading} />
-          <KpiBox label="Admins"          value={counts.admins}         icon="🛡️" loading={loading} />
-          <KpiBox label="Super Admins"    value={counts.superAdmins}    icon="👑" loading={loading} />
+          <KpiBox label="Total Clients"   value={counts.totalClients}   icon="clients" accent={isDark ? TEAL_DK : TEAL} loading={loading} />
+          <KpiBox label="Client Accounts" value={counts.clientAccounts} icon="people"  accent={ORANGE}                  loading={loading} />
+          <KpiBox label="Admins"          value={counts.admins}         icon="shield"  accent={d.series}                loading={loading} />
+          <KpiBox label="Super Admins"    value={counts.superAdmins}    icon="crown"   accent={YELLOW}                  loading={loading} />
         </div>
 
-        {/* KPI Row 2 */}
+        {/* KPI Row 2 — signing in. */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <KpiBox label="Total Login Users"     value={counts.totalLogins}     icon="🔐" loading={loading} />
-          <KpiBox label="Active Login Accounts" value={counts.activeLogins}    icon="✅" loading={loading} />
-          <KpiBox label="Logins This Week"      value={counts.loginsThisWeek}  icon="📅" loading={loading} />
-          <KpiBox label="Logins This Month"     value={counts.loginsThisMonth} icon="📈" loading={loading} />
+          {/* A neutral, deliberately: this is the TOTAL the row breaks down,
+              not one of its categories, and navy already means Admins in the
+              distribution donut and Email OTP in the login-type one. A third
+              meaning for the same hue is how a colour stops carrying any. */}
+          <KpiBox label="Total Login Users"     value={counts.totalLogins}     icon="key"   accent={isDark ? NAVY_50_DK : NAVY_50} loading={loading} />
+          <KpiBox label="Active Login Accounts" value={counts.activeLogins}    icon="check" accent={isDark ? GREEN_DK : GREEN} loading={loading} />
+          <KpiBox label="Logins This Week"      value={counts.loginsThisWeek}  icon="week"  accent={isDark ? LILAC_DK : LILAC} loading={loading} />
+          <KpiBox label="Logins This Month"     value={counts.loginsThisMonth} icon="month" accent={isDark ? BROWN_DK : BROWN} loading={loading} />
         </div>
 
         {/* Donuts */}

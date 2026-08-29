@@ -198,8 +198,26 @@ func upgradeLegacyHash(plain, stored, updateSQL string, id int64) {
 	log.Printf("[auth] upgraded legacy MD5 password to bcrypt for id=%d", id)
 }
 
-// ── POST /api/auth/check-multiple-logins ─────────────────────────────────────
+/*
+── POST /api/auth/check-multiple-logins ─────────────────────────────────────
 
+The first thing the sign-in page calls, and the one that actually verifies the
+password: an OTP account never reaches Login at all — it goes from here to
+send-otp to verify-otp — so for most of the portal THIS is where a wrong
+password is found out.
+
+Which is why the lockout lives here too. It did not, and that was not a display
+gap: this endpoint verified a password and reported whether it was right without
+counting the attempt or honouring an existing lock, so the whole lockout policy
+could be walked past by calling it directly. Locking is now checked BEFORE the
+password is verified and failures are recorded after, in the same order and for
+the same reasons as Login — a lock checked afterwards lets a locked account be
+used as an oracle to confirm a guessed password.
+
+A correct password clears the counter here rather than in Login, because for an
+OTP account Login is never reached and the counter would otherwise only ever go
+up.
+*/
 func CheckMultipleLogins(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Username string `json:"username"`
@@ -213,12 +231,22 @@ func CheckMultipleLogins(w http.ResponseWriter, r *http.Request) {
 
 	// Portal-staff check (Admin or Super Admin — unified in dcp_super_admin)
 	if sa := superAdminByEmail(body.Username); sa != nil {
-		hash, _ := sa["password_hash"].(string)
-		if !ipauth.VerifyPassword(body.Password, hash) {
-			OK(w, map[string]any{"success": false, "error": "Invalid username or password"})
+		saID := intFromAny(sa["id"])
+		if st := CheckLock(AcctSuperAdmin, saID, FailPassword); st.Locked {
+			go activity.Log(saID, "login_blocked", "auth/check-multiple-logins",
+				activity.GetIP(r), activity.GetUA(r), map[string]any{"reason": "locked"})
+			OK(w, failResp(st, LockMessage(st)))
 			return
 		}
-		upgradeLegacyHash(body.Password, hash, "UPDATE dcp_super_admin SET password_hash = ? WHERE id = ?", intFromAny(sa["id"]))
+		hash, _ := sa["password_hash"].(string)
+		if !ipauth.VerifyPassword(body.Password, hash) {
+			st := RecordFailure(AcctSuperAdmin, saID, FailPassword)
+			notifyIfJustLocked(st, strFromAny(sa["email"]), strFromAny(sa["name"]))
+			OK(w, failResp(st, failedLoginMessage(st)))
+			return
+		}
+		ClearFailures(AcctSuperAdmin, saID, FailPassword)
+		upgradeLegacyHash(body.Password, hash, "UPDATE dcp_super_admin SET password_hash = ? WHERE id = ?", saID)
 		claims := claimsForSuperAdminRow(sa)
 		isLegacyHash := ipauth.IsLegacyHash(hash)
 		OK(w, map[string]any{
@@ -254,12 +282,23 @@ func CheckMultipleLogins(w http.ResponseWriter, r *http.Request) {
 		OK(w, map[string]any{"success": false, "error": "Invalid username or password"})
 		return
 	}
-	hash, _ := row["login_password"].(string)
-	if !ipauth.VerifyPassword(body.Password, hash) {
-		OK(w, map[string]any{"success": false, "error": "Invalid username or password"})
+	loginID := intFromAny(row["loginId"])
+	if st := CheckLock(AcctLogin, loginID, FailPassword); st.Locked {
+		go activity.Log(loginID, "login_blocked", "auth/check-multiple-logins",
+			activity.GetIP(r), activity.GetUA(r), map[string]any{"reason": "locked"})
+		OK(w, failResp(st, LockMessage(st)))
 		return
 	}
-	upgradeLegacyHash(body.Password, hash, "UPDATE dcp_user_login SET login_password = ? WHERE loginId = ?", intFromAny(row["loginId"]))
+
+	hash, _ := row["login_password"].(string)
+	if !ipauth.VerifyPassword(body.Password, hash) {
+		st := RecordFailure(AcctLogin, loginID, FailPassword)
+		notifyIfJustLocked(st, body.Username, strFromAny(row["name"]))
+		OK(w, failResp(st, failedLoginMessage(st)))
+		return
+	}
+	ClearFailures(AcctLogin, loginID, FailPassword)
+	upgradeLegacyHash(body.Password, hash, "UPDATE dcp_user_login SET login_password = ? WHERE loginId = ?", loginID)
 
 	// Multiple logins sharing same username
 	multiRows, _ := db.Query(`

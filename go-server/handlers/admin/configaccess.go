@@ -20,14 +20,12 @@ var configModuleKeys = []string{
 	"powerbi-creds",
 	"powerbi-workspace",
 	"settings",
-	"idle-timeout",
 	"registration-requests",
 	"tracking",
 	"asset-access",
 	"war-room-assets",
 	"email-templates",
 	"email-event-types",
-	"client-admins",
 	"report-config",
 }
 

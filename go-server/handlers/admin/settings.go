@@ -377,15 +377,28 @@ func AdminIdleTimeout(w http.ResponseWriter, r *http.Request) {
 	ensureIdleSettingsTable()
 	switch r.Method {
 	case http.MethodGet:
-		rows, _ := db.Query(`
+		/* One company when asked for by id, every company otherwise.
+
+		   The filter exists because this setting is now edited on the client's
+		   own edit page rather than on a roster of all of them — and reading
+		   fifty-odd rows to find one is a query the page would then have to
+		   search through itself. The unfiltered form is kept: it is the same
+		   handler, and nothing is served differently by it. */
+		base := `
 			SELECT u.userId, u.name, u.email,
 			       s.id AS settingId,
 			       COALESCE(s.idle_minutes, 30) AS idle_minutes,
 			       COALESCE(s.is_active, 0)     AS is_active
 			FROM dcp_user u
 			LEFT JOIN user_idle_settings s ON s.user_id = u.userId
-			WHERE u.deleted = 0
-			ORDER BY u.name ASC`)
+			WHERE u.deleted = 0`
+
+		var rows []map[string]any
+		if uid := strings.TrimSpace(r.URL.Query().Get("userId")); uid != "" {
+			rows, _ = db.Query(base+" AND u.userId = ? ORDER BY u.name ASC", uid)
+		} else {
+			rows, _ = db.Query(base + " ORDER BY u.name ASC")
+		}
 		if rows == nil {
 			rows = []map[string]any{}
 		}
@@ -1031,13 +1044,34 @@ func SharedLogins(w http.ResponseWriter, r *http.Request) {
 				   client admin has flipped a SINGLE company's row, and there
 				   "still has a way in" is the honest answer. */
 				MAX(ul.is_active)                                            AS is_active,
-				MAX(sa.role)                                                 AS portal_role
+				MAX(sa.role)                                                 AS portal_role,
+				/* Whether sign-in is currently barred by the lockout, and until when.
+				
+				   MAX over BOTH ledgers and every one of this person's login rows,
+				   because a lock is recorded per row and per kind: a password lock
+				   on one company and an OTP lock on another are both "this person
+				   cannot get in", and a list reporting only one of them would send
+				   somebody to unlock an account that is still locked.
+				
+				   Compared here rather than in Go so an expired lock reads as
+				   unlocked without anything having to tidy the row away — the same
+				   test CheckLock makes. */
+				MAX(CASE WHEN lk.locked_until IS NOT NULL AND lk.locked_until > UTC_TIMESTAMP()
+				         THEN 1 ELSE 0 END)                                  AS is_locked,
+				MAX(CASE WHEN lk.locked_until > UTC_TIMESTAMP()
+				         THEN lk.locked_until ELSE NULL END)                 AS locked_until
 			FROM dcp_user_login ul
 			LEFT JOIN dcp_user u ON u.userId = ul.userId AND u.deleted = 0
 			LEFT JOIN dcp_super_admin sa
 				ON CONVERT(sa.email USING utf8mb4) COLLATE utf8mb4_general_ci
 				 = CONVERT(ul.login_username USING utf8mb4) COLLATE utf8mb4_general_ci
 				AND sa.is_active = 1
+			/* Both account spaces. A staff person locks against dcp_super_admin.id
+			   and a client login against dcp_user_login.loginId — different id
+			   spaces, so they cannot share one join condition. */
+			LEFT JOIN dcp_account_lockout lk
+				ON (lk.account_type = 'login'       AND lk.account_id = ul.loginId)
+				OR (lk.account_type = 'super_admin' AND lk.account_id = sa.id)
 			/* deleted, NOT is_active. Filtering on is_active would hide the very
 			   accounts this page now exists to show — the ones somebody marked
 			   Invalid and may want to mark Valid again. Live-but-barred rows

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import AdminPageHeader from '@/components/admin/AdminPageHeader'
 import EditClientForm from '@/components/admin/EditClientForm'
 import PageLoader from '@/components/ui/PageLoader'
 
@@ -27,11 +27,26 @@ export default function EditClientPage({ id }: { id: string }) {
   )
 
   return (
-    <div className="p-6 max-w-2xl mx-auto fade-in">
-      <div className="flex items-center gap-3 mb-6">
-        <Link to="/admin/clients" className="text-brand-muted hover:text-[#FC934C] text-sm">← Back</Link>
-        <h1 className="text-2xl font-bold text-[#14254A]">Edit Client</h1>
-      </div>
+    <div className="p-6 max-w-7xl mx-auto fade-in">
+      {/* The shared header every other admin sub-page uses, rather than a bare
+          "← Back" beside a heading.
+
+          Three things it brings that the old pair did not: a labelled way out
+          that says WHERE it goes, a breadcrumb naming the client so the page
+          says which company is open without reading the first field, and the
+          same title/description block the rest of the console has. The chevron
+          link and the arrow-plus-heading were two shapes for one control, and
+          this page had the one nothing else used. */}
+      <AdminPageHeader
+        backHref="/admin/clients"
+        backLabel="Clients"
+        breadcrumb={[
+          { label: 'Clients', href: '/admin/clients' },
+          { label: client.name || 'Edit Client' },
+        ]}
+        title="Edit Client"
+        description="Company details, where its figures come from, and how long its people stay signed in."
+      />
       <EditClientForm client={client} />
     </div>
   )

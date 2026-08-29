@@ -26,6 +26,7 @@ import SearchableSelect from '@/components/ui/SearchableSelect'
 import DateRangePicker from '@/components/ui/DateRangePicker'
 import { WORLD_SHAPES, WORLD_VIEWBOX } from './worldShapes'
 import RealtimeCard from '@/components/shared/RealtimeCard'
+import ReportLayoutEditor from '@/components/reports/ReportLayoutEditor'
 
 /* ── Palette ───────────────────────────────────────────────────────────────────
    Two families, deliberately kept apart:
@@ -2431,8 +2432,16 @@ function SeasonColumns({ rows, m, onPick, activeVal = '' }: {
 
   const n = data.length
   const longest = data.reduce((a, d) => Math.max(a, d.label.length), 0)
-  // Angled only when a straight label would have to be cut to a few characters.
-  const angled = longest > 10 && n > 3
+  const CHAR_W = 5.6                                   // 10px sans, near enough
+
+  /* Whether angled labels are POSSIBLE, which is not the same question as
+     whether they are used.
+
+     The slot floor and ceiling below have to reserve room for the widest label
+     before the slot exists, and the label mode cannot be settled until it does.
+     So this is the reservation, and the decision is made further down against
+     the slot that actually came out. */
+  const mayAngle = longest > 10 && n > 3
 
   /* THE SLOT IS DECIDED FIRST, THE MARK SECOND.
      A category owns a slot; the bars are sized to sit inside it with air left
@@ -2440,21 +2449,87 @@ function SeasonColumns({ rows, m, onPick, activeVal = '' }: {
      what lets one component draw ten franchises across a full-width card and
      seventy fixtures in a half-width one without either looking stretched. */
   const baseBar = n <= 8 ? 22 : n <= 20 ? 14 : 8
-  const minSlot = Math.max(baseBar * 2 + 12, angled ? 48 : 30)
-  const slot = avail > 0 ? Math.max(minSlot, avail / Math.max(n, 1)) : minSlot
-  const plotW = Math.max(Math.round(slot * n), 1)
-  const scrolls = avail > 0 && plotW > avail + 1
+  const minSlot = Math.max(baseBar * 2 + 12, mayAngle ? 48 : 30)
+
+  /* AND A CEILING, WHICH IS THE OTHER HALF OF THE SAME RULE.
+
+     Dividing the card evenly is right until there is more card than data. Four
+     platforms in a full-width panel gives a slot of ~475px, and a 24px pair
+     alone in the middle of that reads as a chart that failed to load rather
+     than as four large numbers: the eye has to travel half a screen between
+     marks it is meant to compare. Past roughly this width the extra space stops
+     helping and starts separating.
+
+     What is left over is not filled. It is put on BOTH SIDES — see xOffset —
+     so a short set sits as a centred group under a full-width rule, rather than
+     as a row of bars trailing off to the right. */
+  const maxSlot = mayAngle ? 150 : 132
+  const fair = avail > 0 ? avail / Math.max(n, 1) : minSlot
+  const slot = Math.min(Math.max(fair, minSlot), maxSlot)
+
+  /* THE MARKS' WIDTH AND THE CANVAS' WIDTH ARE NOT THE SAME NUMBER.
+
+     rawW is what the bars occupy; plotW is the SVG they are drawn on. They part
+     company in both directions, and one of them used to draw a scrollbar for
+     nothing.
+
+     When the set fits, the canvas is the whole scroller and the bars are
+     centred on it, so the grid rules still span the card. `Math.floor` is doing
+     real work there: `avail` is fractional far more often than not, an SVG a
+     third of a pixel wider than its container overflows it, and the browser
+     answers that with a horizontal scrollbar under a chart that fits.
+
+     When it does not fit, the canvas is the bars and the scroller scrolls,
+     which is the case this component was built for. */
+  const rawW = Math.max(1, Math.round(slot * n))
+  const scrolls = avail > 0 && rawW > avail + 1
+  const plotW = avail > 0 ? (scrolls ? rawW : Math.max(1, Math.floor(avail))) : rawW
+  const xOffset = scrolls || plotW <= rawW ? 0 : Math.round((plotW - rawW) / 2)
 
   /* 2px between the pair, and at least 10px of surface between one pair and the
      next — the outer gap has to beat the inner one or neighbouring pairs read
-     as a single group of four bars. Capped at 24: past that a bar is a block,
-     and blocks are loud. */
-  const barW = Math.min(24, Math.max(5, Math.floor((slot - 12) / 2)))
+     as a single group of four bars. Capped at 30, which is where the slot
+     ceiling above puts it on a short set: a pair then fills a little under half
+     its slot, so the rhythm of mark and gap holds whether there are four
+     categories or forty. */
+  const barW = Math.min(30, Math.max(5, Math.floor((slot - 12) / 2)))
+
+  /* HOW A CATEGORY IS LABELLED, DECIDED FROM THE ROOM IT ACTUALLY HAS.
+
+     Three ways, in order of preference:
+
+       one line   it fits as it is. Best, always — it reads like every other
+                  axis in the product.
+       two lines  it does not fit, but half of it would. Broken on a space,
+                  never mid-word.
+       angled     the slot is too narrow for either. The dense case — seventy
+                  fixtures in a half-width card.
+
+     This was decided from the label's LENGTH alone, before the slot was known,
+     so an eighteen-character franchise was angled in a card with 130px of room
+     going spare. */
+  const room = slot - 6
+  const oneLine = longest * CHAR_W <= room
+  const wraps = !oneLine && slot >= 64
+  const angled = !oneLine && !wraps
 
   const AXIS_W = 52
   const TOP = 22                      // room for the one direct label
   const PLOT = 190
-  const band = angled ? 52 : 26       // the category-label band
+
+  /* THE BAND IS MEASURED, NOT ASSUMED — and it was assumed.
+
+     A fixed 52px was fine for the short labels it was written against and cut
+     the long ones in half: anchored at its end and turned 32°, a label descends
+     its own width times sin(32°) BELOW the anchor, so an 18-character name
+     reaches ~53px into a 52px band and loses its opening characters off the
+     bottom edge of the SVG. Nothing truncated them — they were drawn and then
+     clipped, which is why there was no ellipsis to give it away. */
+  const ANGLE_SIN = Math.sin((32 * Math.PI) / 180)
+  const ANGLED_CUT = 22
+  const band = angled
+    ? Math.min(112, Math.round(Math.min(longest, ANGLED_CUT) * CHAR_W * ANGLE_SIN) + 20)
+    : wraps ? 40 : 26
   const H = TOP + PLOT + band
 
   const ticks = niceTicks(data.reduce((a, d) => Math.max(a, d.urls, d.removed), 0))
@@ -2483,17 +2558,38 @@ function SeasonColumns({ rows, m, onPick, activeVal = '' }: {
       'v' + (h - r) + 'h' + -barW + 'z'
   }
 
-  /* NOT EVERY CATEGORY GETS A LABEL WHEN THEY WILL NOT FIT.
-     "Match 12" is about fifty pixels of text and a fixture's slot is thirty, so
-     labelling all of them overlaps them into a grey smear — the failure this
-     card was drawn to avoid. Every second or third one is labelled instead,
-     exactly as a dense time axis is, and the tooltip names the rest. Angled
-     labels escape sideways and need no thinning. */
-  const CHAR_W = 5.6                                   // 10px sans, near enough
-  const labelW = longest * CHAR_W + 6
-  const every = angled ? 1 : Math.max(1, Math.ceil(labelW / slot))
-  const cut = Math.max(4, Math.floor((slot * every - 4) / CHAR_W))
-  const short = (t: string) => (t.length > cut ? t.slice(0, cut) + '…' : t)
+  /* EVERY CATEGORY IS LABELLED NOW, BECAUSE EVERY LABEL FITS.
+
+     This used to thin the axis — every second or third name — because a label
+     wider than its slot overlapped its neighbour into a grey smear. Wrapping
+     answers that better: the reason for thinning was width, and two lines are
+     half the width. The tooltip still names everything either way. */
+  const fit = (t: string, w: number) => {
+    const max = Math.max(3, Math.floor(w / CHAR_W))
+    return t.length > max ? t.slice(0, max - 1) + '…' : t
+  }
+
+  /* Broken on a space and balanced by WIDTH, not by word count: "Belgian Pro
+     League" reads as "Belgian / Pro League" rather than "Belgian Pro / League",
+     because the eye pairs the short line with the bar above it. A label with no
+     space cannot be broken at all, so it is cut instead. */
+  const twoLines = (t: string): string[] => {
+    const words = t.split(/\s+/).filter(Boolean)
+    if (words.length < 2) return [fit(t, room)]
+    let at = 1
+    let best = Infinity
+    for (let k = 1; k < words.length; k++) {
+      const a = words.slice(0, k).join(' ').length * CHAR_W
+      const b = words.slice(k).join(' ').length * CHAR_W
+      // Any split that still overflows is worse than any split that does not.
+      const score = Math.max(a, b) > room ? 1e6 + Math.abs(a - b) : Math.abs(a - b)
+      if (score < best) { best = score; at = k }
+    }
+    return [fit(words.slice(0, at).join(' '), room), fit(words.slice(at).join(' '), room)]
+  }
+
+  const labelLines = (t: string): string[] =>
+    oneLine ? [t] : wraps ? twoLines(t) : [fit(t, ANGLED_CUT * CHAR_W)]
 
   return (
     <>
@@ -2520,7 +2616,7 @@ function SeasonColumns({ rows, m, onPick, activeVal = '' }: {
             ))}
 
             {data.map((d, i) => {
-              const cx = i * slot + slot / 2
+              const cx = xOffset + i * slot + slot / 2
               /* The 2px gap inside a pair is the surface doing the separating —
                  never a stroke drawn around the marks. */
               const xI = cx - barW - 1
@@ -2532,13 +2628,16 @@ function SeasonColumns({ rows, m, onPick, activeVal = '' }: {
                   <path d={barPath(xI, d.urls)} fill={m.ident} opacity={o} />
                   <path d={barPath(xR, d.removed)} fill={m.removed} opacity={o} />
 
-                  {i % every === 0 && (
-                    <text x={cx} y={labelY} fontSize={10} fill={m.axis}
-                      textAnchor={angled ? 'end' : 'middle'}
-                      transform={angled ? `rotate(-32 ${cx} ${labelY})` : undefined}>
-                      {short(d.label)}
-                    </text>
-                  )}
+                  <text x={cx} y={labelY} fontSize={10} fill={m.axis}
+                    textAnchor={angled ? 'end' : 'middle'}
+                    transform={angled ? `rotate(-32 ${cx} ${labelY})` : undefined}>
+                    {/* tspan per line, each re-anchored at cx: without the
+                        repeated x a second line starts where the first ended
+                        instead of under it. */}
+                    {labelLines(d.label).map((ln, k) => (
+                      <tspan key={k} x={cx} dy={k === 0 ? 0 : 11}>{ln}</tspan>
+                    ))}
+                  </text>
 
                   {/* The extreme, and only the extreme. */}
                   {d === peak && d.urls > 0 && (
@@ -2549,7 +2648,7 @@ function SeasonColumns({ rows, m, onPick, activeVal = '' }: {
                     </text>
                   )}
 
-                  <rect x={i * slot} y={TOP} width={slot} height={PLOT} fill="transparent"
+                  <rect x={xOffset + i * slot} y={TOP} width={slot} height={PLOT} fill="transparent"
                     style={{ cursor: onPick ? 'pointer' : 'default' }}
                     onClick={() => d.value_ && onPick?.(d.value_)}
                     onMouseMove={e => {
@@ -2829,6 +2928,16 @@ function Chip({ label, value, onClear }: { label: string; value: string; onClear
 export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
   const [sections, setSections] = useState<Section[]>([])
   const [section,  setSection]  = useState('')
+  /* Arranging the report FROM the report.
+
+     `canArrange` is the per-login grant an admin sets on the Module access
+     pane of Edit Login Account. `layoutRev` exists because the arrangement
+     arrives with the SECTION list rather than with the data — saving a layout
+     has to re-ask for the sections, or the page keeps drawing the panels it
+     was given before the change. */
+  const [canArrange, setCanArrange] = useState(false)
+  const [layoutOpen, setLayoutOpen] = useState(false)
+  const [layoutRev,  setLayoutRev]  = useState(0)
   const [filters,  setFilters]  = useState<Filters>(EMPTY)
   const [opts,     setOpts]     = useState<Record<string, any>>({})
   const [data,     setData]     = useState<any>(null)
@@ -3056,6 +3165,22 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
       })
   }, [scoped])
 
+  /* Whether this login may rearrange its own report.
+
+     Only asked in scoped mode. Staff have Report Configuration, which edits
+     any client's layout and the shared default besides; this drawer writes
+     exactly one client's, so offering it to them would be the narrower tool
+     in the place the wider one belongs. A failed request leaves it false —
+     the control is simply not offered, and the server refuses the write
+     regardless. */
+  useEffect(() => {
+    if (!scoped) return
+    fetch('/api/user/layout-access', { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => { if (mounted.current) setCanArrange(!!d?.canChangeLayout) })
+      .catch(() => {})
+  }, [scoped])
+
   /* ── Sidebar: the section list is the server's registry ───────────────── */
   /* Re-asked when the client changes: the panel layout can be configured per
      client, so which visuals a section has and how wide they are depends on who
@@ -3115,7 +3240,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         if (e.message === AUTH_MSG) setAuthError(e.message)
         else setUnavailable(e.message)
       })
-  }, [filters.clientId])
+  }, [filters.clientId, layoutRev])
 
   /* ── Slicer values for the active section ─────────────────────────────── */
   /* Re-listed whenever the SCOPE moves, not just when the client changes.
@@ -3775,6 +3900,28 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             <span className="font-semibold text-[#FC934C]">{scope.clientName}</span>
           </>
         )}
+
+        {/* Beside the report's own name rather than in the filter rail: this
+            changes what the page IS, not what it is showing, and the rail is
+            entirely questions about the latter. Hidden without the grant —
+            there is no disabled state, because the reason it is unavailable is
+            on a screen the reader cannot open. */}
+        {scoped && canArrange && section && (
+          <button type="button" onClick={() => setLayoutOpen(true)}
+            className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg
+              text-[11px] font-semibold border border-gray-200 text-gray-600
+              hover:bg-white hover:text-[#14254A] transition-colors
+              dark:border-white/15 dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="7" height="9" rx="1.5" />
+              <rect x="14" y="3" width="7" height="5" rx="1.5" />
+              <rect x="3" y="16" width="7" height="5" rx="1.5" />
+              <rect x="14" y="12" width="7" height="9" rx="1.5" />
+            </svg>
+            Arrange
+          </button>
+        )}
       </nav>
 
       {/* A login the module reaches but the mapping does not. Stated plainly:
@@ -4324,6 +4471,18 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
           )}
         </aside>
       </div>
+      )}
+
+      {scoped && canArrange && (
+        <ReportLayoutEditor
+          platform={section}
+          /* Every section this login can open, so all of its reports are
+             arranged from one screen rather than by closing the editor,
+             switching report and opening it again. */
+          sections={sections.map(s => ({ key: s.key, label: s.label }))}
+          open={layoutOpen}
+          onClose={() => setLayoutOpen(false)}
+          onSaved={() => setLayoutRev(v => v + 1)} />
       )}
     </div>
   )

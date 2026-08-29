@@ -237,11 +237,10 @@ func envFloat(key string, def float64) float64 {
 // summaryPlatforms lists the enabled platforms this login may see. An empty
 // result means there is nothing to summarise and the section is not offered.
 func summaryPlatforms(claims *ipauth.Claims) []platformDef {
-	var allowed map[string]bool
-	if claims != nil {
-		// nil means unrestricted, which is the default for every login.
-		allowed = reportsAllowedFor(claims.LoginID)
-	}
+	// nil means unrestricted, which is the default for every login. Both grants
+	// apply here as well — a summary must not total up a report its reader
+	// cannot open.
+	allowed := reportsAllowedForClaims(claims)
 	out := []platformDef{}
 	for _, p := range loadPlatforms() {
 		if !p.Enabled || p.Key == summaryKey {

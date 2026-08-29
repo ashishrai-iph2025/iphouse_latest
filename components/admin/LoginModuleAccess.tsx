@@ -33,8 +33,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   enforceDashboardReports, selectAllRespectingRule, hasBothDashboardAndReports,
-  DASHBOARD_REPORTS_HINT,
+  isReportsSelected, DASHBOARD_REPORTS_HINT,
 } from '@/lib/moduleExclusivity'
+import LoginLayoutAccess from './LoginLayoutAccess'
+import LoginDashboardAccess from './LoginDashboardAccess'
 
 const ORANGE = '#FC934C'
 const NAVY = '#14254A'
@@ -58,12 +60,17 @@ interface ModuleRow {
 const same = (a: number[], b: Set<number>) =>
   a.length === b.size && a.every(id => b.has(id))
 
-export default function LoginModuleAccess({ assignments, pendingUserIds }: {
+export default function LoginModuleAccess({ assignments, pendingUserIds, loginUsername }: {
   assignments: LoginAssignment[]
   /** The companies currently ticked in the form above, saved or not. Used only
       to warn: grants are written against login rows, and a company that has not
       been saved yet has no row to write them on. */
   pendingUserIds: number[]
+  /** The account's username, for the layout grant below — which is keyed on the
+      PERSON and so cannot use any of the per-company loginIds this panel works
+      in. Absent on an account being created, where there is nothing to grant
+      against yet. */
+  loginUsername?: string
 }) {
   const [modules, setModules] = useState<ModuleRow[]>([])
   const [saved,   setSaved]   = useState<Record<number, number[]>>({})
@@ -182,6 +189,23 @@ export default function LoginModuleAccess({ assignments, pendingUserIds }: {
       setSaving(false)
     }
   }
+
+  /* Whether the layout switch is offered at all: only with Reports ticked for
+     the company being looked at.
+
+     Reads the DRAFT, not what is saved, so ticking Reports reveals the switch
+     immediately rather than after Apply access — the admin is mid-decision, and
+     a control that appears one click later reads as one that appeared by
+     accident.
+
+     Scoped to the SELECTED company, which means the switch comes and goes as
+     the company picker moves while the grant behind it does not — the grant is
+     stored against the login. That is a real mismatch and it is handled by
+     saying so (see the multiCompany note in LoginLayoutAccess) rather than by
+     widening the test: a switch that stays visible on a company with no Reports
+     is the more confusing of the two, because the checklist directly above it
+     is then the only thing on screen saying otherwise. */
+  const reportsPicked = isReportsSelected([...picked], moduleNames)
 
   /* Companies ticked upstairs with no login row yet, and companies whose row is
      about to go. Both are states where this panel and the form above it would
@@ -362,6 +386,24 @@ export default function LoginModuleAccess({ assignments, pendingUserIds }: {
 
             {note && (
               <p className="text-[11px] text-gray-500 dark:text-white/50 leading-snug">{note}</p>
+            )}
+
+            {/* Tied to Reports because that is what the layout controls are for.
+                Untick Reports everywhere and the switch goes, but the grant it
+                set does NOT — this only decides whether the control is offered,
+                and revoking is a deliberate act, not a side effect of editing
+                a different checklist. */}
+            {reportsPicked && loginUsername && (
+              <>
+                {/* WHICH reports, then what may be done to them. In that order
+                    because it is the order of the questions: a grant that names
+                    no reports makes the arrangement of them moot, and an admin
+                    reading down the pane meets the narrower decision first. */}
+                <LoginDashboardAccess loginId={sel}
+                  clientName={targets.find(t => t.loginId === sel)?.clientName} />
+                <LoginLayoutAccess loginUsername={loginUsername}
+                  multiCompany={targets.length > 1} />
+              </>
             )}
           </>
         )}

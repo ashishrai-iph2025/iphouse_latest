@@ -1,23 +1,39 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import AdminPageHeader from './AdminPageHeader'
 import AdminModal from './AdminModal'
 import PaginationBar, { PER_PAGE } from './PaginationBar'
+import SearchableSelect from '@/components/ui/SearchableSelect'
+import {
+  DASHBOARD_CATEGORIES, NO_CATEGORY, categoryLabel, chipFor,
+} from '@/lib/dashboardCategories'
 
 export interface DashModule {
   moduleId:   number
   moduleName: string
   moduleIcon: string | null
+  /** VOD, Sports, War Room — or '' for a module nobody has filed yet.
+   *  Added by migration 006. What /admin/registrations narrows by when it
+   *  grants a login a subset of this catalogue, so it is not decoration here:
+   *  an uncategorised module can only be granted on its own. */
+  category:   string
   deleted:    number
 }
 
 const API = '/api/admin/dashboard-modules'
 
+/* The filter's stand-in for "no category at all".
+   It cannot be '' — SearchableSelect spends the empty string on its clear row,
+   which is "no filter", and the two are opposite questions: one asks for every
+   module, the other for the modules nobody has filed. */
+const UNFILED = '__unfiled__'
+
 export default function DashboardModulesClient({ initialModules }: { initialModules: DashModule[] }) {
   const [modules, setModules]   = useState<DashModule[]>(initialModules)
   const [page, setPage]         = useState(1)
   const [search, setSearch]     = useState('')
+  const [catFilter, setCatFilter] = useState('')
   const [showDeleted, setShowDeleted] = useState(false)
   const [busy, setBusy]         = useState(false)
   const [toast, setToast]       = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
@@ -25,7 +41,7 @@ export default function DashboardModulesClient({ initialModules }: { initialModu
   // Add / Edit modal
   const [modalOpen, setModalOpen] = useState(false)
   const [editId, setEditId]       = useState<number | null>(null)
-  const [form, setForm]           = useState({ moduleName: '', moduleIcon: '' })
+  const [form, setForm]           = useState({ moduleName: '', moduleIcon: '', category: NO_CATEGORY as string })
 
   // Delete confirm
   const [deleteMod, setDeleteMod] = useState<DashModule | null>(null)
@@ -48,21 +64,51 @@ export default function DashboardModulesClient({ initialModules }: { initialModu
   useEffect(() => { refresh() }, [])
 
   const q = search.toLowerCase()
-  const filtered = modules.filter(m =>
-    (showDeleted || Number(m.deleted) === 0) &&
-    (!q || m.moduleName.toLowerCase().includes(q) || (m.moduleIcon ?? '').toLowerCase().includes(q))
-  )
+  const filtered = modules.filter(m => {
+    if (!showDeleted && Number(m.deleted) !== 0) return false
+    if (catFilter) {
+      const cat = (m.category ?? '').trim()
+      if (catFilter === UNFILED ? cat !== '' : cat !== catFilter) return false
+    }
+    /* The category is searchable too. Typing "sports" is the fastest way to
+       reach that group, and a reader who has just met the column will try it
+       before finding the dropdown beside it. */
+    return !q
+      || m.moduleName.toLowerCase().includes(q)
+      || (m.moduleIcon ?? '').toLowerCase().includes(q)
+      || (m.category ?? '').toLowerCase().includes(q)
+  })
   const pageRows = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE)
+
+  /* Counts beside each category, from the same rows the table is drawn from
+     (minus the category filter itself, or every option but the chosen one
+     would read 0). A category with nothing in it is worth seeing: it is
+     usually a module that was never filed rather than a category nobody
+     wants. */
+  const catCounts = useMemo(() => {
+    const base = modules.filter(m => showDeleted || Number(m.deleted) === 0)
+    const counts: Record<string, number> = { [UNFILED]: 0 }
+    for (const c of DASHBOARD_CATEGORIES) counts[c] = 0
+    for (const m of base) {
+      const key = (m.category ?? '').trim() || UNFILED
+      if (key in counts) counts[key] += 1
+    }
+    return counts
+  }, [modules, showDeleted])
 
   function openAdd() {
     setEditId(null)
-    setForm({ moduleName: '', moduleIcon: '' })
+    setForm({ moduleName: '', moduleIcon: '', category: NO_CATEGORY })
     setModalOpen(true)
   }
 
   function openEdit(m: DashModule) {
     setEditId(m.moduleId)
-    setForm({ moduleName: m.moduleName, moduleIcon: m.moduleIcon ?? '' })
+    setForm({
+      moduleName: m.moduleName,
+      moduleIcon: m.moduleIcon ?? '',
+      category:   (m.category ?? '').trim(),
+    })
     setModalOpen(true)
   }
 
@@ -76,8 +122,8 @@ export default function DashboardModulesClient({ initialModules }: { initialModu
         headers:     { 'Content-Type': 'application/json' },
         credentials: 'include',
         body:        JSON.stringify(editId
-          ? { moduleId: editId, moduleName: form.moduleName.trim(), moduleIcon: form.moduleIcon.trim() }
-          : { moduleName: form.moduleName.trim(), moduleIcon: form.moduleIcon.trim() }),
+          ? { moduleId: editId, moduleName: form.moduleName.trim(), moduleIcon: form.moduleIcon.trim(), category: form.category }
+          : { moduleName: form.moduleName.trim(), moduleIcon: form.moduleIcon.trim(), category: form.category }),
       })
       const data = await res.json()
       if (data.success) {
@@ -162,12 +208,25 @@ export default function DashboardModulesClient({ initialModules }: { initialModu
               <input type="checkbox" checked={showDeleted} onChange={e => { setShowDeleted(e.target.checked); setPage(1) }} />
               Show inactive
             </label>
+            {/* The house dropdown rather than a native <select>, whose option
+                list the operating system draws in its own colours. Compact, to
+                sit level with the search box beside it. */}
+            <div className="w-44">
+              <SearchableSelect compact
+                options={[
+                  ...DASHBOARD_CATEGORIES.map(c => ({ key: c, label: c, count: catCounts[c] })),
+                  { key: UNFILED, label: 'Uncategorised', count: catCounts[UNFILED] },
+                ]}
+                value={catFilter}
+                onChange={v => { setCatFilter(v); setPage(1) }}
+                placeholder="All categories" emptyLabel="– All categories –" />
+            </div>
             <input
               autoComplete="off"
               value={search}
               onChange={e => { setSearch(e.target.value); setPage(1) }}
               placeholder="Search modules…"
-              className="border border-gray-200 rounded-xl px-3 py-1.5 text-xs w-56 focus:outline-none focus:ring-2 focus:ring-blue-300"
+              className="h-8 border border-gray-200 rounded-[0.625rem] px-3 text-xs w-56 transition-colors focus:outline-none focus:border-[#FC934C] focus:ring-2 focus:ring-[#FC934C]/20"
             />
           </div>
         </div>
@@ -178,6 +237,10 @@ export default function DashboardModulesClient({ initialModules }: { initialModu
               <tr style={{ background: '#14254A' }}>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-white/80 uppercase tracking-wide whitespace-nowrap">ID</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-white/80 uppercase tracking-wide whitespace-nowrap">Module Name</th>
+                {/* Next to the name, not out past the icon: the pair is one
+                    fact — WHICH report this module is — and the category is the
+                    half that tells two similarly named rows apart. */}
+                <th className="text-left px-4 py-3 text-xs font-semibold text-white/80 uppercase tracking-wide whitespace-nowrap">Category</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-white/80 uppercase tracking-wide whitespace-nowrap">Icon</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-white/80 uppercase tracking-wide whitespace-nowrap">Status</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-white/80 uppercase tracking-wide whitespace-nowrap">Actions</th>
@@ -185,7 +248,7 @@ export default function DashboardModulesClient({ initialModules }: { initialModu
             </thead>
             <tbody>
               {pageRows.length === 0 ? (
-                <tr><td colSpan={5} className="text-center py-10 text-gray-400 text-sm">No modules found.</td></tr>
+                <tr><td colSpan={6} className="text-center py-10 text-gray-400 text-sm">No modules found.</td></tr>
               ) : pageRows.map(m => (
                 <tr key={m.moduleId} className="border-b border-gray-50 hover:bg-gray-50/60 transition-colors">
                   <td className="px-4 py-3 text-xs text-gray-400 font-mono">{m.moduleId}</td>
@@ -197,6 +260,16 @@ export default function DashboardModulesClient({ initialModules }: { initialModu
                       </div>
                       <span className="font-medium text-gray-800 text-sm">{m.moduleName}</span>
                     </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    {/* Uncategorised is SAID, not left blank. A blank cell in a
+                        new column reads as a rendering fault; "Uncategorised"
+                        reads as the real, fixable state it is — and it matters,
+                        because an uncategorised module can only ever be granted
+                        on its own name. */}
+                    <span className={`inline-flex items-center text-[11px] font-semibold px-2 py-1 rounded-lg whitespace-nowrap ${chipFor(m.category)}`}>
+                      {categoryLabel(m.category)}
+                    </span>
                   </td>
                   <td className="px-4 py-3">
                     {m.moduleIcon
@@ -251,6 +324,19 @@ export default function DashboardModulesClient({ initialModules }: { initialModu
                 <input autoComplete="off" value={form.moduleName} onChange={e => setForm(f => ({ ...f, moduleName: e.target.value }))} required
                   placeholder="e.g. Telegram"
                   className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">Category</label>
+                <SearchableSelect
+                  options={DASHBOARD_CATEGORIES.map(c => ({ key: c, label: c }))}
+                  value={form.category}
+                  onChange={v => setForm(f => ({ ...f, category: v }))}
+                  placeholder="Uncategorised" emptyLabel="— Uncategorised —" />
+                <p className="text-xs text-gray-400 mt-1">
+                  Files this module under a report group. /admin/registrations grants report
+                  access a category at a time, so an uncategorised module can only be granted
+                  on its own.
+                </p>
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1.5">Module Icon</label>
