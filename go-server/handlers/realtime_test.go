@@ -188,3 +188,122 @@ func TestRealtimePayloadKeepsACountedZeroAndOmitsAnAbsentOne(t *testing.T) {
 		t.Errorf("open-web lost the words that say what its removals are: %s", js)
 	}
 }
+
+/*
+── The sports card counts a SEASON, not the slicer's dates ──────────────────
+
+The card used to be clamped INTO the report's date range, on the reasoning that
+a live figure above dated tiles must cover the same days. It does not work: the
+two read different layers of the warehouse — the tiles the curated
+dashboards.* tables, the card the raw mediascan.* ones, which de-duplicate URLs
+the tiles count once per day — so matching the dates never made the figures
+comparable and only made the card re-count on every move of the slicer.
+
+So the window is the client's configured period, whole. These pin that, because
+the symptom of losing it is not an error: it is a smaller number, on the card a
+reader trusts most precisely because it says "live".
+*/
+func TestSportsPeriodScopeIsTheWholePeriod(t *testing.T) {
+	from, to, ok := sportsPeriodScope(aPeriod())
+	if !ok {
+		t.Fatal("an enabled period gave no window")
+	}
+	if from != perStart || to != perEnd {
+		t.Errorf("want the whole period %s..%s, got %s..%s", perStart, perEnd, from, to)
+	}
+}
+
+// A period switched off is how a client is exempted, and the caller must then
+// fall back to the request's own window rather than to a window of zeroes —
+// which BETWEEN would answer with an empty card that looks like a quiet client.
+func TestSportsPeriodScopeDeclinesWhenNothingIsConfigured(t *testing.T) {
+	for _, p := range []sportsPeriodConfig{
+		{}, // nothing saved at all
+		{Enabled: false, Start: perStart, End: perEnd}, // switched off
+		{Enabled: true, Start: "", End: perEnd},        // half a window
+	} {
+		if _, _, ok := sportsPeriodScope(p); ok {
+			t.Errorf("%+v was treated as a usable period", p)
+		}
+	}
+}
+
+/*
+Every other view still reads the window it was given.
+
+The change above is the sports card's alone. War Room passes the range its own
+report was generated for, and folding that into the period logic would scope one
+report by another's season.
+*/
+func TestNonSportsViewKeepsTheRequestedWindow(t *testing.T) {
+	r := httptest.NewRequest("GET", "/api/realtime/war-room?from=2025-06-01&to=2025-06-07", nil)
+	sc := scopeFromRequest(r, "war-room", "any-client")
+
+	if sc.since != "2025-06-01 00:00:00" {
+		t.Errorf("start moved: %q", sc.since)
+	}
+	// Inclusive of the final day: this service's bound is, unlike MarkScan's.
+	if sc.until != "2025-06-07 23:59:59" {
+		t.Errorf("end moved or lost its day: %q", sc.until)
+	}
+	if sc.period {
+		t.Error("a war-room count was labelled as period-scoped")
+	}
+}
+
+/*
+What goes ON THE WIRE is bare calendar days, whatever the caption shows.
+
+This is a bug that shipped, and it was invisible: every platform's count was a
+little wrong in an unremarkable direction, with no error anywhere. reports_api
+reads a bare date as a day on the REPORT's calendar (IST) and a value carrying a
+time as a literal UTC instant — so "2026-08-01 00:00:00" asked for a window
+5h30m late at both ends, dropping the first morning and taking the one after the
+last day. Against the reference query for DAZN over August 2026: Telegram 525
+where the report said 509, Facebook 258 against 238, YouTube 461 against 471.
+Small, in both directions, and unreadable as anything but noise.
+
+The timestamps still have to exist — dayWords in RealtimeCard.tsx parses them to
+write "1 Aug 2026" — so the two forms are pinned together here: the caption keeps
+its timestamps and the request carries days.
+*/
+func TestTheAPIWindowIsBareCalendarDays(t *testing.T) {
+	r := httptest.NewRequest("GET", "/api/realtime/war-room?from=2025-06-01&to=2025-06-07", nil)
+	sc := scopeFromRequest(r, "war-room", "any-client")
+
+	since, until := sc.apiWindow()
+	if since != "2025-06-01" {
+		t.Errorf("since went on the wire as %q — a value with a time on it is read "+
+			"as UTC, not as a day on the report's calendar", since)
+	}
+	if until != "2025-06-07" {
+		t.Errorf("until went on the wire as %q, want the bare day", until)
+	}
+
+	// And the display form is untouched, or the caption stops saying "1 Aug 2026".
+	if sc.since != "2025-06-01 00:00:00" || sc.until != "2025-06-07 23:59:59" {
+		t.Errorf("the caption's timestamps changed: %q → %q — dayWords parses these",
+			sc.since, sc.until)
+	}
+
+	/* An absent `until` must stay absent. It is a real case — scopeFromRequest
+	   leaves it empty when the caller names no end — and a blank turned into a
+	   date would silently bound an unbounded count. */
+	var open realtimeScope
+	if s, u := open.apiWindow(); s != "" || u != "" {
+		t.Errorf("an empty scope produced %q/%q", s, u)
+	}
+}
+
+// A caller naming no window at all gets a BOUNDED one. All-time is what made
+// the service answer 504, so the absence of dates must never reintroduce it.
+func TestAMissingWindowFallsBackToABoundedOne(t *testing.T) {
+	r := httptest.NewRequest("GET", "/api/realtime/war-room", nil)
+	sc := scopeFromRequest(r, "war-room", "any-client")
+	if sc.since == "" {
+		t.Fatal("no lower bound at all — this is the all-time query that times out")
+	}
+	if sc.period {
+		t.Error("a fallback window was labelled as period-scoped")
+	}
+}

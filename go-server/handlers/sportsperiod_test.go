@@ -7,8 +7,12 @@ The period is only worth configuring if the query obeys it.
 
 The calendar is the half a reader sees; these pin the half that makes it true.
 Everything below goes through clampToSportsPeriod directly, because that is the
-one function every sports read passes its window through — the report, the
-slicer values and the live card alike.
+one function a sports READ passes its window through — the report and the slicer
+values behind it.
+
+The live card is no longer among them: it counts the whole period rather than a
+window clamped into it, so it asks sportsPeriodScope instead. See
+realtime_test.go.
 */
 
 const (

@@ -157,6 +157,12 @@ var filterDescriptions = map[string]string{
 	"storeType":        "Narrow to official listings or to third-party ones.",
 	"contentRating":    "Narrow to one content rating.",
 	"removalStatus":    "Narrow to URLs at one stage of the removal process.",
+	/* The one slicer that picks a SIDE rather than a value, so its note has a
+	   second job: the report's own panels call these two sides Linking and
+	   Host, while the warehouse — and this dropdown — call them Infringing and
+	   Source. A reader who is not told they are the same two things reads the
+	   control as a third dimension. */
+	"sourceType": "Read one side of the open web instead of both. Infringing is the linking pages (the Linking panels); Source is the hosts behind them (the Host panels). Left unset, every figure covers both added together.",
 }
 
 /*

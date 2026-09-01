@@ -1506,6 +1506,25 @@ func ReportPlatformDelete(w http.ResponseWriter, r *http.Request) {
 // the page draws a trend for each. Tables with no role merge as before.
 func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	specs, skipped := specsForPlatform(p)
+
+	/* How many sides this platform HAS, counted before the slicer takes one
+	   away.
+
+	   The layout is built from the same unfiltered specs — see rolesForPlatform —
+	   so it draws a trend card per side whatever the reader has selected. The
+	   per-source figures at the bottom of this function therefore have to be
+	   emitted on the same test: on what the PLATFORM offers, not on how many
+	   sides survived the filter. Keyed off the survivors instead, picking one
+	   side left the selected card with nothing in it and the page said "No host
+	   data for this period" over a table holding 27,115 rows. */
+	platformRoles := rolesIn(specs)
+
+	/* Which SIDE of the open web, where the reader has picked one. Applied
+	   HERE, before anything below has run, because this slicer removes a whole
+	   table rather than narrowing what one returns: every KPI, trend and
+	   breakdown under it is then built from the remaining side alone, and the
+	   merge that adds the two together has nothing to add. See sourcetype.go. */
+	specs = specsForSourceType(specs, q)
 	if len(specs) == 0 {
 		return map[string]any{
 			"ok": false, "available": true, "type": p.Key, "label": p.Label,
@@ -1885,7 +1904,14 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 		}
 		sources = append(sources, src)
 	}
-	if len(sources) > 1 {
+	/* Emitted when the PLATFORM has more than one side, not when more than one
+	   survived the slicer — see platformRoles above.
+
+	   The distinction did not exist before the Source Type filter: a report with
+	   one role was a single-role platform, whose layout draws one merged trend
+	   and wants none of this. Now a two-sided platform can legitimately return
+	   one side, and its layout still has both cards to fill. */
+	if len(platformRoles) > 1 {
 		merged["sources"] = sources
 		merged["dailyBySource"] = dailyBySource
 	}

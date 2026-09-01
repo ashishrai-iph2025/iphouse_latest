@@ -139,59 +139,129 @@ type realtimeResponse struct {
 /*
 ── How far back the count reaches ────────────────────────────────────────────
 
-	The window the REPORT beside it is showing, and no further.
-
 	It used to ask for everything — an absolute `since` before any row — because
 	"realtime" was taken to mean "the live total". Right idea, wrong query:
 	against production that is a full count per platform over the whole history,
 	and the service answers 504. No timeout on this side fixes a gateway that
 	gave up; the request itself has to be one that can finish.
 
-	Scoping it to the report's own dates makes it affordable AND comparable. The
-	card sits above the KPI tiles, and a figure covering all of history above
-	tiles covering thirty days invites exactly the comparison it cannot survive
-	— the same reasoning that put the War Room's card on its report's window.
+	So the count is always bounded. WHAT bounds it differs by view:
 
-	Where the caller names no window the fall-back is a bounded one, never
-	all-time: a default that cannot complete is not a default.
+	· SPORTS reads the configured period for this client, whole — see
+	  sportsPeriodScope. Not the report's date range. The card answers "how much
+	  is out there this season", which the date slicer is not a question about,
+	  and a season is already a window a count can finish inside.
+
+	· WAR ROOM reads the window the caller names, which is its report's own
+	  range, falling back to a bounded default rather than to all-time: a
+	  default that cannot complete is not a default.
 */
 
-// Used when the caller names no window. Matches the reports page's own default
-// range, so the card and the tiles start out saying the same thing.
+// Used when the caller names no window and no period governs it — the War Room,
+// and a sports client whose period is switched off. Thirty days because that is
+// the reports page's own default range, so a card falling back this far and the
+// tiles under it start out saying the same thing.
 const realtimeFallbackDays = 30
 
-// realtimeScope is the date range a count covers.
-type realtimeScope struct{ since, until string }
+// realtimeScope is the date range a count covers, and where that range came
+// from. `period` is true where it is the client's configured sports season
+// rather than anything the caller asked for — the card captions itself from it,
+// so a figure covering a season is not read as covering the slicer's dates.
+//
+// `since` and `until` are warehouse timestamps because that is what the card
+// DISPLAYS — dayWords in RealtimeCard.tsx parses them to write "1 Aug 2026".
+// What reports_api receives is not these: see apiWindow.
+type realtimeScope struct {
+	since, until string
+	period       bool
+}
 
 /*
-scopeFromRequest reads the report's window off the query string.
+apiWindow is the window as reports_api must be ASKED for it: bare calendar days.
 
-`from` and `to` are the report page's own filter values (YYYY-MM-DD). `to` is
-passed through to `until` unchanged: unlike MarkScan's, this service's bound is
-inclusive of the day — verified against it — so there is no final day to lose.
+WHY THIS IS NOT `since`/`until` AS THEY STAND.
+
+The capture tables reports_api counts are UTC. The report's calendar — every
+figure in dashboards.* and every number in the panels beside this card — is IST.
+reports_api reconciles the two by reading a BARE DATE as a calendar day in the
+report's zone, and a value carrying a TIME as a literal instant, which is the
+only way both kinds of caller can be served.
+
+Sending "2026-08-01 00:00:00" therefore asks for UTC midnight when the report
+means IST midnight, and the window lands 5h30m late at both ends: it drops
+00:00–05:30 IST on the first day and picks up 00:00–05:30 IST on the day after
+the last. Measured against the reference query for DAZN over August 2026 that was
+Telegram 525 against 509, Facebook 258 against 238, YouTube 461 against 471 —
+small, in both directions, and impossible to read as anything but noise. As bare
+days every platform matches the report exactly.
+
+So the timestamps stay for the caption and the days go on the wire. The two are
+built from one value and cannot drift.
+
+Empty in, empty out: `until` is legitimately absent — see scopeFromRequest — and
+a blank must not become a date.
+*/
+func (sc realtimeScope) apiWindow() (since, until string) {
+	return dateOnly(sc.since), dateOnly(sc.until)
+}
+
+/*
+sportsPeriodScope is the whole of a configured period, as a window.
+
+Takes the period rather than looking it up, so the decision it encodes can be
+tested without a database — the same split clampToSportsPeriod is on, and for
+the same reason. Which period a client gets is resolveSportsPeriod's answer and
+is stated only there: the client's own row if it has one, the default if not.
+
+`ok` is false where no period is usable at all, and the caller then falls back to
+the request's window like any other view.
+
+Deliberately NOT the report's date range. The card and the tiles below it were
+reading the same dates and still disagreeing, because they read different layers
+of the warehouse — the tiles the curated dashboards.* tables, the card the raw
+mediascan.* ones, which de-duplicate URLs the tiles count per day. Matching the
+dates never made those two figures comparable and only made the card re-count
+every time the slicer moved. So it answers a question the date slicer does not
+ask: how much is out there for this client's season, all of it.
+*/
+func sportsPeriodScope(p sportsPeriodConfig) (from, to string, ok bool) {
+	if !p.active() {
+		return "", "", false
+	}
+	return p.Start, p.End, true
+}
+
+/*
+scopeFromRequest decides the window one count covers.
+
+Sports takes the configured period and ignores `from`/`to` entirely — see
+sportsPeriodScope. Every other view reads them off the query string, where they
+are the report page's own filter values (YYYY-MM-DD).
+
+`to` is passed through to `until` unchanged: unlike MarkScan's, this service's
+bound is inclusive of the day — verified against it — so there is no final day
+to lose.
 */
 func scopeFromRequest(r *http.Request, view, clientID string) realtimeScope {
 	from := strings.TrimSpace(r.URL.Query().Get("from"))
 	to := strings.TrimSpace(r.URL.Query().Get("to"))
 
+	/* The season, whole, whatever the page asked for. A client with a period of
+	   its own gets that one; everyone else gets the default. Where neither is
+	   enabled there is no period to read and the request's own window stands —
+	   the same fall-back every other view uses. */
+	fromPeriod := false
+	if view == "sports" {
+		if pf, pt, ok := sportsPeriodScope(resolveSportsPeriod(clientID)); ok {
+			from, to, fromPeriod = pf, pt, true
+		}
+	}
+
 	if from == "" {
 		from = time.Now().UTC().AddDate(0, 0, -realtimeFallbackDays+1).Format("2006-01-02")
 	}
 
-	/* The sports card sits above the sports report and must count the same
-	   window it does. Without this the card was the one number on the page not
-	   bound by the configured period — and being the LIVE number, it is the one
-	   a reader trusts when the two disagree. See sportsperiod.go. */
-	if view == "sports" {
-		// Resolved for THIS client, so a client with a window of its own gets the
-		// same one above the report as inside it.
-		if period := resolveSportsPeriod(clientID); period.active() {
-			win := map[string]string{"from": from, "to": to}
-			clampToSportsPeriod(win, period)
-			from, to = win["from"], win["to"]
-		}
-	}
-	sc := realtimeScope{since: from + " 00:00:00"}
+	sc := realtimeScope{since: from + " 00:00:00", period: fromPeriod}
 	if to != "" {
 		sc.until = to + " 23:59:59"
 	}
@@ -309,6 +379,10 @@ func Realtime(w http.ResponseWriter, r *http.Request) {
 		"assets": len(assetIDs),
 		// Echoed so the card describes what it is showing rather than guessing.
 		"startDate": scope.since, "endDate": scope.until,
+		/* And WHERE that window came from. "period" means the client's
+		   configured season — the card says so, because "in this range" over a
+		   figure the range slicer cannot move is a caption that lies. */
+		"scope": scopeName(scope),
 		// When the count was taken, so the card can say how old it is rather
 		// than implying the moment it is read.
 		"asOf": time.Now().UTC().Format(time.RFC3339),
@@ -322,6 +396,14 @@ func Realtime(w http.ResponseWriter, r *http.Request) {
 		out["totalRemoved"] = *body.TotalRemoved
 	}
 	OK(w, out)
+}
+
+// scopeName is what the payload calls the window, for the card's caption.
+func scopeName(sc realtimeScope) string {
+	if sc.period {
+		return "period"
+	}
+	return "request"
 }
 
 func sortRealtime(ps []RealtimePlatform) {
@@ -431,11 +513,16 @@ func realtimeCount(ctx context.Context, view, clientID string, assetIDs []string
 }
 
 func realtimeFetch(ctx context.Context, view, clientID, assetIDs string, scope realtimeScope) (realtimeResponse, error) {
+	/* Bare calendar days, NOT the scope's display timestamps — see apiWindow.
+	   This is the difference between a count that agrees with the panels beside
+	   the card and one that is a few percent out in both directions. */
+	since, until := scope.apiWindow()
+
 	q := url.Values{}
 	q.Set("clientId", clientID)
-	q.Set("since", scope.since)
-	if scope.until != "" {
-		q.Set("until", scope.until)
+	q.Set("since", since)
+	if until != "" {
+		q.Set("until", until)
 	}
 	if assetIDs != "" {
 		q.Set("assetId", assetIDs)

@@ -35,6 +35,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import InfoDot from '@/components/shared/InfoDot'
+
 export interface RealtimePlatform {
   key: string
   label: string
@@ -65,10 +67,131 @@ interface Payload {
   /** The window counted, echoed back. Absent or empty means everything. */
   startDate?: string
   endDate?: string
+  /** Where that window came from. 'period' is the client's configured sports
+      season, which no slicer on the page can move — the caption says so rather
+      than calling it "this range". Absent on sources that do not report it. */
+  scope?: 'period' | 'request' | string
   /** How many platforms failed on this reading. The rest are still shown. */
   partial?: number
   asOf: string
   error?: string
+}
+
+/*
+What the caption calls the window it counted.
+
+Three answers, and they are not interchangeable. A SEASON is the client's
+configured sports period — fixed, and unmoved by the date slicer beside it, so
+calling it "this range" would invite a reader to change the range and wonder why
+the number did not follow. A RANGE is a window the caller asked for. And no
+window at all is all time, which is only true when the payload carries neither
+end.
+*/
+function rangeWords(p: { startDate?: string; endDate?: string; scope?: string }) {
+  if (p.scope === 'period') return 'this season'
+  return p.startDate || p.endDate ? 'in this range' : 'all time'
+}
+
+/*
+── What the card is actually showing, in words ──────────────────────────────
+
+	The figure needs a note more than most, because it sits directly above KPI
+	tiles that count the same subject and DO NOT agree with it — three separate
+	reasons, none of them visible on the card:
+
+	  · the window is the configured season, which the date slicer cannot move
+	  · the count is de-duplicated per URL; the tiles count rows
+	  · it reads the live discovery tables; the tiles read the curated ones,
+	    which split the open web into linking pages and the hosts behind them
+
+	Left unexplained, a reader compares the two, finds them different, and
+	distrusts whichever one they were not expecting. So the note is composed
+	from the payload rather than written as fixed copy — the dates, the asset
+	scope and the removal wording are the reading's own, so it cannot describe a
+	window the card is not showing.
+*/
+
+// "2026-08-01 00:00:00" → "1 Aug 2026". The server sends the window as a
+// warehouse timestamp; nobody reads one of those as a date.
+function dayWords(v?: string) {
+  if (!v) return ''
+  const d = new Date(v.replace(' ', 'T') + 'Z')
+  if (Number.isNaN(d.getTime())) return v.slice(0, 10)
+  /* en-GB rather than the reader's own locale, and UTC rather than their own
+     zone: this must read the way the date-range chip beside it does — "1 Aug
+     2026" — and it names a warehouse day, which does not shift with whoever is
+     looking at it. */
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
+}
+
+// The refresh cadence in the unit it is actually in. Rounding 30s to minutes
+// gave "every 1 minutes" — the wrong figure and the wrong grammar in one line.
+function everyWords(ms: number) {
+  if (ms < 60_000) return `every ${Math.round(ms / 1000)} seconds`
+  const m = Math.round(ms / 60_000)
+  return m === 1 ? 'every minute' : `every ${m} minutes`
+}
+
+function scopeNote(p: Payload, refreshMs: number): string {
+  const paras: string[] = []
+  const span = p.startDate && p.endDate
+    ? `${dayWords(p.startDate)} and ${dayWords(p.endDate)}`
+    : ''
+
+  /* WHAT and WHEN. The sports card names its season and says outright that the
+     date slicer does not reach it — a control that appears to act on a figure
+     it cannot touch is worth one sentence to close off. */
+  if (p.scope === 'period') {
+    paras.push(
+      `Everything found for this client between ${span} — the reporting season set in ` +
+      `Report Configuration → Sports period. The date range on the right does not move this ` +
+      `figure; the Asset slicer does.`)
+  } else if (span) {
+    paras.push(`Everything found for this client between ${span} — the window the report below is showing.`)
+  } else {
+    paras.push('Everything found for this client, with no date limit.')
+  }
+
+  // The asset scope, only when it is narrowed: "every asset" is the resting
+  // state and saying so on every reading is noise.
+  if (p.assets && p.assets > 0) {
+    paras.push(`Narrowed to ${p.assets} asset${p.assets === 1 ? '' : 's'}.`)
+  }
+
+  /* WHY IT WILL NOT MATCH THE TILES. The single most common question about this
+     card, and the answer is not guessable from anything on screen. Warehouse
+     source only — the War Room's card sits above no such tiles. */
+  if (p.source !== 'markscan') {
+    paras.push(
+      'Counted live and de-duplicated per URL, so a page found on three days counts once. ' +
+      'The report below counts rows in the prepared tables and reports the open web from both ' +
+      'sides — the linking pages and the hosts behind them — so the two figures are not ' +
+      'expected to tie out.')
+  }
+
+  /* WHAT "REMOVED" MEANS, in the reading's own words. Two different claims
+     travel under one label — an approved delisting notice on the open web, an
+     unreachable URL everywhere else — and a card stacking them in one bar
+     should say which it holds. Read off the platforms present, so a reading
+     carrying only one of the two does not describe both. */
+  const bases = Array.from(new Set(
+    p.platforms.map(x => x.removalBasis).filter((b): b is string => !!b)))
+  if (bases.length === 1) {
+    paras.push(`"Removed" here means ${bases[0]}.`)
+  } else if (bases.length > 1) {
+    paras.push(`"Removed" is not one thing: ${bases.join(' on the open web, and ')} elsewhere.`)
+  }
+
+  // A partial reading must say so wherever it is described, not only on the
+  // platform that failed: the headline total is a floor when this is set.
+  if (p.partial) {
+    paras.push(
+      `${p.partial} platform${p.partial === 1 ? '' : 's'} could not be counted on this reading, ` +
+      'so the totals are a floor rather than an exact figure.')
+  }
+
+  paras.push(`Re-read ${everyWords(refreshMs)}; the stamp above says how old this reading is.`)
+  return paras.join('\n\n')
 }
 
 /*
@@ -78,12 +201,13 @@ How often the card re-reads, per source.
 the stored rows, so a quiet half-minute costs one small request per platform and
 nothing is re-paged.
 
-'warehouse' is 5 minutes. That one is an ALL-TIME count per platform — 3.1s
-against a local warehouse and long enough against production to have blown a
-30-second deadline. A number covering all of history does not move meaningfully
-in a minute, and polling it faster than it can be computed just queues scans
-behind each other. The server also shares one answer across tabs for two
-minutes, so the real cost is well under one query per five.
+'warehouse' is 5 minutes. That one is a count per platform over a whole sports
+season — measured at 14.5s against production, against 1.4s for a week — and it
+once blew a 30-second deadline as an all-time query. A number covering months
+does not move meaningfully in a minute, and polling it faster than it can be
+computed just queues scans behind each other. The server also shares one answer
+across tabs for two minutes, and the window no longer moves with the date
+slicer, so the real cost is well under one query per five.
 
 Either way the "x ago" stamp says how fresh the number is, so a slower cadence
 is visible rather than implied.
@@ -404,7 +528,14 @@ export default function RealtimeCard({
         <div className="px-5 py-4 lg:w-64 lg:flex-shrink-0 lg:border-r border-b lg:border-b-0
           border-gray-100 dark:border-white/10">
           <div className="flex items-start justify-between gap-2">
-            <h3 className="font-bold text-[#14254A] dark:text-white leading-tight">Realtime</h3>
+            {/* The heading and its note together. "Realtime" names the card but
+                says nothing about WHAT was counted or over what window, and the
+                three ways this figure differs from the tiles below it are not
+                guessable from anything on screen — see scopeNote. */}
+            <h3 className="font-bold text-[#14254A] dark:text-white leading-tight flex items-center gap-1.5">
+              Realtime
+              <InfoDot text={scopeNote(shown, REFRESH_MS[source] ?? 60_000)} />
+            </h3>
             <span className="flex items-center gap-1.5 flex-shrink-0">
               <RelativeTime iso={shown.asOf} stale={stale} />
               {onTogglePin && (
@@ -451,7 +582,7 @@ export default function RealtimeCard({
             {/* "identified" where a removed figure sits under it, because that
                 is the pair the report below the card names its own columns —
                 identified and removed. On its own it is just what was found. */}
-            {hasRemovals ? 'identified' : 'found'} · {shown.startDate || shown.endDate ? 'in this range' : 'all time'}
+            {hasRemovals ? 'identified' : 'found'} · {rangeWords(shown)}
             {!!shown.assets && shown.assets > 0 && (
               <> · {shown.assets} asset{shown.assets === 1 ? '' : 's'}</>
             )}

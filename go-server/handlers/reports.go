@@ -244,7 +244,16 @@ func ReportsOptions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		specs, _ := specsForPlatform(p)
-		OK(w, mergeSpecOptions(specs, clientID, scope))
+		/* The source-type slicer offers its own two values — there is no column
+		   behind it to list them from — and it also SCOPES the rest, exactly as
+		   every other active slicer does: with the hosting side chosen, the
+		   domain dropdown must list host domains and not the linking domains
+		   that side of the report does not contain. See sourcetype.go. */
+		opts := mergeSpecOptions(specsForSourceType(specs, scope), clientID, scope)
+		if platformOffersSourceType(specs) {
+			opts[sourceTypeParam] = sourceTypeOptions()
+		}
+		OK(w, opts)
 		return
 	}
 

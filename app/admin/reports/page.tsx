@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 // Reports — the in-house replacement for the embedded PowerBI report files.
 //
@@ -21,6 +21,7 @@ import {
   LineChart, Line, LabelList, XAxis, YAxis, CartesianGrid, Tooltip,
 } from 'recharts'
 import { createPortal } from 'react-dom'
+import InfoDot from '@/components/shared/InfoDot'
 import { Link } from 'react-router-dom'
 import SearchableSelect from '@/components/ui/SearchableSelect'
 import DateRangePicker from '@/components/ui/DateRangePicker'
@@ -354,7 +355,8 @@ itself rather than on days that predate its own data.
 const DEFAULT_DAYS = 7
 
 function periodDefaultRange(period: { start: string; end: string }): { from: string; to: string } {
-  const to = period.end < today ? period.end : today
+  const now = today()
+  const to = period.end < now ? period.end : now
   const back = new Date(`${to}T00:00:00Z`)
   back.setUTCDate(back.getUTCDate() - (DEFAULT_DAYS - 1))
   const from = back.toISOString().slice(0, 10)
@@ -388,6 +390,11 @@ const FILTER_LABELS: Record<string, string> = {
   // The provider a DMCA notice was sent to — the party that answers for the
   // site, which is not the site itself.
   hspName: 'Hosting Provider',
+  /* Which SIDE of the open web the report reads — the infringing links, or the
+     hosts behind them. The only slicer here that picks a TABLE rather than a
+     value in one, which is why the server offers its two options itself rather
+     than listing them from a column. See go-server/handlers/sourcetype.go. */
+  sourceType: 'Source Type',
 }
 
 /** Display labels for the extra KPI keys a section may return. */
@@ -562,17 +569,32 @@ const orderRows = (key: string, rows: any[]) => {
 /** Filters are open-ended: each section declares its own set. */
 type Filters = Record<string, string>
 
-const today = new Date().toISOString().slice(0, 10)
+/* A calendar day in the READER'S timezone, which is the one the date picker
+   draws and the one the reader means by "today".
+
+   toISOString() answers in UTC. East of Greenwich that is still yesterday for
+   the first hours of every day — at half past one in the morning in India it
+   returns the previous date — and this value is the `max` handed to the date
+   range picker, so the day the reader is actually in was greyed out until the
+   offset had been slept off.
+
+   A function rather than a module constant for the other half of the same bug:
+   a constant is evaluated once when the module is imported, so a tab left open
+   across midnight goes on insisting it is yesterday for the whole next day. */
+const ymdLocal = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+const today = () => ymdLocal(new Date())
 
 /* "Last N days" is inclusive of today, so 30 days is today plus the 29 before
    it — the same rule DateRangePicker's quick ranges use. The default is 30 days:
    a year of warehouse rows is a slow scan and an unreadable trend axis. */
-const rangeFrom = (days: number) =>
-  new Date(Date.now() - (days - 1) * 86400e3).toISOString().slice(0, 10)
+const rangeFrom = (days: number) => ymdLocal(new Date(Date.now() - (days - 1) * 86400e3))
 
 // Only the slicers every section shares. Section-specific ones are added as
-// they are set and dropped when the section changes.
-const EMPTY: Filters = { clientId: '', from: rangeFrom(30), to: today }
+// they are set and dropped when the section changes. Built per mount rather
+// than once at import, for the reason given on `today`.
+const emptyFilters = (): Filters => ({ clientId: '', from: rangeFrom(30), to: today() })
 
 /* ── Chart chrome ─────────────────────────────────────────────────────────── */
 
@@ -861,109 +883,6 @@ function VizPicker({ options, value, fallback, saved, onPick, onSetDefault }: {
               )}
             </div>
           )}
-        </div>,
-        document.body,
-      )}
-    </>
-  )
-}
-
-/**
- * The ⓘ an admin's description sits behind — written per panel in Report
- * Configuration → Page Layout. No text at all renders nothing, so a card nobody
- * annotated looks exactly as it always did.
- *
- * HOVERED, and rendered rather than left to the browser's own `title`: a native
- * tooltip waits about a second, wraps a paragraph into one long line, and cannot
- * be styled to match the card it belongs to. This opens at once and reads as
- * part of the page.
- *
- * It stays open while the pointer is over the BUBBLE too, with a short grace
- * period crossing the gap between the two — the notes run to a couple of lines,
- * and one that vanishes as you move to read it is a note you cannot read. Focus
- * opens it as well, which is what gives it to the keyboard and, since a tap
- * focuses, to touch.
- *
- * Portalled for one reason: both the card and the KPI tile are `overflow-hidden`,
- * so a bubble positioned inside either is clipped at the card edge.
- */
-function InfoDot({ text }: { text?: string }) {
-  const [open, setOpen] = useState(false)
-  const [rect, setRect] = useState<DOMRect | null>(null)
-  const dotRef = useRef<HTMLSpanElement>(null)
-  const timer = useRef<number | null>(null)
-
-  const cancelClose = () => {
-    if (timer.current !== null) { window.clearTimeout(timer.current); timer.current = null }
-  }
-  /* Measured as it opens rather than in an effect afterwards, so the bubble
-     never paints one frame at the previous icon's position. */
-  const show = () => {
-    cancelClose()
-    setRect(dotRef.current?.getBoundingClientRect() ?? null)
-    setOpen(true)
-  }
-  const hide = () => {
-    cancelClose()
-    timer.current = window.setTimeout(() => setOpen(false), 140)
-  }
-
-  // A pending close must not fire into an unmounted component.
-  useEffect(() => cancelClose, [])
-
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
-    /* The bubble is pinned to where the icon was, so anything that moves the
-       icon leaves it stranded. Closing is honest and cheap; following the
-       scroll would mean re-measuring on every frame for a transient note. */
-    const onMove = () => setOpen(false)
-    document.addEventListener('keydown', onKey)
-    window.addEventListener('scroll', onMove, true)
-    window.addEventListener('resize', onMove)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      window.removeEventListener('scroll', onMove, true)
-      window.removeEventListener('resize', onMove)
-    }
-  }, [open])
-
-  if (!text) return null
-  const W = 280
-  return (
-    <>
-      {/* The description is the accessible name, so a screen reader reads it on
-          focus without depending on the bubble being open. */}
-      <span ref={dotRef} tabIndex={0} role="note" aria-label={text}
-        onMouseEnter={show} onMouseLeave={hide}
-        onFocus={show} onBlur={hide}
-        className={`inline-grid place-items-center w-4 h-4 flex-shrink-0 rounded-full
-          cursor-help transition-colors ${open
-            ? 'text-[#FC934C]'
-            : 'text-gray-300 hover:text-[#FC934C] dark:text-white/30 dark:hover:text-[#FDBE94]'}`}>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-          strokeWidth={2} strokeLinecap="round">
-          <circle cx="12" cy="12" r="9" />
-          <path d="M12 11v5" /><path d="M12 7.5h.01" />
-        </svg>
-      </span>
-
-      {open && rect && createPortal(
-        <div role="tooltip"
-          onMouseEnter={cancelClose} onMouseLeave={hide}
-          className="fixed z-[9999] rounded-xl border shadow-2xl px-3 py-2.5
-            bg-white border-gray-200 dark:bg-[#1a2d55] dark:border-white/15"
-          style={{
-            width: W,
-            // Below the icon, unless that would run off the bottom — then above it.
-            top: rect.bottom + 8 + 160 > window.innerHeight
-              ? Math.max(8, rect.top - 8 - 160)
-              : rect.bottom + 8,
-            left: Math.max(8, Math.min(rect.left - 8, window.innerWidth - W - 8)),
-          }}>
-          <p className="text-[11.5px] leading-relaxed text-[#14254A] dark:text-white/85 whitespace-pre-wrap">
-            {text}
-          </p>
         </div>,
         document.body,
       )}
@@ -2938,7 +2857,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
   const [canArrange, setCanArrange] = useState(false)
   const [layoutOpen, setLayoutOpen] = useState(false)
   const [layoutRev,  setLayoutRev]  = useState(0)
-  const [filters,  setFilters]  = useState<Filters>(EMPTY)
+  const [filters,  setFilters]  = useState<Filters>(emptyFilters)
   const [opts,     setOpts]     = useState<Record<string, any>>({})
   const [data,     setData]     = useState<any>(null)
   const [loading,  setLoading]  = useState(false)
@@ -3120,6 +3039,21 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     const [, qualifier] = splitLabel(activeSection.label)
     return (qualifier ?? '').trim().toLowerCase() === 'sports'
   }, [activeSection])
+
+  /* The asset scope the live counts card is given.
+
+     The ONE slicer that moves that card. Its window is the configured season
+     and no filter on this page can change it, so passing the rest would be
+     controls that appear to act on a figure they cannot touch — the asset is
+     different, because the endpoint counts per asset and genuinely narrows.
+
+     An array of one, or empty for "every asset", which is what the endpoint
+     reads an absent scope as. useMemo because the card takes it as an effect
+     dependency: a fresh [] on every render would refetch on every render. */
+  const realtimeAssetIds = useMemo(
+    () => (filters.assetId ? [filters.assetId] : []),
+    [filters.assetId],
+  )
 
   /* ── Connection state ─────────────────────────────────────────────────── */
   const loadHealth = useCallback(() => {
@@ -3453,7 +3387,18 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
    */
   const sourceTrends = useMemo(() => {
     const sources = (data?.sources || []) as any[]
-    if (sources.length < 2) return []
+    /* Present at all is enough. It used to take TWO, which was the same
+       mistaken assumption the server made in runPlatform: that one side means a
+       single-sided platform, which wants the merged card instead. The Source
+       Type slicer broke that — pick one side of Open Web and the server
+       legitimately answers with one — and both guards then threw the data away,
+       so the card the reader had just selected read "No host data for this
+       period" over a table holding rows for the window on screen.
+
+       The server decides whether these belong on the page, from how many sides
+       the PLATFORM has rather than how many survived the filter. Second-guessing
+       it here is what made a backend fix alone not show anything. */
+    if (sources.length === 0) return []
     return sources
       .map(s => {
         const second = s.secondSeries === 'delisted' ? 'delisted' : 'removed'
@@ -4096,16 +4041,30 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
 
                z-30: above the charts, below the collapsed nav's flyout at z-40,
                which still has to cover this. */
+            /* ── What the card is scoped by ──────────────────────────────
+               The CLIENT and the ASSET, and nothing else.
+
+               No dates: the sports count covers the client's configured season,
+               resolved server-side from Report Configuration → Sports period —
+               see scopeFromRequest. Passing `filters.from/to` would not change
+               the answer, but it WOULD re-request on every move of the date
+               slicer and file each one under its own cache key, so the card
+               spent the page's request budget re-fetching a figure it already
+               had.
+
+               The asset does change it, which is why it is the one slicer that
+               travels. Sent as a GUID — the reports screens carry ids, and the
+               card resolves names only for the War Room. */
             rtPinned ? (
               <div className="sticky top-0 z-30 pt-2 pb-2 bg-[#eef2f7] dark:bg-[#0f1f3d]">
                 <RealtimeCard view="sports" clientId={filters.clientId}
-                  startDate={filters.from} endDate={filters.to}
+                  assetIds={realtimeAssetIds}
                   pinned onTogglePin={() => setRtPinned(false)}
                   className="shadow-lg" />
               </div>
             ) : (
               <RealtimeCard view="sports" clientId={filters.clientId}
-                startDate={filters.from} endDate={filters.to}
+                assetIds={realtimeAssetIds}
                 pinned={false} onTogglePin={() => setRtPinned(true)} />
             )
           )}
@@ -4393,14 +4352,14 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
               value={{ from: filters.from, to: filters.to }}
               onChange={r => setFilters(f => ({ ...f, from: r.from, to: r.to }))}
               min={activeSection?.period?.start}
-              max={activeSection?.period && activeSection.period.end < today
+              max={activeSection?.period && activeSection.period.end < today()
                 ? activeSection.period.end
-                : today}
+                : today()}
               /* The quick ranges count back from the newest day the report can
                  show, not from a today the period may have ended before —
                  otherwise "Last 7 days" on a closed season resolves to seven
                  days with nothing in them. */
-              anchor={activeSection?.period && activeSection.period.end < today
+              anchor={activeSection?.period && activeSection.period.end < today()
                 ? activeSection.period.end
                 : undefined}
               compact />

@@ -12,6 +12,7 @@ import ClientAccessSearch from './ClientAccessSearch'
 import NotificationBell from '@/components/shared/NotificationBell'
 import FullscreenToggle from '@/components/shared/FullscreenToggle'
 import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner'
+import IdleTimeoutGuard from '@/components/shared/IdleTimeoutGuard'
 
 type NavItem = {
   label: string
@@ -265,6 +266,12 @@ function AdminShellInner({ children }: { children: React.ReactNode }) {
             with the page is a warning most people never see. Renders nothing
             unless the server says this password is inside a warning window. */}
         <PasswordExpiryBanner />
+
+        {/* The session countdown. Mounted here and not only in ClientShell,
+            which is where it used to live and the reason /admin pages logged
+            people out with no warning at all. Renders nothing until the
+            session is a minute from expiring. */}
+        <IdleTimeoutGuard />
 
         <main className="flex-1 overflow-y-auto bg-[#eef2f7] dark:bg-[#0f1f3d]">
           {children}

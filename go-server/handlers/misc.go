@@ -14,15 +14,67 @@ import (
 	"github.com/ip-house/iphouse-api/markscan"
 )
 
-// GET /api/keepalive
+/*
+GET /api/keepalive — the ONE place a session is extended.
+
+It used to report an expiry it did not create: the body said "you have thirty
+more minutes" and nothing re-issued the cookie, so the JWT still died thirty
+minutes after LOGIN however often this was called. That is why the portal logged
+people out mid-task — SESSION_IDLE_TIMEOUT_SECONDS names an idle window and
+behaved as an absolute one. Now the token is re-signed here and `expiryMs` is the
+expiry of the cookie that just went out with the response.
+
+WHY REFRESHING HERE AND NOT IN THE JWT MIDDLEWARE.
+
+Sliding the session on every authenticated request is the obvious version and it
+is wrong on this portal: the reports page polls its realtime card every few
+seconds, so a tab left open on an empty desk would renew itself forever and the
+idle timeout would never fire for anyone. An idle timeout has to be driven by the
+USER being there, so the browser calls this on real input events and nothing
+else — see IdleTimeoutGuard.tsx.
+
+Which means a caller polling this endpoint in a loop keeps its own session alive.
+That is inherent to any keepalive and is bounded by the same thing that bounds
+the cookie: whoever holds it was already authenticated.
+*/
 func Keepalive(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
 		Fail(w, 401, "Not authenticated")
 		return
 	}
+
+	/* Re-sign from the claims we already verified. SignToken replaces
+	   RegisteredClaims wholesale with a fresh window, which is exactly the slide
+	   — and it carries the identity across untouched, impersonation included, so
+	   a renewed session is the same session and not a quietly widened one. */
+	tok, err := ipauth.SignToken(*claims)
+	if err != nil {
+		/* The session in hand is still valid; only the extension failed. Report
+		   the expiry it ALREADY has rather than a new one, so the browser counts
+		   down to the truth instead of waiting on a renewal that never landed. */
+		log.Printf("[keepalive] re-signing the session failed: %v", err)
+		expiry := int64(0)
+		if claims.ExpiresAt != nil {
+			expiry = claims.ExpiresAt.Time.UnixMilli()
+		}
+		OK(w, map[string]any{"alive": true, "extended": false, "expiryMs": expiry})
+		return
+	}
+	SetTokenCookie(w, tok)
+
+	/* Computed the same way SignToken computes it, from the same config value.
+	   Not read back off the token: parsing what we just signed to learn a number
+	   we already had is a round trip that can only agree. */
 	expiryMs := time.Now().Add(time.Duration(config.C.SessionIdleSeconds) * time.Second).UnixMilli()
-	OK(w, map[string]any{"alive": true, "expiryMs": expiryMs})
+	OK(w, map[string]any{
+		"alive":    true,
+		"extended": true,
+		"expiryMs": expiryMs,
+		/* The window itself, so the browser can size its own timers without a
+		   second call to /api/user/idle-timeout on every renewal. */
+		"idleSeconds": config.C.SessionIdleSeconds,
+	})
 }
 
 // GET /api/test-db — health probe. This endpoint is unauthenticated, so it must

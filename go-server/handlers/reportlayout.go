@@ -939,6 +939,10 @@ var filterParamLabels = map[string]string{
 	// repeatoffenders.go. Separate from "channel", which filters on the display
 	// name.
 	"channelUrl": "Channel / Profile URL",
+
+	// Which SIDE of the open web to read — the only slicer here that selects a
+	// table rather than a value in one. See sourcetype.go.
+	"sourceType": "Source Type",
 }
 
 func filterParamLabel(param string) string {
@@ -1007,6 +1011,16 @@ func filterParamsFor(p platformDef) []string {
 		out = append(out, k)
 	}
 	sort.Strings(out)
+	/* And the one slicer that is not a column — which SIDE of the open web to
+	   read. Appended after the sort rather than inside it so it lands at the
+	   foot of the pane's default order: it changes what the whole report covers
+	   rather than narrowing it, which is a different kind of control from the
+	   value pickers above it and reads better apart from them. Somebody who
+	   wants it first can move it in Report Configuration like any other.
+	   See sourcetype.go. */
+	if platformOffersSourceType(specs) {
+		out = append(out, sourceTypeParam)
+	}
 	return out
 }
 
