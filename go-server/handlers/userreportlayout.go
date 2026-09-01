@@ -77,22 +77,43 @@ func UserReportLayout(w http.ResponseWriter, r *http.Request) {
 			Fail(w, 403, "This account may not change the report layout")
 			return
 		}
-		if !scopeSaveBody(w, r, clientID, platform) {
+		/* No `platform` argument, deliberately. A save carries its platform in
+		   the BODY — the editor PUTs to a bare /api/user/report-layout with no
+		   query string at all — so the value read off the URL above is empty
+		   here, and passing it made scopeSaveBody ask adminHiddenPanels("")
+		   about an unknown platform. That answered "nothing is hidden", both
+		   halves of rule two below went unenforced, and every panel IP House
+		   had switched off came back on the client's report the moment they
+		   saved anything. scopeSaveBody reads it from the body it has already
+		   decoded. */
+		if !scopeSaveBody(w, r, clientID) {
 			return
 		}
 		ReportLayoutSave(w, r)
 
 	case http.MethodDelete:
-		if !mayEditReportLayout(claims) {
-			Fail(w, 403, "This account may not change the report layout")
-			return
-		}
-		/* Deletes only this client's rows — see ReportLayoutReset, which keys
-		   on (platform, client). What the reader gets back is whatever IP House
-		   configured as the shared default, not a bare registry layout, which
-		   is what "reset" should mean to them. */
-		scopeQuery(r, platform, clientID)
-		ReportLayoutReset(w, r)
+		/*
+			Refused, whatever the grant says.
+
+			The grant is the right to ARRANGE a report — to move a panel, resize
+			one, switch one off. Reset is not another arrangement, it is the
+			deletion of every arrangement anyone at the company ever made, and it
+			is not undoable: the rows are gone and there is nothing to restore
+			them from. One reader, one click, and a layout somebody built over
+			weeks is the shared default again — with no trace of who did it or
+			what it looked like before.
+
+			So it stays with the people who can see the shared default they would
+			be reverting to: DELETE /api/admin/report-layout, from Report
+			Configuration. That handler is unchanged and still drops one client's
+			rows when it is given a clientId.
+
+			Answered here rather than by dropping the route, so the caller is told
+			why instead of getting a bare 405 — and 403 rather than 404 because
+			the operation exists, this session simply may not perform it.
+		*/
+		Fail(w, 403, "A report layout can only be reset by IP House. "+
+			"Ask your account manager to restore the default arrangement.")
 
 	default:
 		Fail(w, 405, "Method not allowed")
@@ -117,6 +138,13 @@ handler's own struct: that struct is the save format, it will grow, and a copy
 of it here would silently drop whatever field was added to it next. Everything
 the caller sent survives except what the two rules below overrule.
 
+The PLATFORM is read from that same decoded body rather than taken as an
+argument. It used to be passed in from the caller's query string, which a save
+does not have — the editor PUTs to a bare /api/user/report-layout and names its
+platform in the JSON — so it arrived empty, adminHiddenPanels was asked about a
+platform that does not exist, and rule two below silently did nothing at all.
+There is only one place a save states its platform; this reads it from there.
+
 ── Rule one: the client is the session's ────────────────────────────────────
 
 Same rule reportScope applies to every other report endpoint.
@@ -139,7 +167,7 @@ omits is added back, hidden, before the save runs.
 Their order is the tail of the list, which costs nothing: a hidden panel has no
 position on the page.
 */
-func scopeSaveBody(w http.ResponseWriter, r *http.Request, clientID, platform string) bool {
+func scopeSaveBody(w http.ResponseWriter, r *http.Request, clientID string) bool {
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	r.Body.Close()
 	if err != nil {
@@ -152,6 +180,17 @@ func scopeSaveBody(w http.ResponseWriter, r *http.Request, clientID, platform st
 		return false
 	}
 	body["clientId"] = clientID
+
+	platform, _ := body["platform"].(string)
+	platform = strings.TrimSpace(platform)
+	/* Refused here rather than left to ReportLayoutSave, which would reject it
+	   a moment later anyway. The difference is that everything between the two
+	   is the rule that keeps admin-hidden panels hidden, and running it against
+	   an unnamed platform is how it came to be a no-op in the first place. */
+	if platform == "" {
+		Fail(w, 422, "A platform is required")
+		return false
+	}
 
 	hidden := adminHiddenPanels(platform)
 	if len(hidden) > 0 {

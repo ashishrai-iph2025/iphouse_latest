@@ -273,8 +273,8 @@ GET /api/realtime/{view} — war-room or sports.
 
 The count covers the window the caller names — see scopeFromRequest — which is
 the one the report beside the card is showing. One answer is shared across polls
-and tabs for a couple of minutes (cachedRealtimeCount), and the card pauses
-while its tab is hidden.
+and tabs for the length of the card's own refresh interval (cachedRealtimeCount),
+and the card pauses while its tab is hidden.
 */
 func Realtime(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
@@ -352,7 +352,7 @@ func Realtime(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scope := scopeFromRequest(r, view, clientID)
-	body, err := cachedRealtimeCount(ctx, view, clientID, assetIDs, scope)
+	body, takenAt, err := cachedRealtimeCount(ctx, view, clientID, assetIDs, scope)
 	if err != nil {
 		// Detail to the log for the same reason as above: a warehouse error is
 		// usually a failed statement, and the card renders whatever it is told
@@ -383,9 +383,22 @@ func Realtime(w http.ResponseWriter, r *http.Request) {
 		   configured season — the card says so, because "in this range" over a
 		   figure the range slicer cannot move is a caption that lies. */
 		"scope": scopeName(scope),
-		// When the count was taken, so the card can say how old it is rather
-		// than implying the moment it is read.
-		"asOf": time.Now().UTC().Format(time.RFC3339),
+		/* When the count was TAKEN, which is not when this response was built.
+
+		   It was time.Now() here, and that quietly undid the one thing the
+		   card's stamp exists for. An answer served from the hold below can be
+		   most of its TTL old; stamped with the moment it was handed over, it
+		   arrived claiming to be current, and the card drew "just now" over a
+		   figure that had not moved since the last real count. A reader polling
+		   a live card would have watched a still number insist it was fresh —
+		   which is worse than a slow number that says how old it is, and it is
+		   the failure the stamp was added to prevent.
+
+		   Now it is the measurement's own time, so the age the card prints is
+		   the age of the count. It also means the poll cadence cannot flatter
+		   the data: reading four times as often shows the same "2 min ago"
+		   four times rather than resetting the clock on each request. */
+		"asOf": takenAt.UTC().Format(time.RFC3339),
 	}
 	/* Only where the view reported it. Sending 0 on the war-room card would put
 	   "0 removed" beside a real discovery total on a screen that never counted
@@ -569,19 +582,39 @@ func dedupe(in []string) []string {
 	scans that make each other slower. That is how a backend that is merely slow
 	becomes one that times out.
 
-	So one answer is computed and shared. Two minutes, against a poll every
-	five: a second tab costs nothing, and the figure is never more than a couple
-	of minutes behind a fresh count — which the card says outright with its "x
-	ago" stamp rather than implying the moment it is read.
+	So one answer is computed and shared.
 
 	Single-flight: the first caller for a key computes while the rest WAIT on
 	the same result. Letting them race would defeat the point exactly when load
 	is highest.
+
+	── Why the hold is 30 seconds ────────────────────────────────────────────
+
+	It was two minutes against a poll every five, which meant the card usually
+	found a count it had already been shown. The card polls every 30s now — see
+	REFRESH_MS in components/shared/RealtimeCard.tsx — and a hold longer than
+	the poll does not make the card slower, it makes the polling pointless:
+	three reads in four would return the same figure with the same timestamp,
+	which is four times the requests for the same number.
+
+	Matched to the poll, one open report drives at most one count per 30s
+	whatever the tab count, and every poll can see something new. What that
+	costs is real and worth stating plainly: a season-wide count measured at
+	14.5s against production, so a client sitting on this screen keeps roughly
+	one warehouse query in flight half the time. The single-flight is what
+	bounds it — the second, tenth and hundredth reader of the same report wait
+	on the first one's result rather than starting their own — so the load
+	scales with reports being READ, not with people reading them.
+
+	If that proves too much for the warehouse, this constant is the dial, and
+	turning it up degrades honestly rather than silently: the count is stamped
+	with the time it was TAKEN, so a longer hold shows up as an older "x ago"
+	on the card instead of a stale number claiming to be current.
 */
 
 const (
 	realtimeCountTimeout = 75 * time.Second
-	realtimeMemoTTL      = 2 * time.Minute
+	realtimeMemoTTL      = 30 * time.Second
 	// A failure is held far more briefly. Caching it for the full window would
 	// keep showing the error long after the warehouse recovered; not caching it
 	// at all would let every poll retry a query that is already timing out.
@@ -607,7 +640,12 @@ func realtimeMemoAge(e *realtimeEntry) time.Duration {
 	return realtimeMemoTTL
 }
 
-func cachedRealtimeCount(ctx context.Context, view, clientID string, assetIDs []string, scope realtimeScope) (realtimeResponse, error) {
+// cachedRealtimeCount answers with the count and WHEN IT WAS TAKEN. The second
+// value is the whole point of the hold being visible to the caller: a body
+// returned from it may be most of a TTL old, and the card stamps what it is
+// given. Returning only the body is what let the handler date every answer to
+// the moment it was served.
+func cachedRealtimeCount(ctx context.Context, view, clientID string, assetIDs []string, scope realtimeScope) (realtimeResponse, time.Time, error) {
 	// The window is part of the key: two readers on different date ranges are
 	// asking different questions, and sharing one answer between them would
 	// hand one of them the other's numbers.
@@ -622,16 +660,16 @@ func cachedRealtimeCount(ctx context.Context, view, clientID string, assetIDs []
 			// replace it, still holding the lock so only one caller does.
 			if time.Since(e.at) < realtimeMemoAge(e) {
 				realtimeMemoMu.Unlock()
-				return e.body, e.err
+				return e.body, e.at, e.err
 			}
 		default:
 			// Still running. Wait for it rather than starting a second.
 			realtimeMemoMu.Unlock()
 			select {
 			case <-e.done:
-				return e.body, e.err
+				return e.body, e.at, e.err
 			case <-ctx.Done():
-				return realtimeResponse{}, ctx.Err()
+				return realtimeResponse{}, time.Time{}, ctx.Err()
 			}
 		}
 	}
@@ -649,5 +687,5 @@ func cachedRealtimeCount(ctx context.Context, view, clientID string, assetIDs []
 	e.at = time.Now()
 	close(e.done)
 
-	return e.body, e.err
+	return e.body, e.at, e.err
 }

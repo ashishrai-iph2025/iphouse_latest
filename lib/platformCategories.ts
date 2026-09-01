@@ -130,18 +130,55 @@ export type OpenWebUrlType = 'all' | 'linking' | 'source'
 export const OPEN_WEB_URL_TYPES: { key: OpenWebUrlType; label: string; hint: string }[] = [
   { key: 'all',     label: 'All URLs',    hint: 'Host pages and the links pointing at them' },
   { key: 'linking', label: 'Linking URL', hint: 'Pages that link to the infringing file' },
-  { key: 'source',  label: 'Source URL',  hint: 'The host page carrying the file itself' },
+  /* "Host URL", not "Source URL". Open Web results are a PAIR — the page
+     carrying the link, and the host serving the file — and "source" reads as
+     "where this came from" when it means the far end of that pair. The KEY stays
+     `source`: it is the wire value, it is in the `urlType` query parameter, and
+     renaming it would break every link anyone has already shared. */
+  { key: 'source',  label: 'Host URL',    hint: 'The host page carrying the file itself' },
 ]
 
-/** Reads a row's source/linking flag across the casings MarkScan returns. */
+/** The fields that carry the HOST page — the pirate player or file host, as
+    opposed to the page linking to it. Same list resolveFields reads hostUrl
+    from, so the tab and the card can never disagree about whether a row has
+    one. */
+const HOST_URL_KEYS = ['sourceURL', 'sourceUrl', 'SourceURL', 'hostURL', 'hostUrl']
+
+const filled = (v: unknown) =>
+  v !== undefined && v !== null && String(v).trim() !== '' &&
+  String(v) !== 'null' && String(v) !== 'undefined'
+
+/*
+Whether a row is the HOST side of an Open Web pair.
+
+Two ways of knowing, in order, and the second is the one that was missing.
+
+An EXPLICIT FLAG wins where there is one. The QC screens get theirs stamped by
+the server, which asks MarkScan for each side separately and marks the two
+batches as it merges them (go-server/handlers/enforce.go). `isSource` is the
+same fact under the War Room's name for it.
+
+Otherwise it is DERIVED from the row, exactly as the server's own normaliser
+derives it — `r["isSource"] = notEmpty(r["sourceURL"])`, and the comment above it
+reads "A row with no sourceURL is an infringing-URL row"
+(go-server/markscan/warroom.go).
+
+That fallback is the fix for a filter that could only ever answer one way.
+/Internet/Paged returns host and linking rows in one list and stamps neither —
+POST /api/infringement passes them straight through, unlike the QC path — so no
+flag was ever present, every row fell through to `return false`, and every row
+was therefore classified as linking. The Linking URL tab showed all thousand
+rows and the Host URL tab showed none of them, on data where the host URLs were
+plainly there to see.
+*/
 export function rowIsSourceUrl(row: Record<string, any>): boolean {
-  for (const k of ['isSourceURL', 'isSourceUrl', 'IsSourceURL', 'isSrcUrl', 'IsSrcUrl']) {
+  for (const k of ['isSourceURL', 'isSourceUrl', 'IsSourceURL', 'isSrcUrl', 'IsSrcUrl', 'isSource', 'IsSource']) {
     const v = row?.[k]
     if (v !== undefined && v !== null && v !== '') {
       return v === true || v === 1 || String(v).toLowerCase() === 'true' || String(v) === '1'
     }
   }
-  return false
+  return HOST_URL_KEYS.some(k => filled(row?.[k]))
 }
 
 /** Whether a row belongs in the chosen Open Web view. */

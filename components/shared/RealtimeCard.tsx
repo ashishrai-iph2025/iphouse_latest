@@ -195,24 +195,30 @@ function scopeNote(p: Payload, refreshMs: number): string {
 }
 
 /*
-How often the card re-reads, per source.
+How often the card re-reads: every 30 seconds, from either source.
 
-'markscan' is 30s. It runs the War Room's own incremental pull — a delta against
-the stored rows, so a quiet half-minute costs one small request per platform and
-nothing is re-paged.
+'markscan' runs the War Room's own incremental pull — a delta against the stored
+rows, so a quiet half-minute costs one small request per platform and nothing is
+re-paged. That was always 30s.
 
-'warehouse' is 5 minutes. That one is a count per platform over a whole sports
-season — measured at 14.5s against production, against 1.4s for a week — and it
-once blew a 30-second deadline as an all-time query. A number covering months
-does not move meaningfully in a minute, and polling it faster than it can be
-computed just queues scans behind each other. The server also shares one answer
-across tabs for two minutes, and the window no longer moves with the date
-slicer, so the real cost is well under one query per five.
+'warehouse' is a count per platform over a whole sports season — measured at
+14.5s against production, against 1.4s for a week — and it used to poll at five
+minutes for exactly that reason. It polls at 30s now, by request: a card headed
+"Updating live" that re-read twice in the time somebody sits with it open was
+live in name only.
 
-Either way the "x ago" stamp says how fresh the number is, so a slower cadence
-is visible rather than implied.
+What makes that affordable is that the cadence here is NOT the query rate. The
+server holds one answer per (client, assets, window) and single-flights it, so
+every tab on the same report shares one count and a poll inside the hold costs a
+cache read (cachedRealtimeCount in go-server/handlers/realtime.go). The hold is
+the thing that decides how hard the warehouse is worked; this only decides how
+soon the card notices.
+
+Either way the "x ago" stamp is the count's OWN age, not the age of the request
+that fetched it — so a reading served from the hold says how old it really is,
+and polling faster can never make a stale number look fresh.
 */
-const REFRESH_MS: Record<string, number> = { markscan: 30_000, warehouse: 300_000 }
+const REFRESH_MS: Record<string, number> = { markscan: 30_000, warehouse: 30_000 }
 
 const nf = new Intl.NumberFormat()
 

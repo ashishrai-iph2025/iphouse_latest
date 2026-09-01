@@ -17,6 +17,14 @@
  * with no answer in reach. The server enforces the same rule on the way in — see
  * scopeSaveBody — because a hidden control is not a permission.
  *
+ * Throw the arrangement away. There is no Reset here, and the DELETE it used to
+ * call is refused for a client session — see UserReportLayout. The two facts
+ * that make it the wrong control: this layout is the whole company's, not the
+ * reader's, and reset is not an undo — it discards every panel anyone at the
+ * company has ever moved, in one click, with nothing to restore it from. Going
+ * back to the shared default is a support request, and Report Configuration is
+ * where it is answered.
+ *
  * ── Why three quarters, and not a rail or the whole screen ───────────────────
  *
  * A report is thirty-odd panels across several sections. In a 340px rail that is
@@ -234,24 +242,6 @@ export default function ReportLayoutEditor({ platform, sections, open, onClose, 
       onSaved()
     } catch {
       setErr('This layout could not be saved.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function reset() {
-    setSaving(true); setErr(''); setNote('')
-    try {
-      const r = await fetch(`/api/user/report-layout?platform=${encodeURIComponent(active)}`,
-        { method: 'DELETE', credentials: 'include' })
-      const d = await r.json()
-      if (!d?.success) { setErr(d?.error || 'This layout could not be reset.'); return }
-      setOwnLayout(false)
-      await load(active)
-      setNote('Back to the arrangement IP House set.')
-      onSaved()
-    } catch {
-      setErr('This layout could not be reset.')
     } finally {
       setSaving(false)
     }
@@ -553,23 +543,25 @@ export default function ReportLayoutEditor({ platform, sections, open, onClose, 
         bg-white dark:bg-[#1a2d55] border-t border-gray-200 dark:border-white/10">
         <div className="min-w-0 flex-1">
           {/* The consequence, where the button is rather than in a tooltip:
-              this is not a personal view. */}
+              this is not a personal view.
+
+              Whose arrangement is in force is stated here rather than implied by
+              a Reset button's enabled state, which is how it used to be read.
+              That button is gone — see the note at the top of this file — and
+              the fact it carried is worth keeping without it: a reader who has
+              never arranged this report should know the shape is IP House's. */}
           <p className="text-[11px] text-gray-500 dark:text-white/50 leading-snug">
             Saved for your whole company — everyone who opens this report sees it.
             {!loading && !err && panels.length > 0 && (
               <> · {shownCount} of {panels.length} shown</>
             )}
+            {!loading && !err && panels.length > 0 && (
+              <> · {ownLayout
+                ? 'Using your own arrangement'
+                : 'Using the arrangement IP House set'}</>
+            )}
           </p>
         </div>
-        <button type="button" onClick={reset} disabled={saving || loading || !ownLayout}
-          title={ownLayout
-            ? 'Discard your arrangement and go back to the one IP House set'
-            : 'This report already uses the arrangement IP House set'}
-          className="px-3.5 py-2 rounded-xl text-xs font-semibold border border-gray-200
-            text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors
-            dark:border-white/15 dark:text-white/60 dark:hover:bg-white/5">
-          Reset
-        </button>
         <button type="button" onClick={save} disabled={saving || loading || !!err || !dirty}
           className="px-5 py-2 rounded-xl text-xs font-bold text-white
             transition-opacity hover:opacity-90 disabled:opacity-40"

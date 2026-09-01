@@ -15,7 +15,7 @@
 // report is keyed on a warehouse ClientId supplied by the caller, and there is
 // no portal-login → warehouse-client mapping yet.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ResponsiveContainer, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   LineChart, Line, LabelList, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -3040,6 +3040,67 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     return (qualifier ?? '').trim().toLowerCase() === 'sports'
   }, [activeSection])
 
+  /* Whether the live card is on the page at all. Named because it is read in
+     two places that must agree: the card's own render, and the sticky offset
+     the rails are given — a rail held down for a band that is not there would
+     leave a gap at the top of the page with nothing in it. */
+  const showRealtime = !!filters.clientId && isSportsSection
+
+  /*
+  How far down the two rails start sticking.
+
+  The live card runs the full width of the page, so when it is pinned it sits
+  across the top of BOTH rails rather than beside them, and a rail sticking at
+  its usual 8px would slide up underneath it — or over it, since the navigation
+  rail carries a z-index to keep its flyout above the charts. Neither is a
+  layout; it is two sticky things claiming the same strip.
+
+  So the rails are held below the band, and the offset is MEASURED rather than
+  guessed. The card's height is not a constant: it grows a removed figure and
+  its share bar where the view reports one, a partial-reading warning when a
+  platform did not answer, and it reflows from one row of platforms to three
+  as the window narrows. A hard-coded inset would be wrong on most readings.
+
+  Zero when the card is unpinned or absent, which is the whole of the rest of
+  the product's behaviour — the rails then stick where they always did.
+
+  `showRealtime` is a dependency, and it is the one that matters. The card is
+  not on screen when this page mounts — there is no client yet, and the section
+  may not be a sports one — so the first run finds a null ref, and an effect
+  keyed on the pin alone would never run again once the card appeared. The
+  measurement stayed at zero, both rails kept their old 8px threshold, and the
+  pinned card had the navigation rail riding up over it and the filter rail
+  sliding under it. Nothing was wrong with the arithmetic; it was never asked
+  to do any.
+
+  useLayoutEffect, not useEffect: this measures a thing in order to position
+  another thing beside it, so it has to settle before the browser paints.
+  Deferred, the first frame after each pin draws the rails at the old offset —
+  a visible jump on exactly the interaction this exists to serve.
+  */
+  const rtBandRef = useRef<HTMLDivElement>(null)
+  const [rtBandH, setRtBandH] = useState(0)
+  useLayoutEffect(() => {
+    const el = rtBandRef.current
+    if (!el || !rtPinned) { setRtBandH(0); return }
+    // getBoundingClientRect, not offsetHeight: the latter rounds to whole
+    // pixels, and a rail one pixel short of clearing the card shows a hairline
+    // of chart scrolling through the gap.
+    const measure = () => setRtBandH(el.getBoundingClientRect().height)
+    measure()
+    /* ResizeObserver rather than a resize listener: most of what changes this
+       height is not a window resize at all — the first reading landing, the
+       removed row and its share bar appearing, a platform dropping out of the
+       grid, a partial-reading warning arriving — and none of those fire one. */
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [rtPinned, showRealtime])
+  /* What a rail's `top` and max height are written against. Both are `calc`
+     against this, so the unpinned case resolves to exactly the values that
+     were hard-coded before it existed. */
+  const railInset = { '--rt-band': `${rtBandH}px` } as React.CSSProperties
+
   /* The asset scope the live counts card is given.
 
      The ONE slicer that moves that card. Its window is the configured season
@@ -3903,6 +3964,110 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
           `sticky` has somewhere to travel — otherwise a stretched rail leaves
           an empty gutter beside the charts as soon as the page scrolls. */}
       {!(scoped && scope && !scope.allowed) && (
+      <>
+
+      {/* ── Live discovery counts, across the whole page ─────────────────────
+
+          The report is a window someone chose — thirty days, a year — and says
+          nothing about what arrived while they were reading it. This does, and
+          it is the reason to keep the screen open.
+
+          FULL WIDTH, and so a sibling of the rails rather than a child of the
+          centre column. It used to sit inside `main`, which made it as wide as
+          the charts and no wider: a horizontal strip of thirteen platforms,
+          squeezed between two rails, wrapping to three rows while the gutters
+          either side of it held nothing. The card is the one thing on this page
+          that is about the client rather than about the report, so it reads
+          across the top of both rails instead of lining up with one column of
+          it. Same for a client login, which renders this very component — see
+          app/(client)/reports/page.tsx.
+
+          Only on the sports sections: the endpoint behind it counts the sports
+          tables, and showing it over a non-sports report would put a number on
+          screen that does not describe what is under it.
+
+          ── What the card is scoped by ──────────────────────────────────────
+          The CLIENT and the ASSET, and nothing else.
+
+          No dates: the sports count covers the client's configured season,
+          resolved server-side from Report Configuration → Sports period — see
+          scopeFromRequest. Passing `filters.from/to` would not change the
+          answer, but it WOULD re-request on every move of the date slicer and
+          file each one under its own cache key, so the card spent the page's
+          request budget re-fetching a figure it already had.
+
+          The asset does change it, which is why it is the one slicer that
+          travels. Sent as a GUID — the reports screens carry ids, and the card
+          resolves names only for the War Room. */}
+      {showRealtime && (
+        /* ── Pinned: an OPAQUE gutter, not just a sticky card ────────────────
+           Sticking the card alone left the strip above it transparent, so the
+           report scrolled up through the gap and KPI figures appeared to float
+           over the card's top edge.
+
+           So what sticks is a band painted in the scroll container's own
+           background (AdminShell's `main`, #eef2f7 / #0f1f3d), running from the
+           very top of the viewport to just below the card. Content passing
+           underneath is hidden before it ever reaches the card.
+
+           ── The stacking ladder, which this band sits in the middle of ──────
+
+             10  chart tooltips, inside their own cards
+             12  the two rails — above the KPI tiles, whose accent bar makes
+                 them `relative` and so contenders
+             15  THIS BAND, above both rails
+             20  AdminShell's header
+             40  ClientNavbar's header
+             69/70  the Arrange panel, which is meant to cover the chrome
+             9999+  anything portalled to <body>: the date picker, the selects
+
+           The two header rows are the ceiling this band must stay under, and
+           the reason it is 15 rather than the 50 it briefly was. `main` in
+           both shells carries no z-index of its own, so it opens no stacking
+           context — a z-index in here is not scoped to the page, it competes
+           with the chrome directly. At 50 this band won, and the notification
+           panel hanging down out of the navbar was drawn behind the live
+           counts.
+
+           Above both rails, though, and that is the point of 15. Full width
+           means they share this band's horizontal space, which they never did
+           while it sat in the centre column. The offset below is what keeps
+           them clear of it in the first place; the z-index is what makes the
+           failure a hidden rail rather than a mangled one, if the measurement
+           is ever a frame behind.
+
+           The collapsed nav's flyout used to have to cover this band and no
+           longer does — it opens at the rail's own top edge, which is now
+           under the band, not across it. */
+
+        /* ── One card, in one position, whichever state it is in ─────────────
+           Pinned and unpinned used to be the two branches of a ternary: a card
+           inside a sticky band, or a bare card. They render the same component,
+           which is exactly why that was wrong — React identifies an element by
+           its TYPE AND POSITION in the tree, not by what it is called, and those
+           two branches put a different type at the slot. So the toggle did not
+           restyle the card, it unmounted one and mounted another.
+
+           Everything the card holds went with it: the last reading, the
+           last-good copy kept for a failed refresh, the paused flag — and the
+           fresh instance ran its load effect, which is why pinning re-read the
+           counts, reset the "x ago" stamp and re-animated the total from zero.
+
+           The wrapper is unconditional now and only its classes change, so
+           pinning is a style change. The card is never torn down, its refresh
+           timer keeps its own cadence, and the number on screen is the same
+           reading it was a moment ago. */
+        <div ref={rtBandRef}
+          className={`mb-3 ${rtPinned
+            ? 'sticky top-0 z-[15] pt-2 pb-2 bg-[#eef2f7] dark:bg-[#0f1f3d]'
+            : ''}`}>
+          <RealtimeCard view="sports" clientId={filters.clientId}
+            assetIds={realtimeAssetIds}
+            pinned={rtPinned} onTogglePin={() => setRtPinned(p => !p)}
+            className={rtPinned ? 'shadow-lg' : ''} />
+        </div>
+      )}
+
       <div className="flex flex-col xl:flex-row xl:items-start gap-3">
 
         {/* ── Left: report navigation, collapsible ─────────────────────────── */}
@@ -3919,14 +4084,23 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
           onMouseLeave={railOpen ? undefined : closeFlyout}
           onFocus={railOpen ? undefined : openFlyout}
           onBlur={railOpen ? undefined : closeFlyout}
-          /* z-40 on the RAIL, not on the flyout. `sticky` makes this element its
-             own stacking context, so the flyout's z-30 only ever sorts it
-             against its siblings inside the rail — never against the report. The
-             KPI tiles are `relative` for their accent bar, which puts them in
-             the same paint layer as this rail and later in document order, so
-             without a z-index here the flyout opens *underneath* the cards and
-             all that shows is a sliver of it in the gap between two KPI rows. */
-          className={`relative z-40 w-full xl:flex-none xl:sticky xl:top-2 ${
+          /* A z-index on the RAIL, not on the flyout. `sticky` makes this
+             element its own stacking context, so the flyout's z-30 only ever
+             sorts it against its siblings inside the rail — never against the
+             report. The KPI tiles are `relative` for their accent bar, which
+             puts them in the same paint layer as this rail and later in
+             document order, so without a z-index here the flyout opens
+             *underneath* the cards and all that shows is a sliver of it in the
+             gap between two KPI rows.
+
+             12, not the 40 this used to be: see the ladder on the live card's
+             band. It clears the chart tooltips at z-10 and stays well under the
+             shell chrome. */
+          /* `top` against the live card's band rather than a flat 8px — see
+             railInset. It resolves to 8px whenever the band is not there. */
+          style={railInset}
+          className={`relative z-[12] w-full xl:flex-none xl:sticky
+            xl:top-[calc(0.5rem_+_var(--rt-band,0px))] ${
             railOpen ? 'xl:w-[196px]' : 'xl:w-[52px]'}`}>
           <div className={`bg-white dark:bg-[#1a2d55] rounded-2xl shadow-card border transition-colors
             ${!railOpen && flyout
@@ -3971,7 +4145,8 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
                 inside the scroll box — an overflow clips it whether or not the
                 list is long enough to actually scroll. */}
             <nav className={`flex gap-1.5 xl:flex-col xl:gap-0.5 overflow-x-auto
-              xl:max-h-[calc(100dvh-10rem)] xl:overflow-y-auto xl:p-1.5 xl:-m-1.5 ${
+              xl:max-h-[calc(100dvh_-_10rem_-_var(--rt-band,0px))]
+              xl:overflow-y-auto xl:p-1.5 xl:-m-1.5 ${
               railOpen ? '' : 'xl:hidden'}`}>
               {navItems}
             </nav>
@@ -4016,58 +4191,6 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             either one widens the charts instead of leaving a gap. */}
         <main className={`w-full xl:flex-1 xl:min-w-0 space-y-3 sm:space-y-4
           transition-opacity duration-200 ${loading && data ? 'opacity-60' : ''}`}>
-
-          {/* Live discovery counts, above the report.
-
-              The report is a window someone chose — thirty days, a year — and
-              says nothing about what arrived while they were reading it. This
-              does, and it is the reason to keep the screen open.
-
-              Only on the sports sections: the endpoint behind it counts the
-              sports tables, and showing it over a non-sports report would put a
-              number on screen that does not describe what is under it. */}
-          {filters.clientId && isSportsSection && (
-            /* ── Pinned: an OPAQUE gutter, not just a sticky card ────────────
-               Sticking the card alone left the strip above it transparent, so
-               the report scrolled up through the gap and KPI figures appeared
-               to float over the card's top edge.
-
-               So what sticks is a band painted in the scroll container's own
-               background (AdminShell's `main`, #eef2f7 / #0f1f3d), running from
-               the very top of the viewport to just below the card. Content
-               passing underneath is hidden before it ever reaches the card, and
-               the padding inside the band is what keeps the visual gap that
-               `top-2` used to provide.
-
-               z-30: above the charts, below the collapsed nav's flyout at z-40,
-               which still has to cover this. */
-            /* ── What the card is scoped by ──────────────────────────────
-               The CLIENT and the ASSET, and nothing else.
-
-               No dates: the sports count covers the client's configured season,
-               resolved server-side from Report Configuration → Sports period —
-               see scopeFromRequest. Passing `filters.from/to` would not change
-               the answer, but it WOULD re-request on every move of the date
-               slicer and file each one under its own cache key, so the card
-               spent the page's request budget re-fetching a figure it already
-               had.
-
-               The asset does change it, which is why it is the one slicer that
-               travels. Sent as a GUID — the reports screens carry ids, and the
-               card resolves names only for the War Room. */
-            rtPinned ? (
-              <div className="sticky top-0 z-30 pt-2 pb-2 bg-[#eef2f7] dark:bg-[#0f1f3d]">
-                <RealtimeCard view="sports" clientId={filters.clientId}
-                  assetIds={realtimeAssetIds}
-                  pinned onTogglePin={() => setRtPinned(false)}
-                  className="shadow-lg" />
-              </div>
-            ) : (
-              <RealtimeCard view="sports" clientId={filters.clientId}
-                assetIds={realtimeAssetIds}
-                pinned={false} onTogglePin={() => setRtPinned(true)} />
-            )
-          )}
 
           {/* The KPI band is a panel like any other now — it is drawn inside the
               layout below, so it can be moved or hidden along with the charts
@@ -4292,7 +4415,11 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         </main>
 
         {/* ── Right: slicers ───────────────────────────────────────────────── */}
-        <aside className={`w-full xl:flex-none xl:sticky xl:top-2 ${
+        {/* Same inset as the navigation rail, and for the same reason — the
+            live card above spans both of them now. See railInset. */}
+        <aside style={railInset}
+          className={`w-full xl:flex-none xl:sticky
+            xl:top-[calc(0.5rem_+_var(--rt-band,0px))] ${
           filtersOpen ? 'xl:w-[244px]' : 'xl:w-[60px]'}`}>
           {!filtersOpen ? (
             /* Collapsed: one button back to the filters, so the charts get the
@@ -4315,7 +4442,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
              being a few pixels out only means it starts scrolling slightly
              early, which is invisible. */
           <div className="bg-white dark:bg-[#1a2d55] rounded-xl shadow-card border border-gray-100 dark:border-white/10 p-3 space-y-2.5
-            xl:max-h-[calc(100dvh-8.5rem)] xl:overflow-y-auto">
+            xl:max-h-[calc(100dvh_-_8.5rem_-_var(--rt-band,0px))] xl:overflow-y-auto">
             <div className="flex items-center justify-between gap-2">
               {/* Numbered only where there is a sequence to be in. A client
                   login has no client slicer, so the date range is the only
@@ -4430,6 +4557,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
           )}
         </aside>
       </div>
+      </>
       )}
 
       {scoped && canArrange && (

@@ -33,10 +33,25 @@ function PgBtn({ onClick, disabled, active, children }: { onClick: () => void; d
 }
 
 export default function DownloadRequestPage() {
-  const [platform,    setPlatform]    = useState('')
-  const [assetName,   setAssetName]   = useState('')
-  const [startDate,   setStartDate]   = useState('')
-  const [endDate,     setEndDate]     = useState('')
+  /* Arrived at from a search, with the search carried in the query string.
+     The results page offers a complete-data request of its own and places it
+     directly; it sends the reader HERE when the range is wider than the one
+     month this form allows, and arriving at an empty form after being told to
+     "pick a narrower window" would mean re-entering a search they had already
+     made. Only the dates need narrowing, so only the dates start blank when
+     they are out of range — the platform and asset carry over as they were. */
+  const seed = typeof window === 'undefined'
+    ? new URLSearchParams()
+    : new URLSearchParams(window.location.search)
+  const seedStart = seed.get('startDate') || ''
+  const seedEnd = seed.get('endDate') || ''
+  const seedRangeOk = !!seedStart && !!seedEnd &&
+    new Date(seedEnd) <= new Date(new Date(seedStart).setMonth(new Date(seedStart).getMonth() + 1))
+
+  const [platform,    setPlatform]    = useState(seed.get('platform') || '')
+  const [assetName,   setAssetName]   = useState(seed.get('assetName') || '')
+  const [startDate,   setStartDate]   = useState(seedStart)
+  const [endDate,     setEndDate]     = useState(seedRangeOk ? seedEnd : '')
   const [loading,     setLoading]     = useState(false)
   const [result,      setResult]      = useState<any>(null)
   const [history,     setHistory]     = useState<any[]>([])

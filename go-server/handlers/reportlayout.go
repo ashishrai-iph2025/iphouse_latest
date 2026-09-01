@@ -1535,7 +1535,25 @@ func ReportLayoutSave(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 500, "Could not replace this layout")
 		return
 	}
+	/*
+		Two counters, because the page has two lists.
+
+		The grid and the filter pane are arranged separately, read back
+		separately — applyLayout sorts the panels, filterPanels sorts the
+		slicers — and each of those compares a stored order against a DEFAULT
+		of (index + 1) * 10 within its own list. One running counter across the
+		whole body put the slicers on a scale the pane never uses: the body
+		carries them after the panels, so on a thirty-panel report the first
+		slicer was written at 310 while an unconfigured one still defaults to
+		10.
+
+		That is invisible until a slicer arrives without a row — a table gains a
+		column, and the new one sorts above every slicer anybody has ever
+		arranged. Numbering each list from its own zero is what the two readers
+		already assume.
+	*/
 	pos := 0
+	filterPos := 0
 	seen := map[string]bool{}
 	for _, p := range body.Panels {
 		pk := strings.TrimSpace(p.Key)
@@ -1579,7 +1597,16 @@ func ReportLayoutSave(w http.ResponseWriter, r *http.Request) {
 		if rowLimit > maxRowLimit {
 			rowLimit = maxRowLimit
 		}
-		pos += 10
+		// Which list this panel is ordered within — see the note on the two
+		// counters above.
+		order := 0
+		if strings.HasPrefix(pk, keyFilterPfx) {
+			filterPos += 10
+			order = filterPos
+		} else {
+			pos += 10
+			order = pos
+		}
 		if _, _, err := db.Exec(`
 			INSERT INTO `+layoutTable+` (platform_key, client_id, panel_key, sort_order, span, viz, is_hidden, custom_label, description, row_limit, updated_by)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1587,7 +1614,7 @@ func ReportLayoutSave(w http.ResponseWriter, r *http.Request) {
 			  viz=VALUES(viz), is_hidden=VALUES(is_hidden), custom_label=VALUES(custom_label),
 			  description=VALUES(description), row_limit=VALUES(row_limit),
 			  updated_by=VALUES(updated_by)`,
-			key, clientID, pk, pos, span, viz, hidden, title, desc, rowLimit, who); err != nil {
+			key, clientID, pk, order, span, viz, hidden, title, desc, rowLimit, who); err != nil {
 			log.Printf("[layout] save %s/%s/%s: %v", key, clientID, pk, err)
 			Fail(w, 500, "Could not save this layout")
 			return

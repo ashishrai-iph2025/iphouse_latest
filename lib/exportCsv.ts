@@ -28,8 +28,21 @@ export function toCsv<T>(columns: CsvColumn<T>[], rows: T[]): string {
   return [head, ...body].join('\r\n')
 }
 
-function safeFileName(name: string): string {
+export function safeFileName(name: string): string {
   return name.replace(/[^\w.\- ]+/g, '_').replace(/\s+/g, '_').slice(0, 120) || 'export'
+}
+
+/**
+ * The date to stamp a download with — the READER'S date.
+ *
+ * This was `toISOString().slice(0, 10)`, which answers in UTC: east of
+ * Greenwich, everything exported before half past five in the morning was
+ * filed under yesterday. A file named for the day before the one you saved it
+ * on is the sort of thing nobody reports and everybody has to reconcile later,
+ * and the export exists to be filed.
+ */
+export function localStamp(d = new Date()): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 /** Build the CSV and hand it to the browser as a download. The BOM keeps
@@ -39,7 +52,7 @@ export function downloadCsv<T>(fileName: string, columns: CsvColumn<T>[], rows: 
   const blob = new Blob(['﻿', csv], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
-  const stamp = new Date().toISOString().slice(0, 10)
+  const stamp = localStamp()
   a.href = url
   a.download = `${safeFileName(fileName)}_${stamp}.csv`
   document.body.appendChild(a)
