@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
+import ReportLoader from '@/components/shared/ReportLoader'
 
 interface LoginRow {
   loginId: number
@@ -121,7 +122,7 @@ export default function ClientAccessSearch() {
                   Start typing to find a client login. Access opens their portal exactly as they see it.
                 </div>
               ) : loading ? (
-                <div className="flex justify-center py-12"><span className="w-6 h-6 border-2 border-gray-200 border-t-[#14254A] rounded-full animate-spin" /></div>
+                <ReportLoader size={130} label="Searching" className="py-10" />
               ) : results.length === 0 ? (
                 <div className="px-4 py-12 text-center text-sm text-gray-400">No login matches “{q.trim()}”.</div>
               ) : (

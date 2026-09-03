@@ -1581,6 +1581,13 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	ran := 0
 	// Per-source, for platforms whose tables are not the same kind of thing.
 	roleKPI := map[string]map[string]int64{}
+	/* Open Web's share of `removed`, per window, so the live figure can be swapped
+	   in for it — see openWebLiveRemoved. Attributed BY TABLE and not by role: the
+	   role is inferred from the presence of an InfringingDomain column, which the
+	   mobile-apps table also has, and attributing by it put Open Web's 10,263
+	   removals onto a Mobile Apps page whose identified count was 0. */
+	var openWebETLNow, openWebETLPrev int64
+	sawOpenWebTable := false
 	roleDaily := map[string]map[string]map[string]int64{}
 	roleLabels := map[string]string{}
 	// The enforcement action each side records, by role — see
@@ -1659,10 +1666,18 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 				if k == "removalPct" {
 					continue
 				}
-				kpi[k] += numOf(v)
+				/* Not all of these add up. A distinct count of a dimension the
+				   tables SHARE — totalAssets — merges by max, because the same
+				   title appears in every table and summing counts the tables.
+				   See reportdistinct.go. */
+				mergeKPI(kpi, k, numOf(v))
 				if role != "" {
-					roleKPI[role][k] += numOf(v)
+					mergeKPI(roleKPI[role], k, numOf(v))
 				}
+			}
+			if isOpenWebSportsTable(s.Table) {
+				sawOpenWebTable = true
+				openWebETLNow += numOf(pk["removed"])
 			}
 			/* This source's own share, kept before it is added into the total.
 			   Identical channel names merge, which is what folds the linking and
@@ -1686,6 +1701,9 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 					continue // derived, or the window itself — not summable
 				}
 				kpiPrev[k] += numOf(v)
+			}
+			if isOpenWebSportsTable(s.Table) {
+				openWebETLPrev += numOf(pp["removed"])
 			}
 		}
 		for _, row := range asRows(part["daily"]) {
@@ -1760,10 +1778,37 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	}
 
 	ident, removed := kpi["identified"], kpi["removed"]
+
+	/* Open Web's removal is the realtime endpoint's, not the ETL's.
+
+	   Everything else on this band is summed exactly as it was. Open Web alone is
+	   swapped, because the ETL keeps only the LATEST capture's delisting flag and
+	   thereby under-reports takedowns it has a record of — 7,066 against 10,263 on
+	   the asset this was measured against. See openWebLiveRemoved for the
+	   mechanism, the window it asks for, and why it fails open.
+
+	   Taken out and added back rather than recomputed: the ETL's share is exactly
+	   roleKPI linking + host, so the swap cannot disturb any other platform's
+	   contribution. `pending` and `removalPct` below are derived from the result,
+	   so both follow without being touched here. */
+	if sawOpenWebTable {
+		if live, ok := openWebLiveRemoved(q["clientId"], q["assetId"], q["from"], q["to"]); ok {
+			removed = max64(0, removed-openWebETLNow+live)
+		}
+	}
+
+	/* The reader named the assets, so the count of titles in scope is how many
+	   they named — exact, and needing no query. Applied after the merge so it
+	   wins over the estimate above. */
+	applyAssetScope(kpi, q)
+
 	kpiOut := map[string]any{}
 	for k, v := range kpi {
 		kpiOut[k] = v
 	}
+	// After the swap, or the band would show the ETL figure beside a rate
+	// computed from the live one.
+	kpiOut["removed"] = removed
 	kpiOut["pending"] = max64(0, ident-removed)
 	pct := 0.0
 	if ident > 0 {
@@ -1780,6 +1825,14 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 			kpiPrevOut[k] = v
 		}
 		pIdent, pRemoved := kpiPrev["identified"], kpiPrev["removed"]
+		// The same swap on the preceding window, so the change arrow compares two
+		// figures of one definition. See isOpenWebSportsTable.
+		if sawOpenWebTable {
+			if live, ok := openWebLiveRemoved(q["clientId"], q["assetId"], prevFrom, prevTo); ok {
+				pRemoved = max64(0, pRemoved-openWebETLPrev+live)
+				kpiPrevOut["removed"] = pRemoved
+			}
+		}
 		kpiPrevOut["pending"] = max64(0, pIdent-pRemoved)
 		pPct := 0.0
 		if pIdent > 0 {

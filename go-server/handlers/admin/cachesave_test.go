@@ -65,7 +65,7 @@ func TestCacheSaveArgCount(t *testing.T) {
 	// Every column the table has must also be written, or a setting saves
 	// silently as its default and the screen shows the change until a reload.
 	for _, col := range []string{"warm_windows", "skip_unchanged", "maxmemory_mb",
-		"warm_calendar", "recheck_minutes"} {
+		"warm_calendar", "recheck_minutes", "drill_minutes"} {
 		if !strings.Contains(stmt, col+"=VALUES("+col+")") {
 			t.Errorf("%s is inserted but not updated — a second save would leave the old value", col)
 		}

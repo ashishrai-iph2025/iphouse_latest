@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import AdminPageHeader from './AdminPageHeader'
 import ManageAccessModal from './ManageAccessModal'
+import ReportLoader from '@/components/shared/ReportLoader'
 
 /*
  * Modals go to document.body, not into the page.
@@ -975,9 +976,7 @@ function ModulePermissionsTab() {
 
               <div className="flex-1 overflow-y-auto p-5">
                 {loadingModules ? (
-                  <div className="flex items-center justify-center py-16">
-                    <span className="w-6 h-6 border-2 border-[#14254A] border-t-transparent rounded-full animate-spin" />
-                  </div>
+                  <ReportLoader size={140} label="Loading modules" className="py-12" />
                 ) : modules.length === 0 ? (
                   <p className="text-center py-12 text-gray-400 text-sm">No modules available.</p>
                 ) : (
@@ -1032,6 +1031,38 @@ interface ActiveSession {
 }
 
 const SESSIONS_PER_PAGE = 15
+
+/*
+How long ago, from a UTC stamp.
+
+last_activity arrives as MySQL writes it — "2026-09-03 14:22:11", no zone. Given
+straight to new Date() that is parsed as LOCAL time, so a reader in IST would see
+every session as five and a half hours old, and one stamped in the last few
+minutes as being in the future. The zone has to be stated before it is parsed.
+
+Relative rather than a clock face, because the question this column answers is
+"is this person still here" — and the table's own subtitle already says the
+window is the last 30 minutes.
+*/
+function sinceUTC(v: string | null | undefined): string {
+  if (!v) return '—'
+  const raw = String(v).trim()
+  // Already carrying a zone (an ISO string) is left alone; a bare SQL stamp is
+  // told it is UTC.
+  const iso = /[Zz]$|[+-]\d{2}:?\d{2}$/.test(raw)
+    ? raw.replace(' ', 'T')
+    : raw.replace(' ', 'T') + 'Z'
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return '—'
+
+  const secs = Math.max(0, Math.round((Date.now() - t) / 1000))
+  if (secs < 45) return 'just now'
+  const mins = Math.round(secs / 60)
+  if (mins < 60) return `${mins} min ago`
+  const hrs = Math.round(mins / 60)
+  if (hrs < 24) return `${hrs} h ago`
+  return new Date(t).toLocaleDateString()
+}
 
 function ActiveSessionsTab() {
   const [sessions, setSessions] = useState<ActiveSession[]>([])
@@ -1176,8 +1207,8 @@ function ActiveSessionsTab() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={9} className="text-center py-12 text-gray-400 text-sm">
-                  <span className="w-5 h-5 border-2 border-[#14254A] border-t-transparent rounded-full animate-spin inline-block" />
+                <tr><td colSpan={9} className="text-center text-gray-400 text-sm">
+                  <ReportLoader size={130} label={null} className="py-10" />
                 </td></tr>
               ) : paginated.length === 0 ? (
                 <tr><td colSpan={9} className="text-center py-12 text-gray-400 text-sm">
@@ -1206,7 +1237,8 @@ function ActiveSessionsTab() {
                     <td className="px-4 py-3 text-xs text-gray-500 font-mono">{s.username}</td>
                     <td className="px-4 py-3 text-xs text-gray-600">{s.client}</td>
                     <td className="px-4 py-3 text-xs text-gray-500 font-mono">{s.ip_address || '—'}</td>
-                    <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{s.last_activity}</td>
+                    <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap"
+                      title={s.last_activity || ''}>{sinceUTC(s.last_activity)}</td>
                     <td className="px-4 py-3">
                       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold"
                         style={{ background: '#0078D415', color: '#0078D4' }}>

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import AdminModal from './AdminModal'
 import { CONFIG_MODULES } from '@/lib/configModules'
+import ReportLoader from '@/components/shared/ReportLoader'
 
 type Role = 'client' | 'admin' | 'superadmin'
 
@@ -182,9 +183,7 @@ export default function ManageAccessModal({
                 </span>
               </div>
               {loading ? (
-                <div className="flex items-center justify-center py-10">
-                  <span className="w-6 h-6 border-2 border-[#14254A] border-t-transparent rounded-full animate-spin" />
-                </div>
+                <ReportLoader size={130} label="Loading access" className="py-8" />
               ) : !personId ? (
                 <p className="text-xs text-gray-400 text-center py-6">Unable to resolve this admin's access record.</p>
               ) : (

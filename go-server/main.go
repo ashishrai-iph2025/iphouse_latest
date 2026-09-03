@@ -377,6 +377,16 @@ func main() {
 	mux.Handle("GET /api/reports/spec-check", adminAuth(handlers.ReportsSpecCheck))
 	mux.Handle("GET /api/reports/options", auth(handlers.ReportsOptions))
 	mux.Handle("GET /api/reports/data", auth(handlers.ReportsData))
+	/* The landing page's figures, passed through from reports_api's own
+	   /v1/overview/{dataset} — which already defaults to the last seven days
+	   against the seven before. Outside /v1/sports over there on purpose; see
+	   handlers/reportsoverview.go. */
+	mux.Handle("GET /api/reports/overview", auth(handlers.ReportsOverview))
+	/* The client's title list, for the programme calendar on the landing page.
+	   Passed through from reports_api's /v1/masters/assets, which carries the
+	   StartDate/EndDate/ReleaseDate the calendar places rows by; see
+	   handlers/reportsassets.go. */
+	mux.Handle("GET /api/reports/assets", auth(handlers.ReportsAssets))
 	// The chart shapes this login has kept for itself. A reading preference, so
 	// it is scoped to the caller's own login and needs no admin grant beyond the
 	// Reports module the handlers already check.

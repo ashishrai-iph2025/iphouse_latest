@@ -17,11 +17,22 @@ export default function ImpersonationBanner() {
   async function exit() {
     setExiting(true)
     try {
-      const res = await fetch('/api/admin/impersonate/exit', { method: 'POST', credentials: 'include' })
-      const d = await res.json()
-      if (d.success) { window.location.href = '/admin/home'; return }
-    } catch { /* ignore */ }
-    // Fall back to a fresh admin landing even if the response was odd.
+      await fetch('/api/admin/impersonate/exit', { method: 'POST', credentials: 'include' })
+    } catch { /* ignore — the redirect below still lands on a fresh admin page */ }
+
+    /* End the CLIENT'S session in this tab, not just the cookie.
+       The nav grants are cached in sessionStorage per login and sessionStorage
+       survives a location change, so leaving them behind meant the next visit to
+       a client portal could paint from a previous visit's cache before the API
+       answered — including a cached "no API access" from a minute when the
+       upstream was rate-limited, which then reads as a permissions error. */
+    try {
+      const { clearModuleAccessCache } = await import('@/lib/moduleAccess')
+      clearModuleAccessCache()
+    } catch { /* storage unavailable */ }
+
+    // A full load, not a route change: it re-reads the restored admin cookie and
+    // drops every provider that was holding the client's data.
     window.location.href = '/admin/home'
   }
 

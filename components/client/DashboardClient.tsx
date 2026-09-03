@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import ReportLoader from '@/components/shared/ReportLoader'
 
 interface Module {
   moduleId:   number
@@ -207,9 +208,8 @@ export default function DashboardClient({ userName, modules }: Props) {
         {/* PowerBI embed area */}
         <div className="flex-1 min-w-0 bg-[#14254A] rounded-2xl overflow-hidden relative">
           {loadingEmbed && (
-            <div className="absolute inset-0 bg-white/90 flex flex-col items-center justify-center z-10 gap-3">
-              <div className="w-9 h-9 border-[3px] border-gray-200 border-t-[#FC934C] rounded-full animate-spin" />
-              <p className="text-sm font-semibold text-gray-500">Loading Dashboard…</p>
+            <div className="absolute inset-0 bg-white/90 flex items-center justify-center z-10">
+              <ReportLoader size={165} label="Loading dashboard" />
             </div>
           )}
           {!loadingEmbed && embedError && (

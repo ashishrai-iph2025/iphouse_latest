@@ -4,7 +4,6 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { usePathname } from '@/lib/router'
 import { signOut, useSession } from '@/lib/auth-client'
-import { LoadingProvider } from '@/lib/LoadingContext'
 import { ThemeProvider, useTheme } from '@/lib/ThemeContext'
 import { ThemeCustomizerProvider } from '@/lib/ThemeCustomizerContext'
 import ThemeCustomizer from '@/components/ui/ThemeCustomizer'
@@ -71,9 +70,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
   return (
     <ThemeProvider>
     <ThemeCustomizerProvider>
-      <LoadingProvider>
-        <AdminShellInner>{children}</AdminShellInner>
-      </LoadingProvider>
+      <AdminShellInner>{children}</AdminShellInner>
     </ThemeCustomizerProvider>
     </ThemeProvider>
   )

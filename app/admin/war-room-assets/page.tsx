@@ -9,6 +9,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import BackToConfiguration from '@/components/admin/BackToConfiguration'
+import ReportLoader from '@/components/shared/ReportLoader'
 
 interface ClientRow {
   userId: number
@@ -142,9 +143,7 @@ export default function WarRoomAssetsPage() {
         </div>
 
         {loading ? (
-          <div className="flex justify-center py-16">
-            <div className="w-8 h-8 border-4 border-gray-100 border-t-[#14254A] rounded-full animate-spin" />
-          </div>
+          <ReportLoader size={150} label="Loading assets" className="py-16" />
         ) : error ? (
           <div className="text-center py-12 text-red-500 text-sm">{error}</div>
         ) : (

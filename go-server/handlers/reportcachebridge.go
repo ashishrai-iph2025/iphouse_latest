@@ -120,6 +120,17 @@ func cachedPlatformReport(p platformDef, q map[string]string, bg, force bool) ma
 		}
 	}
 
+	/* A reader wanted this and it was not there. Recorded with its scope, so the
+	   admin screen can say WHICH windows are being missed rather than only that
+	   some are — see reportcache.NoteMiss.
+
+	   Live plain scopes only: those are the ones a pass could have had ready.
+	   A drill-down is built on demand by design, and a miss on the pass's own
+	   read is the pass finding its work undone, which is the job. */
+	if cacheable && !drill && !bg && !force && c.Enabled() {
+		c.NoteMiss(p.Key, q["clientId"], q["from"], q["to"])
+	}
+
 	started := time.Now()
 	out := runPlatform(p, q, bg)
 
@@ -366,6 +377,30 @@ func warmOne(ctx context.Context, platform, clientID, from, to string, force boo
 		return nil, fmt.Errorf("platform %q is not enabled", platform)
 	}
 	q := map[string]string{"clientId": clientID, "from": from, "to": to}
+	/*
+		The SAME clamp the live endpoint applies, and applied here for the same
+		reason: before the key is built.
+
+		A sports report reads only inside its configured period, so /reports/data
+		clamps the requested window and then caches under the clamped dates — see
+		reports.go. This path did not clamp at all, so a pass asking for "the last
+		90 days" on a platform whose period starts inside that range wrote an entry
+		keyed by 90 raw days, while the reader who opens that very report is keyed
+		by the clamped window. The two keys never met.
+
+		That is the worse half of a plain miss. The pass still spent the warehouse
+		time — eighteen aggregates a report, every client, every pass — and
+		produced an entry that nothing could ever read, so the warmer looked like
+		it was working, the admin table filled up with rows, and every reader still
+		paid full price.
+
+		Idempotent, which is what lets it sit on both paths without either having
+		to know about the other: a window already inside the period comes back
+		unchanged.
+	*/
+	if period, governed := sportsPeriodFor(p, clientID); governed {
+		clampToSportsPeriod(q, period)
+	}
 	out := cachedPlatformReport(p, q, true, force)
 	/* A report that came back not-ok is NOT cached — see cachedPlatformReport —
 	   so the client simply never appears in the admin table, and previously it
@@ -432,6 +467,22 @@ func probeFreshness(ctx context.Context, platform, clientID, from, to string) (s
 	p, ok := platformByKey(platform)
 	if !ok {
 		return "", false
+	}
+	/* Clamped like the build is, so the question is asked about the window the
+	   report actually covers.
+
+	   Unclamped, the background pass probed a range wider than the report it was
+	   deciding about — so a row landing outside the sports period moved the mark
+	   and forced a rebuild of a report that could not contain it. Wasted work
+	   rather than a wrong answer, but it made "only clients whose data changed
+	   are rebuilt" quietly untrue for every sports client.
+
+	   On the read path this is already a no-op: the reader's scope arrived
+	   clamped. */
+	if period, governed := sportsPeriodFor(p, clientID); governed {
+		w := map[string]string{"from": from, "to": to}
+		clampToSportsPeriod(w, period)
+		from, to = w["from"], w["to"]
 	}
 	specs, _ := specsForPlatform(p)
 	if len(specs) == 0 {

@@ -2,10 +2,18 @@ package markscan
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
+	"net"
 	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +22,44 @@ import (
 
 var httpClient = &http.Client{
 	Timeout: 90 * time.Second,
+}
+
+// cleanTransportError converts a low-level HTTP transport failure into an error
+// that is safe to surface to end users.
+//
+// net/http wraps transport failures in a *url.Error whose text embeds the full
+// request URL, e.g.:
+//
+//	Post "https://api.markscan.co.in/Internet/Paged": context deadline exceeded
+//	(Client.Timeout exceeded while awaiting headers)
+//
+// Returning that verbatim leaks the upstream API endpoint — which this project
+// must never expose to clients. The failure is logged server-side (with the URL
+// stripped) so operators can still diagnose it, and a generic, endpoint-free
+// message is handed back to the caller for display.
+func cleanTransportError(op string, err error) error {
+	if err == nil {
+		return nil
+	}
+	log.Printf("[markscan] %s transport error: %s", op, safeCause(err))
+
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+		return errors.New("The service took too long to respond. Please try again in a moment.")
+	}
+	return errors.New("The service is temporarily unavailable. Please try again shortly.")
+}
+
+// safeCause returns the reason for a transport error with any embedded request
+// URL removed, so the upstream endpoint never appears in logs either. A
+// *url.Error's inner Err holds the cause (e.g. "context deadline exceeded")
+// without the URL that the wrapper's own Error() string would include.
+func safeCause(err error) string {
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
+		return ue.Err.Error()
+	}
+	return err.Error()
 }
 
 // ── In-memory API token cache ─────────────────────────────────────────────────
@@ -45,16 +91,46 @@ func SetCachedToken(userID int64, token string) {
 
 // ── Login ─────────────────────────────────────────────────────────────────────
 
+/*
+RateLimitedError is Markscan answering 429 — it rate-limits logins PER IP
+("Rate limit exceeded (LoginIp). Retry after 144s.").
+
+It is a distinct type because it is the one login failure that must never be
+retried: every extra attempt is another request against the same bucket, so
+retrying a 429 is what keeps the lockout alive rather than what recovers from
+it. RetryAfter carries the service's own answer for how long to stay away.
+*/
+type RateLimitedError struct {
+	RetryAfter time.Duration
+	Body       string
+}
+
+func (e *RateLimitedError) Error() string {
+	return fmt.Sprintf("markscan login rate-limited, retry after %s: %s", e.RetryAfter, e.Body)
+}
+
+// retryAfterRe reads the seconds out of the service's own message, which carries
+// the figure in prose rather than in a Retry-After header.
+var retryAfterRe = regexp.MustCompile(`(?i)retry after (\d+)\s*s`)
+
 // Login authenticates against the Markscan API. The API occasionally rejects a
 // valid login transiently (observed intermittent 400s with credentials that
 // succeed moments later) — and a missing token locks the whole session to
 // Dashboard-only — so failed attempts are retried before giving up.
+//
+// A 429 is the exception and returns IMMEDIATELY: the limit is counted per IP,
+// so a retry cannot succeed and only pushes the window further out. See
+// RateLimitedError.
 func Login(apiUsername, apiPassword string) (string, error) {
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
 		token, err := loginOnce(apiUsername, apiPassword)
 		if err == nil {
 			return token, nil
+		}
+		var rl *RateLimitedError
+		if errors.As(err, &rl) {
+			return "", err
 		}
 		lastErr = err
 		if attempt < 3 {
@@ -72,7 +148,7 @@ func loginOnce(apiUsername, apiPassword string) (string, error) {
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", cleanTransportError("login", err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -80,6 +156,21 @@ func loginOnce(apiUsername, apiPassword string) (string, error) {
 		snippet := string(raw)
 		if len(snippet) > 200 {
 			snippet = snippet[:200]
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			// The window, from the Retry-After header if it is sent and from the
+			// message body if it is not — this service states it in prose.
+			wait := 120 * time.Second
+			if h := strings.TrimSpace(resp.Header.Get("Retry-After")); h != "" {
+				if n, err := strconv.Atoi(h); err == nil && n > 0 {
+					wait = time.Duration(n) * time.Second
+				}
+			} else if m := retryAfterRe.FindStringSubmatch(snippet); m != nil {
+				if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+					wait = time.Duration(n) * time.Second
+				}
+			}
+			return "", &RateLimitedError{RetryAfter: wait, Body: snippet}
 		}
 		return "", fmt.Errorf("markscan login %d: %s", resp.StatusCode, snippet)
 	}
@@ -188,7 +279,7 @@ func GetDownloadStatus(token string) (any, error) {
 	req.Header.Set("Accept", "application/json")
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, cleanTransportError("GetDownloadStatus", err)
 	}
 	defer resp.Body.Close()
 	var data any
@@ -216,7 +307,7 @@ func GetDownloadUrl(token, downloadID string) (string, error) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", cleanTransportError("GetDownloadUrl", err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -232,7 +323,7 @@ func GetAllPlatforms(token string) ([]any, error) {
 	req.Header.Set("Accept", "application/json")
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, cleanTransportError("GetAllPlatforms", err)
 	}
 	defer resp.Body.Close()
 	var data any
@@ -248,7 +339,7 @@ func GetAllAssets(token string) ([]any, error) {
 	req.Header.Set("Accept", "application/json")
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, cleanTransportError("GetAllAssets", err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -265,7 +356,7 @@ func GetAllWarRoomAssets(token string) ([]any, error) {
 	req.Header.Set("Accept", "application/json")
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, cleanTransportError("GetAllWarRoomAssets", err)
 	}
 	defer resp.Body.Close()
 	var data any
@@ -288,7 +379,7 @@ func InfringementHistory(token string) (any, error) {
 	req.Header.Set("Accept", "application/json")
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, cleanTransportError("InfringementHistory", err)
 	}
 	defer resp.Body.Close()
 	var data any
@@ -361,7 +452,7 @@ func postRaw(token, url string, payload any) (int, any, error) {
 	req.Header.Set("Accept", "application/json")
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, cleanTransportError("request", err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)

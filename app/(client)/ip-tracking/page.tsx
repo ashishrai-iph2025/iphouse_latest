@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import SearchableSelect from '@/components/ui/SearchableSelect'
 import DatePicker from '@/components/ui/DatePicker'
 import Breadcrumb from '@/components/ui/Breadcrumb'
+import ReportLoader from '@/components/shared/ReportLoader'
 
 interface IPRecord {
   ip?: string; port?: string; country?: string; city?: string; state?: string
@@ -360,10 +361,12 @@ export default function IPTrackingPage() {
 
         {loading && (
           <div className="flex items-center justify-center py-32">
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-card p-10 flex flex-col items-center gap-4 max-w-sm w-full mx-6">
-              <div className="w-14 h-14 rounded-full border-4 border-gray-100 border-t-orange-400 animate-spin" />
-              <p className="font-bold text-[#14254A]">Fetching Records…</p>
-              <p className="text-sm text-gray-400">Please wait while we retrieve the data</p>
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-card px-10 max-w-sm w-full mx-6">
+              <ReportLoader
+                size={165}
+                label="Fetching records"
+                sublabel="Please wait while we retrieve the data"
+              />
             </div>
           </div>
         )}

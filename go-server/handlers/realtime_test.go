@@ -199,9 +199,14 @@ dashboards.* tables, the card the raw mediascan.* ones, which de-duplicate URLs
 the tiles count once per day — so matching the dates never made the figures
 comparable and only made the card re-count on every move of the slicer.
 
-So the window is the client's configured period, whole. These pin that, because
-the symptom of losing it is not an error: it is a smaller number, on the card a
-reader trusts most precisely because it says "live".
+So the window is the client's configured period — up to TODAY, since a season is
+a configured boundary and not a data one and DAZN's runs to December. These pin
+that, because the symptom of losing it is not an error: it is a smaller number,
+on the card a reader trusts most precisely because it says "live".
+
+The fixture below is a FINISHED season, so nothing is clamped and the whole
+period is returned. The clamp itself is
+TestSportsPeriodScopeClampsTheEndToToday.
 */
 func TestSportsPeriodScopeIsTheWholePeriod(t *testing.T) {
 	from, to, ok := sportsPeriodScope(aPeriod())
@@ -209,7 +214,9 @@ func TestSportsPeriodScopeIsTheWholePeriod(t *testing.T) {
 		t.Fatal("an enabled period gave no window")
 	}
 	if from != perStart || to != perEnd {
-		t.Errorf("want the whole period %s..%s, got %s..%s", perStart, perEnd, from, to)
+		t.Errorf("want the whole period %s..%s, got %s..%s — this fixture is a "+
+			"finished season, so the clamp to today must not touch it",
+			perStart, perEnd, from, to)
 	}
 }
 

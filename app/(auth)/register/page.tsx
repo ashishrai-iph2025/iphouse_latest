@@ -1,7 +1,8 @@
-﻿'use client'
+'use client'
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import AuthShell from '@/components/auth/AuthShell'
 
 export default function RegisterPage() {
   const [form, setForm] = useState({
@@ -93,207 +94,127 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ fontFamily: "'Poppins', sans-serif", background: '#f3f6fb' }}>
-
-      {/* Hero */}
-      <section
-        className="text-center text-white px-4"
-        style={{
-          background: "linear-gradient(rgba(20,37,74,.88),rgba(20,37,74,.88)), url('/background2.png') center/cover no-repeat",
-          padding: '60px 16px 120px',
-        }}
-      >
-        <img src="/newlogo.png" alt="IP House" width={160} height={44} className="h-10 w-auto mx-auto mb-4" style={{ filter: 'brightness(0) invert(1)' }} />
-        <h1 className="text-4xl font-bold m-0">User Registration</h1>
-        <p className="mt-2 font-light max-w-2xl mx-auto" style={{ opacity: 0.9 }}>
-          Request secure access to the IP House reporting and analytics platform.
-        </p>
-      </section>
-
-      {/* Page */}
-      <main className="w-full px-5 pb-24 z-10 relative" style={{ maxWidth: 760, margin: '-80px auto 0' }}>
-
-        <div className="bg-white rounded-2xl p-7" style={{ boxShadow: '0 24px 60px rgba(2,18,46,0.12)' }}>
-
-          {/* Back to login */}
-          <div className="mb-4">
-            <Link to="/login"
-              className="inline-flex items-center gap-1.5 text-sm font-medium no-underline transition-colors"
-              style={{ color: '#14254A' }}
-              onMouseEnter={e => (e.currentTarget.style.color = '#FC934C')}
-              onMouseLeave={e => (e.currentTarget.style.color = '#14254A')}
-            >
-              <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
-              Back to Login
-            </Link>
-          </div>
-
-          <h3 className="font-bold text-xl mb-0.5" style={{ color: '#14254A' }}>Registration form</h3>
-          <p className="text-xs mb-5" style={{ color: '#6b7c93' }}>
-            Submit your details. Credentials will be emailed after approval.
+    <AuthShell
+      wide
+      eyebrow="Request access"
+      title={<>Get your team on<br />the <em>platform</em>.</>}
+      lede={<>
+        Tell us who you are and which dashboards you need. Requests are reviewed
+        within 24&ndash;48 hours, and credentials are emailed once approved.
+      </>}
+    >
+      {success ? (
+        <div className="lp-done">
+          <div className="lp-tick">&#10003;</div>
+          <h2>Request submitted</h2>
+          <p className="lp-card-sub">
+            Your registration has been received. We take 24&ndash;48 hours to validate it,
+            and once you are enrolled your login credentials are sent to the email
+            address you gave us.
+          </p>
+          <Link to="/login" className="lp-back">&larr; Back to sign in</Link>
+        </div>
+      ) : (
+        <>
+          <h2>Registration form</h2>
+          <p className="lp-card-sub">
+            Submit your details. Credentials are emailed after approval.
           </p>
 
-          {success ? (
-            <div className="text-center py-8">
-              <div className="text-5xl mb-4">✅</div>
-              <h4 className="font-bold text-lg mb-2" style={{ color: '#14254A' }}>Request Submitted!</h4>
-              <p className="text-sm mb-6" style={{ color: '#6b7c93', maxWidth: 420, margin: '0 auto 24px' }}>
-                Registration has been received. We will take 24–48 hours to validate.
-                Once enrolled, login credentials will be shared to your registered email.
-              </p>
-              <Link to="/login"
-                className="inline-flex items-center gap-1.5 text-sm font-semibold no-underline"
-                style={{ color: '#14254A' }}>
-                ← Back to Login
-              </Link>
+          {error && (
+            <div className="lp-error">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+              {error}
             </div>
-          ) : (
-            <form onSubmit={handleSubmit}>
-
-              {error && (
-                <div className="rounded-xl px-4 py-2.5 text-sm mb-4 border"
-                  style={{ background: '#fef2f2', borderColor: '#fecaca', color: '#b91c1c' }}>
-                  {error}
-                </div>
-              )}
-
-              {/* First & Last Name */}
-              <div className="grid grid-cols-1 gap-3 mb-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
-                <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: '#374151' }}>First Name <span style={{ color: '#ef4444' }}>*</span></label>
-                  <input
-                    autoComplete="off"
-                    type="text"
-                    name="first_name"
-                    placeholder="First Name"
-                    value={form.first_name}
-                    onChange={handleChange}
-                    required
-                    className="w-full px-4 py-2.5 text-sm rounded-xl border focus:outline-none"
-                    style={{ borderColor: '#dce3ee' }}
-                    onFocus={e => (e.target.style.borderColor = '#14254A')}
-                    onBlur={e  => (e.target.style.borderColor = '#dce3ee')}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: '#374151' }}>Last Name <span style={{ color: '#ef4444' }}>*</span></label>
-                  <input
-                    autoComplete="off"
-                    type="text"
-                    name="last_name"
-                    placeholder="Last Name"
-                    value={form.last_name}
-                    onChange={handleChange}
-                    required
-                    className="w-full px-4 py-2.5 text-sm rounded-xl border focus:outline-none"
-                    style={{ borderColor: '#dce3ee' }}
-                    onFocus={e => (e.target.style.borderColor = '#14254A')}
-                    onBlur={e  => (e.target.style.borderColor = '#dce3ee')}
-                  />
-                </div>
-              </div>
-
-              {/* Email & Designation */}
-              <div className="grid grid-cols-1 gap-3 mb-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
-                <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: '#374151' }}>Email Address <span style={{ color: '#ef4444' }}>*</span></label>
-                  <input
-                    autoComplete="off"
-                    type="email"
-                    name="email"
-                    placeholder="you@example.com"
-                    value={form.email}
-                    onChange={handleChange}
-                    onBlur={e => { void checkEmail(e.target.value) }}
-                    required
-                    className="w-full px-4 py-2.5 text-sm rounded-xl border focus:outline-none"
-                    style={{ borderColor:
-                      mailState === 'account' || mailState === 'pending' ? '#ef4444'
-                      : mailState === 'available' ? '#16A34A' : '#dce3ee' }}
-                  />
-
-                  {/* The answer under the field, where the reader is looking,
-                      and each state gets the action that resolves it — a
-                      message saying only "cannot register" leaves someone with
-                      an account no idea what to do instead. */}
-                  <div className="text-[11px] mt-1 leading-snug" style={{ minHeight: 15 }}>
-                    {mailState === 'checking' && <span style={{ color: '#6b7c93' }}>Checking…</span>}
-                    {mailState === 'available' && <span style={{ color: '#16A34A' }}>✓ Available</span>}
-                    {mailState === 'account' && (
-                      <span style={{ color: '#b91c1c' }}>
-                        You already have an account.{' '}
-                        <Link to="/login" style={{ color: '#14254A', fontWeight: 600 }}>Sign in</Link>
-                        {' · '}
-                        <Link to="/forgot-password" style={{ color: '#14254A', fontWeight: 600 }}>Forgot password</Link>
-                      </span>
-                    )}
-                    {mailState === 'pending' && (
-                      <span style={{ color: '#b45309' }}>
-                        A request for this email is already awaiting review — you will be emailed once it is approved.
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: '#374151' }}>Designation</label>
-                  <input
-                    autoComplete="off"
-                    type="text"
-                    name="designation"
-                    placeholder="Your role or title"
-                    value={form.designation}
-                    onChange={handleChange}
-                    className="w-full px-4 py-2.5 text-sm rounded-xl border focus:outline-none"
-                    style={{ borderColor: '#dce3ee' }}
-                    onFocus={e => (e.target.style.borderColor = '#14254A')}
-                    onBlur={e  => (e.target.style.borderColor = '#dce3ee')}
-                  />
-                </div>
-              </div>
-
-              {/* Remarks */}
-              <div className="mb-4">
-                <label className="block text-xs font-medium mb-1" style={{ color: '#374151' }}>Remarks</label>
-                <textarea
-                  name="remarks"
-                  rows={4}
-                  placeholder="Please mention Dashboard/Client name for which access is required."
-                  value={form.remarks}
-                  onChange={handleChange}
-                  className="w-full px-4 py-2.5 text-sm rounded-xl border focus:outline-none resize-none"
-                  style={{ borderColor: '#dce3ee' }}
-                  onFocus={e => (e.target.style.borderColor = '#14254A')}
-                  onBlur={e  => (e.target.style.borderColor = '#dce3ee')}
-                />
-              </div>
-
-              {/* Blocked only on the two answers that cannot succeed. 'unknown'
-                  and 'idle' stay submittable, so a failed check never stops
-                  someone registering. */}
-              <button
-                type="submit"
-                disabled={loading || mailState === 'checking' || mailState === 'account' || mailState === 'pending'}
-                className="w-full py-3 rounded-xl font-semibold text-sm transition-all disabled:opacity-60"
-                style={{
-                  background: 'linear-gradient(135deg,#FFC82B,#FC934C)',
-                  border: 'none',
-                  color: '#14254A',
-                  cursor: loading || mailState === 'account' || mailState === 'pending' ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {loading ? 'Submitting…'
-                  : mailState === 'checking' ? 'Checking…'
-                  : 'Submit Registration'}
-              </button>
-
-            </form>
           )}
-        </div>
-      </main>
 
-      <footer className="text-center py-4 text-xs mt-auto" style={{ color: '#555' }}>
-        © {new Date().getFullYear()} <strong>IP House</strong>. Confidential &amp; proprietary.
-      </footer>
-    </div>
+          <form onSubmit={handleSubmit} className="lp-form">
+            <div className="lp-row">
+              <div>
+                <label className="lp-label">First name <span className="lp-req">*</span></label>
+                <input autoComplete="off" type="text" name="first_name" placeholder="First name"
+                  value={form.first_name} onChange={handleChange} required
+                  className="lp-input lp-input-plain" />
+              </div>
+              <div>
+                <label className="lp-label">Last name <span className="lp-req">*</span></label>
+                <input autoComplete="off" type="text" name="last_name" placeholder="Last name"
+                  value={form.last_name} onChange={handleChange} required
+                  className="lp-input lp-input-plain" />
+              </div>
+            </div>
+
+            <div className="lp-row">
+              <div>
+                <label className="lp-label">Email address <span className="lp-req">*</span></label>
+                <input autoComplete="off" type="email" name="email" placeholder="you@example.com"
+                  value={form.email} onChange={handleChange}
+                  onBlur={e => { void checkEmail(e.target.value) }} required
+                  className="lp-input lp-input-plain"
+                  style={{ borderColor:
+                    mailState === 'account' || mailState === 'pending' ? '#e05252'
+                    : mailState === 'available' ? '#16A34A' : undefined }} />
+
+                {/* The answer under the field, where the reader is looking, and
+                    each state gets the action that resolves it — a message that
+                    says only "cannot register" leaves somebody who already has an
+                    account with no idea what to do instead. */}
+                <div className="lp-hint">
+                  {mailState === 'checking' && <span>Checking&hellip;</span>}
+                  {mailState === 'available' && <span className="lp-hint-ok">&#10003; Available</span>}
+                  {mailState === 'account' && (
+                    <span className="lp-hint-bad">
+                      You already have an account.{' '}
+                      <Link to="/login">Sign in</Link>
+                      {' · '}
+                      <Link to="/forgot-password">Forgot password</Link>
+                    </span>
+                  )}
+                  {mailState === 'pending' && (
+                    <span className="lp-hint-wait">
+                      A request for this email is already awaiting review &mdash; you will be
+                      emailed once it is approved.
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <label className="lp-label">Designation</label>
+                <input autoComplete="off" type="text" name="designation" placeholder="Your role or title"
+                  value={form.designation} onChange={handleChange}
+                  className="lp-input lp-input-plain" />
+              </div>
+            </div>
+
+            <div>
+              <label className="lp-label">Remarks</label>
+              <textarea name="remarks" rows={4}
+                placeholder="Please mention the dashboard or client name you need access to."
+                value={form.remarks} onChange={handleChange}
+                className="lp-input lp-input-plain lp-textarea" />
+            </div>
+
+            {/* Blocked only on the two answers that cannot succeed. 'unknown' and
+                'idle' stay submittable, so a failed check never stops a
+                legitimate sign-up. */}
+            <button type="submit"
+              disabled={loading || mailState === 'checking' || mailState === 'account' || mailState === 'pending'}
+              className="lp-btn"
+              style={{
+                opacity: loading || mailState === 'account' || mailState === 'pending' ? 0.62 : 1,
+                cursor: loading || mailState === 'account' || mailState === 'pending' ? 'not-allowed' : 'pointer',
+              }}>
+              {loading ? <><span className="lp-spin" /> Submitting&hellip;</>
+                : mailState === 'checking' ? 'Checking&hellip;'
+                : 'Submit registration'}
+            </button>
+          </form>
+
+          <p className="lp-alt">
+            Already have an account? <Link to="/login">Sign in</Link>
+          </p>
+        </>
+      )}
+    </AuthShell>
   )
 }

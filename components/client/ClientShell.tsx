@@ -12,7 +12,6 @@ import { MasterDataProvider } from '@/lib/masterDataContext'
 import { ModuleAccessProvider } from '@/lib/moduleAccess'
 import { ThemeProvider } from '@/lib/ThemeContext'
 import { ThemeCustomizerProvider, useCustomizer } from '@/lib/ThemeCustomizerContext'
-import { LoadingProvider } from '@/lib/LoadingContext'
 import { isSidebarLayout } from '@/lib/navItems'
 
 interface Props {
@@ -28,6 +27,14 @@ dashboards with their own rails and grids, and the wrapper leaves a band of
 empty page on either side while their charts squeeze into the middle. They set
 their own padding, so bypassing the wrapper costs nothing.
 */
+/* /welcome is NOT here, and was.
+
+   It opted out on the reasoning that a calendar is a dashboard rather than a
+   column of text — true of the calendar, and it took the whole page with it. On
+   a wide monitor the panels then ran the full width of the glass with the
+   figures strung out across it, which is the band-of-empty-page problem above
+   in reverse: not too little room, too much. Inside the measure it reads as one
+   page instead of a wall. */
 const FULL_WIDTH_PAGES = ['/dashboard', '/war-room', '/reports']
 
 function Shell({ children }: { children: React.ReactNode }) {
@@ -112,14 +119,12 @@ export default function ClientShell({ children }: Props) {
   return (
     <ThemeProvider>
     <ThemeCustomizerProvider>
-    <LoadingProvider>
     <MasterDataProvider>
     <ModuleAccessProvider>
       <IdleTimeoutGuard />
       <Shell>{children}</Shell>
     </ModuleAccessProvider>
     </MasterDataProvider>
-    </LoadingProvider>
     </ThemeCustomizerProvider>
     </ThemeProvider>
   )

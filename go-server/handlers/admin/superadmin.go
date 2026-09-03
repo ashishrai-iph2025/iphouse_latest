@@ -358,12 +358,57 @@ this reads, because nothing ever did.
 	over a query that never ran.
 */
 func ActiveSessions(w http.ResponseWriter, r *http.Request) {
+	/*
+	   THE NAMES HERE ARE THE TABLE'S NAMES, and that is the whole fix.
+
+	   The panel showed the right NUMBER of sessions and nothing in any column.
+	   It reads full_name, username, client, last_activity, ip_address,
+	   action_count and force_logout_at; this query returned login_username,
+	   last_seen_at, name and role. Only loginId matched, so every cell rendered
+	   an empty string or its own em dash, and the count — which comes from the
+	   array's length — was the one thing that looked healthy.
+
+	   force_logout_at was the costliest omission. The screen decides everything
+	   from it: whether a row reads Active or Force-logged out, whether it offers
+	   Force Logout or Restore Access, and the Force-Logged Out tile. Absent, it
+	   is undefined for every row, so a forced-out session still showed as Active
+	   with a Force Logout button, the restore path was unreachable from the UI,
+	   and that tile could only ever read 0.
+
+	   PERSON AND COMPANY ARE DIFFERENT COLUMNS. dcp_user.name is the COMPANY —
+	   it is what the impersonation banner prints as "viewing the portal as" —
+	   while the human's name is on the login row. The old COALESCE preferred the
+	   company, so the User column would have shown "DAZN Limited" as a person
+	   had it been bound to anything at all. The person is now full_name and the
+	   company is client.
+	*/
 	rows, err := db.Query(`
-		SELECT l.loginId, l.login_username, l.last_seen_at,
-		       COALESCE(NULLIF(TRIM(u.name), ''),
-		                NULLIF(TRIM(CONCAT(IFNULL(l.first_name,''),' ',IFNULL(l.last_name,''))), ''),
-		                l.login_username) AS name,
-		       COALESCE(u.role, 0) AS role
+		SELECT l.loginId,
+		       COALESCE(l.userId, 0) AS userId,
+		       l.login_username AS username,
+		       COALESCE(NULLIF(TRIM(CONCAT(IFNULL(l.first_name,''),' ',IFNULL(l.last_name,''))), ''),
+		                l.login_username) AS full_name,
+		       COALESCE(NULLIF(TRIM(u.name), ''), '') AS client,
+		       l.last_seen_at AS last_activity,
+		       l.force_logout_at,
+		       COALESCE(u.role, 0) AS role,
+		       /* The IP and the action count come from the activity log, which is
+		          the only place either is recorded — dcp_user_login carries
+		          neither. Its user_id column holds a LOGIN id despite the name:
+		          activity.Log is called with claims.LoginID throughout. Getting
+		          that wrong would join staff rows onto client rows and quietly
+		          attribute one person's requests to another.
+
+		          Correlated subqueries rather than a GROUP BY: this runs over the
+		          handful of logins seen in the last half hour, both are indexed on
+		          user_id, and a join with an aggregate would have to be written
+		          not to drop the sessions that have logged nothing yet. */
+		       (SELECT a.ip_address FROM user_activity_log a
+		         WHERE a.user_id = l.loginId AND a.ip_address <> ''
+		         ORDER BY a.created_at DESC LIMIT 1) AS ip_address,
+		       (SELECT COUNT(*) FROM user_activity_log a
+		         WHERE a.user_id = l.loginId
+		           AND a.created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 30 MINUTE)) AS action_count
 		FROM dcp_user_login l
 		LEFT JOIN dcp_user u ON u.userId = l.userId AND u.deleted = 0
 		WHERE l.is_active = 1

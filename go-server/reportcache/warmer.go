@@ -104,6 +104,16 @@ actually spend it; the ceiling is the lever, this is the follower.
 */
 const MaxWarmConcurrency = 16
 
+/*
+warmNapCap is the longest the wait between passes sleeps before re-reading the
+interval — so a saved change takes effect within this, not at the next restart.
+
+A var rather than a const so the test can shrink it. Waiting half a minute to
+observe a re-read would make the test for it slow enough that somebody would
+delete it, and the behaviour it guards is one that already shipped broken once.
+*/
+var warmNapCap = 30 * time.Second
+
 // ClampWarmConcurrency brings a requested concurrency into what will actually
 // run. Zero and below mean "unset", and are left for the caller to default.
 func ClampWarmConcurrency(n int) int {
@@ -229,14 +239,54 @@ func (w *Warmer) Start() {
 		}
 		for {
 			w.RunOnce(context.Background())
-			select {
-			case <-time.After(interval):
-			case <-stop:
+			if !w.waitForNextPass(stop) {
 				return
 			}
 		}
 	}()
 	log.Printf("[report-warmer] started — every %s", interval)
+}
+
+/*
+waitForNextPass sleeps until the next pass is due, RE-READING the interval as it
+goes. Returns false when the warmer has been stopped.
+
+The interval used to be read once, into a local, when the loop started — and
+Configure writes w.interval, so saving a new one changed the number the screen
+reported and not the schedule the loop kept. Start() is a no-op while running, so
+nothing re-entered this function either: an operator moving the pass from 30
+minutes to 5 saw "every 5 minutes" on the settings page and got a pass every 30
+until the next restart, with no way to tell from the outside which one was real.
+
+Bounded naps rather than a signal channel. Waking every half minute to compare
+elapsed against the current interval is a handful of wakeups an hour and needs no
+coordination with Configure — and a Configure that has to remember to notify is
+the same class of bug as the one this replaced. Thirty seconds of granularity on
+a schedule measured in minutes is not worth a channel to remove.
+*/
+func (w *Warmer) waitForNextPass(stop <-chan struct{}) bool {
+	// The clock starts when the previous pass FINISHED, so a pass that ran long
+	// does not immediately trigger the next one.
+	done := time.Now()
+	for {
+		w.mu.Lock()
+		interval := w.interval
+		w.mu.Unlock()
+
+		left := interval - time.Since(done)
+		if left <= 0 {
+			return true
+		}
+		nap := left
+		if nap > warmNapCap {
+			nap = warmNapCap
+		}
+		select {
+		case <-time.After(nap):
+		case <-stop:
+			return false
+		}
+	}
 }
 
 func (w *Warmer) Stop() {

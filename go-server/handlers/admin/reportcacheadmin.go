@@ -51,6 +51,7 @@ func ensureRedisCfgSchema() {
 			  warm_calendar TINYINT(1)  NOT NULL DEFAULT 1,
 			  skip_unchanged TINYINT(1) NOT NULL DEFAULT 1,
 			  recheck_minutes INT       NOT NULL DEFAULT 10,
+			  drill_minutes INT         NOT NULL DEFAULT 10,
 			  updated_by   VARCHAR(191) NOT NULL DEFAULT '',
 			  updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`); err != nil {
@@ -67,6 +68,7 @@ func ensureRedisCfgSchema() {
 			"ADD COLUMN skip_unchanged TINYINT(1) NOT NULL DEFAULT 1",
 			"ADD COLUMN warm_calendar TINYINT(1) NOT NULL DEFAULT 1",
 			"ADD COLUMN recheck_minutes INT NOT NULL DEFAULT 10",
+			"ADD COLUMN drill_minutes INT NOT NULL DEFAULT 10",
 		} {
 			if _, _, err := db.Exec("ALTER TABLE " + redisCfgTable + " " + alter); err != nil {
 				if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
@@ -107,8 +109,16 @@ type cacheSettings struct {
 	TTLMinutes  int
 	WarmEnabled bool
 	WarmMinutes int
-	WarmDays    int
-	WarmConc    int
+	/*
+		SUPERSEDED by WarmWindows and kept only so an existing row round-trips.
+
+		It was the single window a pass covered, back when there was one. Nothing
+		reads it any more — Configure takes WarmWindows — so do not add a control
+		for it: a field on the screen that changes no behaviour is worse than an
+		absent one.
+	*/
+	WarmDays int
+	WarmConc int
 	// 0 means "leave whatever Redis was started with alone".
 	MaxMemoryMB int
 	// The date windows precomputed, in days. Several, because a reader who opens
@@ -124,6 +134,19 @@ type cacheSettings struct {
 	   the retention above: a report is kept for a day and checked every few
 	   minutes. 0 turns the check off. */
 	RecheckMinutes int
+	/*
+		How long a DRILL-DOWN lives — a report with a filter applied, which is what
+		every click on a bar produces.
+
+		Separate from the retention above and much shorter, because the two are
+		different bargains: a plain scope is read by everyone all day, a filtered
+		view is usually read once. Its short life is also what makes it exempt from
+		the freshness check, so this value IS the staleness bound for a drill-down.
+
+		0 turns drill-down caching off, and then every click recomputes the whole
+		report — which is what the product did before they were cached at all.
+	*/
+	DrillMinutes int
 }
 
 // loadCacheSettings reads the row, falling back to REDIS_ADDR so an install that
@@ -136,7 +159,7 @@ func loadCacheSettings() cacheSettings {
 	   handlers/reportcachebridge.go. */
 	s := cacheSettings{TTLMinutes: 1440, WarmMinutes: 30, WarmDays: 30, WarmConc: 2,
 		WarmWindows: []int{1, 7, 15, 30, 90}, WarmCalendar: true,
-		SkipUnchanged: true, RecheckMinutes: 10}
+		SkipUnchanged: true, RecheckMinutes: 10, DrillMinutes: 10}
 
 	row, _ := db.QueryOne("SELECT * FROM " + redisCfgTable + " WHERE id = 1 LIMIT 1")
 	if row != nil {
@@ -168,6 +191,9 @@ func loadCacheSettings() cacheSettings {
 		   real choice and must not be quietly replaced by the default the way a
 		   zero interval or TTL is. */
 		s.RecheckMinutes = int(intVal(row["recheck_minutes"]))
+		// Zero is a choice here too — "do not cache drill-downs" — so it is read
+		// as stored rather than replaced by the default.
+		s.DrillMinutes = int(intVal(row["drill_minutes"]))
 	}
 	if s.Addr == "" {
 		s.Addr = strings.TrimSpace(os.Getenv("REDIS_ADDR"))
@@ -203,6 +229,20 @@ func ApplyReportCacheSettings() {
 	// The read-path freshness check — see handlers/reportcachebridge.go. Applied
 	// before the warmer so a save takes effect on the very next report opened.
 	handlers.SetCacheRecheck(time.Duration(s.RecheckMinutes) * time.Minute)
+
+	/* The drill-down life, likewise.
+
+	   This had a setter and no caller: the value was fixed at ten minutes in the
+	   binary, and no configuration reached it. An exported Set- with nothing
+	   calling it reads as a wired setting to anyone auditing the file, which is
+	   how it survived. */
+	handlers.SetDrillTTL(time.Duration(s.DrillMinutes) * time.Minute)
+
+	/* The recorded misses describe the configuration that produced them. Keeping
+	   them across a save would leave an operator who has just widened the warm
+	   windows staring at the misses that made them do it, unable to tell whether
+	   the change worked. */
+	reportcache.Get().ForgetMisses()
 
 	/* Said at startup, because the commonest cache question is "is this report
 	   from the build I just deployed" and the answer is otherwise invisible. */
@@ -240,6 +280,7 @@ func ReportCacheConfig(w http.ResponseWriter, r *http.Request) {
 				"maxMemoryMb": s.MaxMemoryMB,
 				"warmWindows": joinWindows(s.WarmWindows), "skipUnchanged": s.SkipUnchanged,
 				"warmCalendar": s.WarmCalendar, "recheckMinutes": s.RecheckMinutes,
+				"drillMinutes": s.DrillMinutes,
 			},
 			"connection": map[string]any{
 				"connected": live, "addr": addr, "dbIndex": dbIdx,
@@ -247,6 +288,12 @@ func ReportCacheConfig(w http.ResponseWriter, r *http.Request) {
 			},
 			"stats":  reportcache.Get().Stats(),
 			"warmer": reportcache.GetWarmer().Status(),
+			/* The scopes readers asked for and did not find — see
+			   reportcache.NoteMiss. This is what turns "hit rate 0%" from an alarm
+			   into a diagnosis: the windows on this list against the windows the
+			   pass covers is the whole answer, and the commonest cause is that they
+			   are different. */
+			"misses": namedMisses(r.Context(), reportcache.Get().RecentMisses(12)),
 			// What the last "cache these clients" request did, per client. The
 			// screen needs it to distinguish still-queued from produced-nothing.
 			"onDemand": namedOnDemand(r.Context()),
@@ -295,6 +342,7 @@ func ReportCacheConfig(w http.ResponseWriter, r *http.Request) {
 		SkipUnchanged  bool   `json:"skipUnchanged"`
 		WarmCalendar   bool   `json:"warmCalendar"`
 		RecheckMinutes int    `json:"recheckMinutes"`
+		DrillMinutes   int    `json:"drillMinutes"`
 	}
 	json.NewDecoder(r.Body).Decode(&in)
 
@@ -314,15 +362,16 @@ func ReportCacheConfig(w http.ResponseWriter, r *http.Request) {
 	if _, _, err := db.Exec(`
 		INSERT INTO `+redisCfgTable+`
 		  (id, addr, password, db_index, ttl_minutes, warm_enabled, warm_minutes, warm_days, warm_conc,
-		   maxmemory_mb, warm_windows, skip_unchanged, warm_calendar, recheck_minutes, updated_by)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		   maxmemory_mb, warm_windows, skip_unchanged, warm_calendar, recheck_minutes, drill_minutes,
+		   updated_by)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE addr=VALUES(addr), password=VALUES(password), db_index=VALUES(db_index),
 		  ttl_minutes=VALUES(ttl_minutes), warm_enabled=VALUES(warm_enabled), warm_minutes=VALUES(warm_minutes),
 		  warm_days=VALUES(warm_days), warm_conc=VALUES(warm_conc), maxmemory_mb=VALUES(maxmemory_mb),
 		  warm_windows=VALUES(warm_windows), skip_unchanged=VALUES(skip_unchanged),
 		  warm_calendar=VALUES(warm_calendar), recheck_minutes=VALUES(recheck_minutes),
-		  updated_by=VALUES(updated_by)`,
-		/* Fourteen, matching the fourteen placeholders above. The count is
+		  drill_minutes=VALUES(drill_minutes), updated_by=VALUES(updated_by)`,
+		/* Fifteen, matching the fifteen placeholders above. The count is
 		   checked by database/sql at RUN time, not by the compiler — so a column
 		   added here without its argument builds cleanly and fails only when
 		   someone presses Save. See TestCacheSaveArgCount. */
@@ -333,7 +382,8 @@ func ReportCacheConfig(w http.ResponseWriter, r *http.Request) {
 		   pass never used. */
 		reportcache.ClampWarmConcurrency(in.WarmConc), in.MaxMemoryMB,
 		joinWindows(parseWindows(in.WarmWindows)), boolInt(in.SkipUnchanged),
-		boolInt(in.WarmCalendar), clampRecheck(in.RecheckMinutes), adminName(r)); err != nil {
+		boolInt(in.WarmCalendar), clampRecheck(in.RecheckMinutes),
+		clampDrill(in.DrillMinutes), adminName(r)); err != nil {
 		/* The cause travels with the message. This endpoint is behind the
 		   report-config grant, so the reader is an operator who can act on
 		   "Unknown column" or "Access denied" — and "Could not save the cache
@@ -364,6 +414,54 @@ func ReportCacheConfig(w http.ResponseWriter, r *http.Request) {
 		cancel()
 	}
 	ok(w, map[string]any{"success": true, "connected": live, "error": errText, "memoryNote": memNote})
+}
+
+/*
+namedMisses is the recent-miss list with company names filled in.
+
+Named on the SERVER, like every other client column on this screen, rather than
+by handing the page a directory to join against. The panel already receives
+clientName on each cached-report row and each on-demand row; a list that arrived
+as bare ids would be the only table here that did not, and the page has no map to
+resolve them with.
+
+Names, not the picker's list — the same rule as namedOnDemand. A company retired
+since somebody last opened its report is still the right label on a row about
+that report.
+*/
+func namedMisses(ctx context.Context, ms []reportcache.Miss) []map[string]any {
+	if len(ms) == 0 {
+		return nil
+	}
+	names := lowerKeys(clientNames())
+	unresolved := false
+	for _, m := range ms {
+		if names[strings.ToLower(m.ClientID)] == "" {
+			unresolved = true
+			break
+		}
+	}
+	if unresolved {
+		dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		for id, name := range handlers.CachedClientNames(dctx) {
+			k := strings.ToLower(id)
+			if names[k] == "" && !strings.EqualFold(id, name) {
+				names[k] = name
+			}
+		}
+		cancel()
+	}
+
+	out := make([]map[string]any, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, map[string]any{
+			"platform": m.Platform, "clientId": m.ClientID,
+			"clientName": names[strings.ToLower(m.ClientID)],
+			"from":       m.From, "to": m.To,
+			"count": m.Count, "lastAt": m.LastAt.Format(time.RFC3339),
+		})
+	}
+	return out
 }
 
 /*
@@ -467,6 +565,31 @@ func clampRecheck(m int) int {
 		return 2
 	case m > 720:
 		return 720
+	}
+	return m
+}
+
+/*
+clampDrill keeps the drill-down life inside what it is for.
+
+0 is kept as given — it means "do not cache filtered views", and every click then
+recomputes the report in full.
+
+Above that there is a floor and a ceiling, and both come from what a drill-down
+IS. A minute is shorter than the gesture it exists to serve — click a bar, read
+it, click back — so the entry would expire mid-thought. And because a drill-down
+is never revalidated, this number is also how stale one may get: a day of them
+would be a day of filtered views nothing checks and nothing refreshes, which is
+the retention window's job and not this one's.
+*/
+func clampDrill(m int) int {
+	switch {
+	case m <= 0:
+		return 0
+	case m < 2:
+		return 2
+	case m > 240:
+		return 240
 	}
 	return m
 }
@@ -849,6 +972,8 @@ func ReportCacheSweep(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/admin/report-cache/purge — drop every cached report.
+// Emptying the cache also forgets the recorded misses: every entry is about to
+// be a miss, and keeping the old list would mix the two.
 func ReportCachePurge(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
@@ -857,6 +982,11 @@ func ReportCachePurge(w http.ResponseWriter, r *http.Request) {
 		fail(w, 502, err.Error())
 		return
 	}
+	/* The recorded misses go with the entries. Everything just became a miss, so
+	   a list gathered against the old contents would be read as evidence about
+	   the new ones — and the first thing an operator does after emptying the
+	   cache is watch that list to see what gets asked for. */
+	reportcache.Get().ForgetMisses()
 	log.Printf("[report-cache] purged %d entrie(s) by %s", n, adminName(r))
 	ok(w, map[string]any{"success": true, "removed": n})
 }

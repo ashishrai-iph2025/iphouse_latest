@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams, useRouter } from '@/lib/router'
 import Breadcrumb from '@/components/ui/Breadcrumb'
 import { useMasterData } from '@/lib/masterDataContext'
+import ReportLoader from '@/components/shared/ReportLoader'
 import {
   categorizePlatforms, platformLabel, type PlatformCategoryKey,
 } from '@/lib/platformCategories'
@@ -189,11 +190,12 @@ export default function CategoryResultsPage({ category }: { category: string }) 
       )}
 
       {loading ? (
-        <div className="bg-white rounded-2xl shadow-card border border-gray-100 px-5 py-16 text-center">
-          <span className="inline-block w-6 h-6 border-2 border-[#14254A]/20 border-t-[#14254A] rounded-full animate-spin" />
-          <p className="text-sm text-gray-400 mt-3">
-            Searching {keys.length} platform{keys.length === 1 ? '' : 's'}…
-          </p>
+        <div className="bg-white rounded-2xl shadow-card border border-gray-100 px-5 text-center">
+          <ReportLoader
+            size={150}
+            label="Searching"
+            sublabel={`${keys.length} platform${keys.length === 1 ? '' : 's'}`}
+          />
         </div>
       ) : results.length === 0 ? (
         <div className="bg-white rounded-2xl shadow-card border border-gray-100 px-5 py-12 text-center">

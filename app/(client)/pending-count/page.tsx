@@ -9,6 +9,7 @@ import { useMasterData } from '@/lib/masterDataContext'
 import { platformLabel } from '@/lib/platformCategories'
 import { useTheme } from '@/lib/ThemeContext'
 import PageLoader from '@/components/ui/PageLoader'
+import ReportLoader from '@/components/shared/ReportLoader'
 
 interface PendingRow {
   platform?: string
@@ -324,7 +325,7 @@ export default function PendingCountPage() {
             <div className="bg-white rounded-2xl border border-gray-100 shadow-card p-6 mb-4">
               <div className="flex items-center gap-4 mb-4">
                 <div className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0" style={{ background: '#14254A10' }}>
-                  <span className="w-6 h-6 border-[3px] border-[#14254A]/20 border-t-[#14254A] rounded-full animate-spin block" />
+                  <ReportLoader bars size={28} label={null} className="!py-0" />
                 </div>
                 <div className="flex-1">
                   <p className="font-bold text-[#14254A] text-sm">Scanning all platforms…</p>

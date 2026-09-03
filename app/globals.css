@@ -307,10 +307,23 @@ input[type="search"]::-webkit-search-decoration {
 /* Pagination */
 .dark .border-gray-50 { border-color: rgba(255,255,255,0.06) !important; }
 
-/* Hardcoded navy text → light in dark mode */
-.dark [class*="text-\[#14254A\]"]  { color: #e2e8f0 !important; }
-.dark [class*="text-\[#64748b\]"]  { color: #7f9ab4 !important; }
-.dark [class*="text-\[#5f768b\]"]  { color: #7f9ab4 !important; }
+/* Hardcoded navy text → light in dark mode.
+
+   A blanket sweep, because most navy text in this app sits on a surface that
+   goes dark, so the ink has to go light with it.
+
+   `.ink-fixed` opts an element OUT, and it is not a nicety. Some navy text sits
+   on a surface that stays LIGHT in dark mode — a gold button is the same gold in
+   both themes — and lightening the ink there puts near-white text on yellow,
+   which is the one thing this rule must never do. An element that owns its
+   background says so and keeps the ink it asked for.
+
+   The !important is why the opt-out has to live here: a `dark:text-[#14254A]`
+   written at the call site loses to this rule, so the exemption cannot be
+   expressed in Tailwind alone. */
+.dark [class*="text-\[#14254A\]"]:not(.ink-fixed)  { color: #e2e8f0 !important; }
+.dark [class*="text-\[#64748b\]"]:not(.ink-fixed)  { color: #7f9ab4 !important; }
+.dark [class*="text-\[#5f768b\]"]:not(.ink-fixed)  { color: #7f9ab4 !important; }
 
 /* Scrollbar in dark */
 .dark ::-webkit-scrollbar-track { background: #14254A; }

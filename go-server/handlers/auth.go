@@ -1311,19 +1311,38 @@ func SwitchAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch fresh Markscan API token for the target account
-	var apiTok string
-	apiUser := strFromAny(row["api_user_name"])
-	apiPass := strFromAny(row["api_password"])
-	if apiUser != "" && apiPass != "" {
-		apiTok, _ = markscan.Login(apiUser, apiPass)
-	}
+	/* The token comes through TokenForUser, not markscan.Login directly.
+
+	   That path owns the per-user cache, the single-flight and the rate-limit
+	   backoff; calling Login here logged in AGAIN on every account switch, which
+	   is one of the bursts that trips Markscan's per-IP login limit. A limit hit
+	   here costs the switched-to account its API access for the whole session. */
 	userID := intFromAny(row["userId"])
-	if apiTok != "" {
-		markscan.SetCachedToken(userID, apiTok)
-	}
+	apiTok := TokenForUser(userID)
 
 	newClaims := buildClaims(row, apiTok)
+
+	/* AN IMPERSONATED SESSION STAYS IMPERSONATED ACROSS A SWITCH.
+
+	   buildClaims reads the row and nothing else, so the impersonator fields were
+	   dropped here: an admin reviewing a client who switched to that client's
+	   other account came out the far side as an ordinary client login. The banner
+	   vanished with the claims, and with it the way back to the admin panel —
+	   the admin had to sign in again to recover.
+
+	   The role is pinned to 0 for the same reason Impersonate pins it: buildClaims
+	   takes `role` from dcp_user, so without this a switch would restore whatever
+	   role that row happens to carry — the one path where an impersonated session
+	   could climb back out to an admin route. */
+	if claims.ImpersonatorLoginID != 0 {
+		newClaims.ImpersonatorLoginID = claims.ImpersonatorLoginID
+		newClaims.ImpersonatorEmail = claims.ImpersonatorEmail
+		newClaims.ImpersonatorName = claims.ImpersonatorName
+		newClaims.ImpersonatorRole = claims.ImpersonatorRole
+		zero := int64(0)
+		newClaims.Role = &zero
+	}
+
 	tok, _ := ipauth.SignToken(newClaims)
 	SetTokenCookie(w, tok)
 	OK(w, map[string]any{"success": true, "token": tok, "user": sanitizeClaims(newClaims)})

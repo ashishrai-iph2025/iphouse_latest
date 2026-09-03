@@ -357,6 +357,31 @@ func ReportsData(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 422, "A client is required")
 		return
 	}
+	/*
+		The RESOLVED client, written back over whatever the request asked for.
+
+		Everything below builds its SQL scope from flatQuery(q) — the raw query
+		string — while the check above ran against reportScope's answer. Those
+		were two different values, and the gap between them was the whole of the
+		access control:
+
+		  · reportScope DISCARDS a client login's requested id and returns the
+		    one staff mapped to that account, which is what makes the check pass,
+		  · flatQuery then handed the SQL the id from the URL.
+
+		So a client login passing ?clientId=<another company> was authorised as
+		itself and queried as them. Reading someone else's report needed no more
+		than knowing their id.
+
+		It is also why a request that names NO client returned an empty report
+		rather than that login's own: the scope filtered on "", matched nothing,
+		and answered ok:true with every figure absent — which is a silent wrong
+		answer, and the reason this was found from the wrong end.
+
+		ReportsOptions already did this a hundred lines up; this endpoint did
+		not. One line, and the two agree.
+	*/
+	q.Set("clientId", clientID)
 
 	// Configured platforms (reportplatforms.go): every table the platform reads
 	// is queried and the results merged. Access is enforced here as well as in

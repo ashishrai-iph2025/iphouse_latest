@@ -26,6 +26,18 @@ interface Settings {
      how long an entry is KEPT, this is how stale it may get before a reader's
      own request triggers a check against the warehouse. */
   recheckMinutes: number
+  /* How long a DRILL-DOWN is kept — a report with a filter applied, which is
+     what every click on a bar produces. Much shorter than ttlMinutes: a plain
+     scope is read by everyone all day, a filtered view usually once. 0 turns
+     drill-down caching off and every click recomputes the whole report. */
+  drillMinutes: number
+}
+
+/* A scope a reader asked for and did not find. The windows on this list against
+   the ranges the refresh covers is the whole diagnosis for a low hit rate. */
+interface Miss {
+  platform: string; clientId: string; clientName?: string; from: string; to: string
+  count: number; lastAt: string
 }
 interface Memory {
   usedBytes: number; maxBytes: number; systemBytes: number; policy: string
@@ -69,6 +81,26 @@ const RECHECKS = [
   { min: 30,  label: 'Every 30 minutes' },
   { min: 60,  label: 'Every hour' },
   { min: 240, label: 'Every 4 hours' },
+]
+
+/* How long a filtered view is kept.
+
+   Minutes, because that is the span of the gesture it serves: click a bar, read
+   it, click back, click the next one. Longer is not better here — a drill-down
+   is never re-checked against the warehouse, so this number is also how stale
+   one may get, and thousands of day-old filtered views would spend on entries
+   read once the memory the plain scopes need.
+
+   0 is offered because it is what the product did before filtered views were
+   cached at all, and an operator debugging a stale drill-down wants to be able
+   to take it out of the picture. */
+const DRILLS = [
+  { min: 0,   label: 'Do not cache filtered views' },
+  { min: 5,   label: '5 minutes' },
+  { min: 10,  label: '10 minutes' },
+  { min: 30,  label: '30 minutes' },
+  { min: 60,  label: '1 hour' },
+  { min: 240, label: '4 hours' },
 ]
 
 /* Short enough for a column, exact on hover.
@@ -126,6 +158,9 @@ interface Payload {
   /* Which build's reports are in the cache. Entries are keyed to it, so a
      deploy invalidates them on its own — see reportcache/version.go. */
   engine?: { tag: string; source: string; otherBuilds?: number }
+  /* What readers asked for and the cache did not have. Present so a hit rate of
+     zero is a diagnosis rather than an alarm — see the note by the tiles. */
+  misses?: Miss[]
 }
 interface OnDemand {
   ran: boolean; running?: boolean; startedAt?: string; finishedAt?: string
@@ -376,6 +411,62 @@ export default function ReportCachePanel() {
           ))}
         </div>
 
+        {/* ── Why the hit rate is what it is ─────────────────────────────
+            A hit rate alone is a number nobody can act on, and "0%" with entries
+            sitting in the cache is its most alarming and least informative
+            reading: it is equally consistent with Redis being unreachable, with
+            the refresh never running, with a deploy having just changed the build
+            tag — and with the refresh diligently building windows nobody opens.
+
+            That last one looks exactly like health. The table below fills with
+            rows, the pass reports success, and every reader is still keyed by a
+            window the pass never touched. So the scopes readers asked for and did
+            not find are listed here: against the ranges above, they are the
+            answer outright. */}
+        {(d.misses?.length ?? 0) > 0 && (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+            <p className="text-xs font-semibold text-amber-900">
+              Readers asked for {d.misses!.length} range{d.misses!.length === 1 ? '' : 's'} that
+              {' '}{d.misses!.length === 1 ? 'was' : 'were'} not cached
+            </p>
+            <p className="text-[11px] text-amber-800 mt-0.5">
+              Compare these with the ranges the refresh covers. If they do not overlap, the refresh is
+              building reports nobody opens — add the ranges below, or widen them.
+            </p>
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full text-[11px]">
+                <thead>
+                  <tr className="text-amber-900/70 text-left">
+                    <th className="font-semibold pr-3 pb-1">Platform</th>
+                    <th className="font-semibold pr-3 pb-1">Client</th>
+                    <th className="font-semibold pr-3 pb-1">Range</th>
+                    <th className="font-semibold pr-3 pb-1 text-right">Asked</th>
+                    <th className="font-semibold pb-1 text-right">Last</th>
+                  </tr>
+                </thead>
+                <tbody className="text-amber-900">
+                  {d.misses!.map(m => (
+                    <tr key={`${m.platform}|${m.clientId}|${m.from}|${m.to}`}
+                      className="border-t border-amber-200/60">
+                      <td className="pr-3 py-1 whitespace-nowrap">{m.platform}</td>
+                      {/* Resolved on the server, like every other client column
+                          here — the page has no directory to join against. */}
+                      <td className="pr-3 py-1 whitespace-nowrap" title={m.clientId}>
+                        {m.clientName || m.clientId}
+                      </td>
+                      <td className="pr-3 py-1 whitespace-nowrap font-mono">
+                        {m.from || '—'} → {m.to || '—'}
+                      </td>
+                      <td className="pr-3 py-1 text-right font-semibold">{m.count}</td>
+                      <td className="py-1 text-right whitespace-nowrap">{when(m.lastAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {d.server && (
           <p className="text-[11px] text-gray-500 mt-4">
             Redis {d.server.redis_version} · {d.server.used_memory_human} used
@@ -574,6 +665,34 @@ export default function ReportCachePanel() {
                       for someone reading the same report repeatedly, and are kept for {hours(form.ttlMinutes)}.</>
                   : <span className="text-amber-700">Off — a report will not change until the scheduled
                       refresh rebuilds it, or until it is {hours(form.ttlMinutes)} old.</span>}
+              </p>
+            </div>
+
+            {/* The other half of the cache, and the half a reader touches most.
+                Everything above concerns the report a platform OPENS as; this is
+                every click inside it. It had no control at all — the value was
+                fixed in the binary — so a filtered view could not be tuned or
+                turned off from here. */}
+            <Field label="Keep filtered views for"
+              hint="Applies when a filter is set — clicking a bar, picking an asset. Not re-checked: this is also how stale one may get.">
+              <SearchableSelect clearable={false}
+                value={String(form.drillMinutes)}
+                onChange={v => setForm({ ...form, drillMinutes: +v })}
+                options={[
+                  ...(DRILLS.some(x => x.min === form.drillMinutes)
+                    ? []
+                    : [{ key: String(form.drillMinutes), label: `${form.drillMinutes} minutes` }]),
+                  ...DRILLS.map(x => ({ key: String(x.min), label: x.label })),
+                ]} />
+            </Field>
+            <div className="self-end pb-1">
+              <p className="text-[11px] text-gray-500">
+                {form.drillMinutes > 0
+                  ? <>Clicking a bar and clicking back is instant for <strong>{form.drillMinutes} min</strong>.
+                      These are not listed below — there are thousands of them and they are
+                      evicted by use.</>
+                  : <span className="text-amber-700">Off — every filter click recomputes the whole
+                      report.</span>}
               </p>
             </div>
           </div>

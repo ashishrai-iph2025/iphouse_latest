@@ -22,10 +22,19 @@ export default function DashboardPage() {
      of them — Reports wins where it is granted. See UserNav, which is where the
      rule is decided and which this reads through allowedModuleNames.
 
+     A REPORTS login lands on /welcome: the week in summary and the programme
+     calendar, with the full report one click away. A DASHBOARD login is
+     untouched and still falls through to DashboardClient at the foot of this
+     file — the two grants keep their own landing pages.
+
      The redirect matters because EVERY login lands here: sign-in, client
      selection, e-mail verification and the War Room's own fallback all send
      people to /dashboard. Suppressing it in the nav alone would leave a
-     Reports login sitting on a page its nav no longer offers. */
+     Reports login sitting on a page its nav no longer offers.
+
+     /welcome is deliberately not a nav item, so the menu offers no way back to
+     it — but the logo links to /dashboard, which lands here and redirects
+     again, which makes the logo the way home. */
   const { allowedModules, allowedModuleNames } = useModuleAccess()
   const { data: session } = useSession()
   const [modules,     setModules]     = useState<Module[]>([])
@@ -47,7 +56,7 @@ export default function DashboardPage() {
   // Reports login never sees the dashboard flash before being moved on.
   if (allowedModuleNames === null) return null
   if (allowedModuleNames.some(n => n.toUpperCase() === 'REPORTS')) {
-    return <Navigate to="/reports" replace />
+    return <Navigate to="/welcome" replace />
   }
 
   /* Dashboard is a grant now, not a floor, so landing here no longer implies

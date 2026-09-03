@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Navigate, Link } from 'react-router-dom'
 import BackToConfiguration from '@/components/admin/BackToConfiguration'
 import { useSession } from '@/lib/auth-client'
+import ReportLoader from '@/components/shared/ReportLoader'
 
 interface Backup {
   name: string
@@ -129,7 +130,7 @@ export default function DatabaseBackupPage() {
         </div>
 
         {loading ? (
-          <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-gray-100 border-t-[#14254A] rounded-full animate-spin" /></div>
+          <ReportLoader size={150} label="Loading backups" className="py-16" />
         ) : error ? (
           <div className="text-center py-12 text-red-500 text-sm px-6">{error}</div>
         ) : backups.length === 0 ? (

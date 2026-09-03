@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useTheme } from '@/lib/ThemeContext'
+import ReportLoader from '@/components/shared/ReportLoader'
 
 /* ─── Brand colours ────────────────────────────────────────────────────── */
 const NAVY    = '#0D244B'
@@ -528,8 +529,8 @@ export default function AdminHomeClient({ name, today, role }: { name: string; t
                 </thead>
                 <tbody>
                   {loading ? (
-                    <tr><td colSpan={7} className="text-center py-8">
-                      <span className="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin inline-block" style={{ borderColor: d.skeleton, borderTopColor: ORANGE }} />
+                    <tr><td colSpan={7} className="text-center">
+                      <ReportLoader size={130} label={null} className="py-8" />
                     </td></tr>
                   ) : (data?.topClients ?? []).length === 0 ? (
                     <tr><td colSpan={7} className="text-center py-8 text-xs" style={{ color: d.sub }}>No activity data yet</td></tr>
@@ -588,8 +589,8 @@ export default function AdminHomeClient({ name, today, role }: { name: string; t
                 </thead>
                 <tbody>
                   {loading ? (
-                    <tr><td colSpan={8} className="text-center py-8">
-                      <span className="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin inline-block" style={{ borderColor: d.skeleton, borderTopColor: ORANGE }} />
+                    <tr><td colSpan={8} className="text-center">
+                      <ReportLoader size={130} label={null} className="py-8" />
                     </td></tr>
                   ) : (data?.topLoginUsers ?? []).length === 0 ? (
                     <tr><td colSpan={8} className="text-center py-8 text-xs" style={{ color: d.sub }}>No login user data yet</td></tr>

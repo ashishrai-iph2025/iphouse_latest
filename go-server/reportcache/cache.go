@@ -55,6 +55,12 @@ type Cache struct {
 	misses atomic.Int64
 	writes atomic.Int64
 	errors atomic.Int64
+
+	// The scopes readers asked for and did not find — see NoteMiss. Its own
+	// mutex: it is written from the request path and read by the admin screen,
+	// and neither should wait on a reconnect holding c.mu.
+	missMu   sync.Mutex
+	missSeen map[string]*Miss
 }
 
 var shared = &Cache{}
@@ -440,6 +446,117 @@ func (c *Cache) Stats() map[string]int64 {
 		"hits": c.hits.Load(), "misses": c.misses.Load(),
 		"writes": c.writes.Load(), "errors": c.errors.Load(),
 	}
+}
+
+/*
+── What readers asked for and did not find ──────────────────────────────────
+
+	A hit rate on its own is a number an operator cannot act on. "0%" with
+	entries sitting in the cache is the most alarming reading it has and the
+	least informative: it is equally consistent with Redis being unreachable,
+	with the warmer never running, with a deploy having just changed the build
+	tag — and with the warmer diligently building windows nobody opens.
+
+	That last one is not hypothetical. A pass configured for a single 365-day
+	range fills the admin table with rows and reports itself healthy, while every
+	reader opening the default month is keyed by a window the pass never touches.
+	Everything looks right except the one number, and nothing on the screen says
+	which of the four it is.
+
+	So the misses are kept — the SCOPE of them, not just the count. A screen that
+	can say "readers are asking for 2026-08-28 → 2026-09-03 and the pass builds
+	2025-09-04 → 2026-09-03" has answered the question outright.
+
+	Aggregated by scope rather than logged as a stream, because the useful form is
+	"this window, forty times" and not forty lines of the same window. Bounded, so
+	a process left running for a month cannot grow this without limit; the cap is
+	generous because each entry is four short strings and the whole point is to
+	still be here when somebody finally looks.
+*/
+type Miss struct {
+	Platform string    `json:"platform"`
+	ClientID string    `json:"clientId"`
+	From     string    `json:"from"`
+	To       string    `json:"to"`
+	Count    int       `json:"count"`
+	LastAt   time.Time `json:"lastAt"`
+}
+
+const maxTrackedMisses = 400
+
+/*
+NoteMiss records that a reader asked for a report that was not cached.
+
+Only worth calling for what a warmer COULD have had ready: a live request for a
+plain scope. A drill-down miss is expected — they are built on demand and live
+for minutes — and a background miss is the pass finding its own work undone,
+which is what a pass is for. Counting either would bury the signal.
+*/
+func (c *Cache) NoteMiss(platform, clientID, from, to string) {
+	if platform == "" || clientID == "" {
+		return
+	}
+	k := platform + "|" + clientID + "|" + from + "|" + to
+
+	c.missMu.Lock()
+	defer c.missMu.Unlock()
+	if c.missSeen == nil {
+		c.missSeen = map[string]*Miss{}
+	}
+	if m := c.missSeen[k]; m != nil {
+		m.Count++
+		m.LastAt = time.Now().UTC()
+		return
+	}
+	/* Full. Drop the least recently seen rather than refusing to record — the
+	   newest miss is the one someone is asking about, and a window that stopped
+	   being requested an hour ago is not. */
+	if len(c.missSeen) >= maxTrackedMisses {
+		var oldestKey string
+		var oldest time.Time
+		for key, m := range c.missSeen {
+			if oldestKey == "" || m.LastAt.Before(oldest) {
+				oldestKey, oldest = key, m.LastAt
+			}
+		}
+		delete(c.missSeen, oldestKey)
+	}
+	c.missSeen[k] = &Miss{
+		Platform: platform, ClientID: clientID, From: from, To: to,
+		Count: 1, LastAt: time.Now().UTC(),
+	}
+}
+
+// RecentMisses lists the uncached scopes readers asked for, most requested
+// first, then most recent. Copied out — the caller gets values, not pointers
+// into live state.
+func (c *Cache) RecentMisses(limit int) []Miss {
+	c.missMu.Lock()
+	out := make([]Miss, 0, len(c.missSeen))
+	for _, m := range c.missSeen {
+		out = append(out, *m)
+	}
+	c.missMu.Unlock()
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].LastAt.After(out[j].LastAt)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+// ForgetMisses clears the record. Called when the cache is purged or the
+// settings change, so what is on the screen describes the configuration now in
+// force rather than the one that produced the misses.
+func (c *Cache) ForgetMisses() {
+	c.missMu.Lock()
+	c.missSeen = nil
+	c.missMu.Unlock()
 }
 
 // Info returns selected fields from Redis INFO — enough to see whether the

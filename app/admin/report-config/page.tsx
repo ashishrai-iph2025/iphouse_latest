@@ -21,6 +21,14 @@ import SportsPeriodPanel from '@/components/admin/SportsPeriodPanel'
 import AdminPageHeader from '@/components/admin/AdminPageHeader'
 import SearchableSelect from '@/components/ui/SearchableSelect'
 import MultiSearchableSelect from '@/components/ui/MultiSearchableSelect'
+/* packRows comes from the preview component rather than being defined here.
+   Both this page and the reader's "Arrange your reports" panel draw the same
+   wireframe, and it has to pack the way the report's CSS grid packs — two
+   copies would be two things to keep in step with the real grid, and a preview
+   that packs differently tells someone their arrangement is something it is
+   not. GRID_COLS and SPAN_COLS below stay local: they are used by the width
+   controls too, and they are the same twelve columns. */
+import LayoutPreview, { packRows } from '@/components/reports/LayoutPreview'
 
 const NAVY   = '#14254A'
 const ORANGE = '#FC934C'
@@ -160,26 +168,6 @@ function KindIcon({ kind }: { kind: LayoutPanel['kind'] }) {
       </svg>
     </span>
   )
-}
-
-/** Pack panels into rows, the way the CSS grid will. */
-function packRows(panels: LayoutPanel[]): LayoutPanel[][] {
-  const rows: LayoutPanel[][] = []
-  let row: LayoutPanel[] = []
-  let used = 0
-  for (const p of panels) {
-    const cols = SPAN_COLS[p.span] ?? 6
-    if (used + cols > GRID_COLS && row.length > 0) {
-      rows.push(row)
-      row = []
-      used = 0
-    }
-    row.push(p)
-    used += cols
-    if (used >= GRID_COLS) { rows.push(row); row = []; used = 0 }
-  }
-  if (row.length > 0) rows.push(row)
-  return rows
 }
 
 /** What a table yields once the server has read its shape. */
@@ -2160,98 +2148,20 @@ export default function ReportConfigPage() {
                 visible without hunting for it. */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
               <Card className="p-4 xl:sticky xl:top-4">
-                <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
-                  <h3 className="text-[13px] font-bold text-[#14254A] dark:text-white">
-                    Preview
-                    <span className="ml-2 font-normal text-[10px] text-gray-400">
-                      drag a panel to move it
-                    </span>
-                  </h3>
-                  <span className="text-[10px] text-gray-400">
-                    {gridPanels.filter(p => !p.hidden && p.kind === 'tile').length} KPI cards ·{' '}
-                    {gridPanels.filter(p => !p.hidden && p.kind === 'dim').length} charts ·{' '}
-                    {packRows(gridPanels.filter(p => !p.hidden)).length} rows ·{' '}
-                    {panePanels.filter(p => !p.hidden).length} filters
-                  </span>
-                </div>
-                {/* The grid and the rail beside it, laid out the way the report
-                    lays them out — the charts take the width and the slicers sit
-                    down one narrow column to their right. Drawing the pane as a
-                    list under the grid would say it was part of the page flow,
-                    which is the one thing about it that is not true. */}
-                <div className="flex gap-2 items-start">
-                <div className="flex-1 min-w-0 space-y-1.5">
-                  {packRows(gridPanels.filter(p => !p.hidden)).map((row, i) => (
-                    <div key={i} className="grid grid-cols-12 gap-1.5">
-                      {row.map(p => (
-                        <div key={p.key}
-                          draggable
-                          onDragStart={e => {
-                            setDragKey(p.key)
-                            e.dataTransfer.effectAllowed = 'move'
-                            // Firefox will not start a drag without payload.
-                            e.dataTransfer.setData('text/plain', p.key)
-                          }}
-                          onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setOverKey(p.key) }}
-                          onDragLeave={() => setOverKey(cur => cur === p.key ? '' : cur)}
-                          onDrop={e => {
-                            e.preventDefault()
-                            const from = dragKey || e.dataTransfer.getData('text/plain')
-                            if (from) moveByKey(from, p.key)
-                            setDragKey(''); setOverKey('')
-                          }}
-                          onDragEnd={() => { setDragKey(''); setOverKey('') }}
-                          className={`rounded-md px-2 py-2 text-[10px] font-semibold truncate border
-                            cursor-move select-none transition-all
-                            ${p.kind === 'heading'
-                              ? 'bg-[#14254A]/[0.04] border-dashed border-[#14254A]/20 text-[#14254A]/60 dark:bg-white/[0.04] dark:border-white/20 dark:text-white/50'
-                              : p.kind === 'tile'
-                                ? 'bg-[#14254A]/[0.07] border-[#14254A]/20 text-[#14254A] dark:bg-white/10 dark:border-white/20 dark:text-white/80'
-                                : 'bg-[#FC934C]/10 border-[#FC934C]/30 text-[#c2691f] dark:text-[#FDBE94]'}
-                            ${dragKey === p.key ? 'opacity-35' : ''}
-                            ${overKey === p.key && dragKey && dragKey !== p.key
-                              ? 'ring-2 ring-[#FC934C] ring-offset-1 dark:ring-offset-[#1a2d55]' : ''}`}
-                          style={{ gridColumn: `span ${SPAN_COLS[p.span]} / span ${SPAN_COLS[p.span]}` }}
-                          title={`${p.title || p.name} — drag to move`}>
-                          {p.title || p.name}
-                        </div>
-                      ))}
-                    </div>
-                  ))}
-                </div>
+                {/* The wireframe, shared with the reader's own "Arrange your
+                    reports" panel — see components/reports/LayoutPreview.
 
-                {/* The pane. Narrow on purpose: it is the shape of the thing,
-                    and a filter list as wide as the charts would read as another
-                    column of the report. */}
-                <div className="w-[104px] flex-shrink-0 rounded-lg border border-gray-100 dark:border-white/10
-                  bg-[#14254A]/[0.02] dark:bg-white/[0.02] p-1.5 space-y-1">
-                  <p className="text-[8px] font-bold uppercase tracking-widest text-gray-400 px-1 pb-0.5">
-                    Filters
-                  </p>
-                  {/* Always there, and shown as such: a report cannot be run
-                      without a window, so it is not in the list below either. */}
-                  <div className="rounded-md px-1.5 py-1.5 text-[9px] font-semibold border border-dashed
-                    border-gray-200 text-gray-400 dark:border-white/15 dark:text-white/35">
-                    Date range
-                  </div>
-                  {panePanels.filter(p => !p.hidden).map(p => (
-                    <div key={p.key}
-                      className="rounded-md px-1.5 py-1.5 text-[9px] font-semibold truncate border
-                        bg-sky-50 border-sky-200 text-sky-800
-                        dark:bg-sky-400/10 dark:border-sky-400/25 dark:text-sky-200"
-                      title={p.name}>
-                      {p.name}
-                    </div>
-                  ))}
-                  {panePanels.filter(p => !p.hidden).length === 0 && (
-                    <p className="text-[9px] text-gray-400 px-1 leading-snug">
-                      Date range only
-                    </p>
-                  )}
-                </div>
-                </div>
+                    It was written out here. Two copies meant two versions of
+                    packRows, which has to pack the way the report's CSS grid
+                    packs; a preview that packs differently does not just look
+                    wrong, it tells someone their arrangement is something it is
+                    not. Drag stays here because the state it moves is here. */}
+                <LayoutPreview
+                  panels={layout}
+                  drag={{ dragKey, overKey, setDragKey, setOverKey, moveByKey }}
+                />
 
-                {/* ── Save, beneath the thing being saved ──────────────────
+                {/* ── Save, beneath the thing being saved ──────────────────                {/* ── Save, beneath the thing being saved ──────────────────
                     At the foot of the PREVIEW rather than the foot of the
                     page: the editor list runs to twenty-odd rows, so a bar
                     below it sat a long scroll away from the wireframe that

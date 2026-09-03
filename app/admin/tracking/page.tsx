@@ -5,6 +5,7 @@ import { useSearchParams } from '@/lib/router'
 import AdminPageHeader from '@/components/admin/AdminPageHeader'
 import DatePicker from '@/components/ui/DatePicker'
 import { useTheme } from '@/lib/ThemeContext'
+import ReportLoader from '@/components/shared/ReportLoader'
 
 /* ── Brand palette (static) ────────────────────────────────────────────── */
 const NAVY    = '#0D244B'
@@ -337,10 +338,7 @@ function AnalyticsTab() {
   }, [])
 
   if (loading) return (
-    <div className="flex items-center justify-center py-24">
-      <span className="w-8 h-8 border-4 border-t-transparent rounded-full animate-spin"
-        style={{ borderColor: `${bord} ${bord} ${bord} ${NAVY}` }} />
-    </div>
+    <ReportLoader size={165} label="Loading" className="py-24" />
   )
   if (!data) return null
 
@@ -600,9 +598,8 @@ function LogsTab() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={7} className="text-center py-12">
-                  <span className="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin inline-block"
-                    style={{ borderColor: `${bord} ${bord} ${bord} ${NAVY}` }} />
+                <tr><td colSpan={7} className="text-center">
+                  <ReportLoader size={130} label={null} className="py-10" />
                 </td></tr>
               ) : logs.length === 0 ? (
                 <tr><td colSpan={7} className="text-center py-12 text-sm" style={{ color: t2 }}>No activity logs found.</td></tr>

@@ -478,7 +478,11 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 			if k == "removalPct" {
 				continue // derived, not additive — recomputed after the merge
 			}
-			kpi[k] += numOf(v)
+			/* By max for a distinct count over a shared dimension, by addition
+			   for everything else. Summing totalAssets here multiplied the
+			   catalogue by the number of PLATFORMS, on top of the same mistake
+			   already made across each platform's tables. See reportdistinct.go. */
+			mergeKPI(kpi, k, numOf(v))
 		}
 
 		if ppkpi, ok := d["kpiPrev"].(map[string]any); ok {
@@ -491,7 +495,7 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 				case "removalPct", "from", "to":
 					continue // derived, or the window itself — not summable
 				}
-				kpiPrev[k] += numOf(v)
+				mergeKPI(kpiPrev, k, numOf(v))
 			}
 		}
 
@@ -557,6 +561,13 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 		foldDim(breakdowns, dimValues, from, to)
 	}
 
+	/* The reader's own selection, where they made one: "titles in scope" for
+	   three named titles is three, and no scan can be more right than that.
+	   Both windows, so the tile's delta is 0 rather than a difference between an
+	   exact count and an estimate. */
+	applyAssetScope(kpi, q)
+	applyAssetScope(kpiPrev, q)
+
 	ident, removed := kpi["identified"], kpi["removed"]
 	kpiOut := map[string]any{}
 	for k, v := range kpi {
@@ -587,8 +598,16 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 	// every platform at once — so summing each platform's distinct count would
 	// multiply the catalogue by the number of platforms. This one is counted
 	// properly, over the union of the ids themselves.
-	if n, exact := summaryDistinctAssets(platforms, q); exact {
-		kpiOut["totalAssets"] = n
+	/* Skipped entirely when the reader has named the assets: applyAssetScope
+	   above already has the exact answer, and this would be a scan per table to
+	   arrive at the same number — or at a WORSE one. It counts the ids actually
+	   PRESENT, so an asset selected but carrying no rows in this window would
+	   come back 0, and "titles in scope: 0" beside a filter naming one title
+	   reads as a broken filter rather than as an empty result. */
+	if selectedAssetCount(q) == 0 {
+		if n, exact := summaryDistinctAssets(platforms, q); exact {
+			kpiOut["totalAssets"] = n
+		}
 	}
 
 	low, high, currency := summaryRevenueRates()

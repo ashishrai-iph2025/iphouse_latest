@@ -228,7 +228,40 @@ func sportsPeriodScope(p sportsPeriodConfig) (from, to string, ok bool) {
 	if !p.active() {
 		return "", "", false
 	}
-	return p.Start, p.End, true
+	/* The end is clamped to TODAY, because a season is a configured boundary and
+	   not a data one.
+
+	   DAZN's period runs to 2026-12-31, so the card captioned itself
+	   "1 Aug 2026 - 31 Dec 2026" in September: four months of it had not happened
+	   yet. The count was right — there are no rows in the future — but the caption
+	   claimed a window nobody could have data for, and on a card whose whole job
+	   is saying what it counted that is the part that has to be true.
+
+	   It also matters to the chart. fillSeries draws a bucket for every step
+	   between since and until, so an unclamped end put four months of empty bars
+	   to the right of the data on any request that asked for a series.
+
+	   IST, because the report's calendar is: see reportTZOffset in the counts
+	   service. Clamping to a UTC day would move the boundary five and a half hours
+	   and, for the five and a half hours after IST midnight, name yesterday. */
+	to = p.End
+	if t := istToday(); to > t {
+		to = t
+	}
+	/* A period that has not started yet clamps to before its own start. Returning
+	   an inverted window would be refused by the service as "since is not before
+	   until", which reads on the card as a broken endpoint rather than a season
+	   that has not begun, so the start stands and the window is one day wide. */
+	if to < p.Start {
+		to = p.Start
+	}
+	return p.Start, to, true
+}
+
+// istToday is the current date on the report's calendar. ISO, so it compares as
+// a string against the period bounds the way everything else here does.
+func istToday() string {
+	return time.Now().UTC().Add(330 * time.Minute).Format(ymdLayout)
 }
 
 /*
@@ -242,6 +275,55 @@ are the report page's own filter values (YYYY-MM-DD).
 bound is inclusive of the day — verified against it — so there is no final day
 to lose.
 */
+/*
+realtimeDims are the dimension filters a count is narrowed by, beyond the asset.
+
+The card sits above a report the reader has already filtered, and it only earns
+its place when it is about something specific — a fixture, a title, a team (see
+showRealtime on the reports page). Asset travelled from the start; FRANCHISE and
+MATCH DAY did not, so selecting Serie A narrowed the twenty-two thousand rows in
+the panels below and left the card reporting a hundred and three thousand for the
+whole season. Two figures about the same subject, a hand's width apart, differing
+by a factor of five.
+
+Kept as an ordered, named list rather than a map so the cache key below is
+stable: ranging a map would file the same selection under a different key on
+every other request.
+*/
+type realtimeDims struct {
+	Franchise string
+	MatchDay  string
+}
+
+// key is the pair as one string, for the memo key. Empty when nothing is set,
+// so an unfiltered count keys exactly as it did before this existed.
+func (d realtimeDims) key() string {
+	if d.Franchise == "" && d.MatchDay == "" {
+		return ""
+	}
+	return d.Franchise + "" + d.MatchDay
+}
+
+// apply writes the pair onto an outgoing service query, under the names the
+// reports page already uses for them — the same spelling the report's own
+// slicers send, so one vocabulary covers both.
+func (d realtimeDims) apply(q url.Values) {
+	if d.Franchise != "" {
+		q.Set("franchiseName", d.Franchise)
+	}
+	if d.MatchDay != "" {
+		q.Set("matchDay", d.MatchDay)
+	}
+}
+
+// dimsFromRequest reads them off the report page's own query string.
+func dimsFromRequest(r *http.Request) realtimeDims {
+	return realtimeDims{
+		Franchise: strings.TrimSpace(r.URL.Query().Get("franchiseName")),
+		MatchDay:  strings.TrimSpace(r.URL.Query().Get("matchDay")),
+	}
+}
+
 func scopeFromRequest(r *http.Request, view, clientID string) realtimeScope {
 	from := strings.TrimSpace(r.URL.Query().Get("from"))
 	to := strings.TrimSpace(r.URL.Query().Get("to"))
@@ -352,7 +434,8 @@ func Realtime(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scope := scopeFromRequest(r, view, clientID)
-	body, takenAt, err := cachedRealtimeCount(ctx, view, clientID, assetIDs, scope)
+	dims := dimsFromRequest(r)
+	body, takenAt, err := cachedRealtimeCount(ctx, view, clientID, assetIDs, scope, dims)
 	if err != nil {
 		// Detail to the log for the same reason as above: a warehouse error is
 		// usually a failed statement, and the card renders whatever it is told
@@ -383,6 +466,18 @@ func Realtime(w http.ResponseWriter, r *http.Request) {
 		   configured season — the card says so, because "in this range" over a
 		   figure the range slicer cannot move is a caption that lies. */
 		"scope": scopeName(scope),
+
+		/* The dimension filters, echoed. The card names what it was narrowed to,
+		   and it must name that from the ANSWER rather than from what it asked
+		   for — a caption reading "narrowed to franchise Serie A" over a count
+		   that covers the whole season is worse than no caption, because it turns
+		   a wrong figure into a confident one. Sent only where the value is set,
+		   so an unfiltered reading carries neither key and the card says nothing.
+
+		   NOTE: this echoes what the PORTAL applied to its request. It is not yet
+		   proof the counts service honoured it — see the doc on realtimeDims. */
+		"franchise": dims.Franchise,
+		"matchDay":  dims.MatchDay,
 		/* When the count was TAKEN, which is not when this response was built.
 
 		   It was time.Now() here, and that quietly undid the one thing the
@@ -521,11 +616,110 @@ selection narrows the count instead of failing it. Unknown NAMES are still
 rejected upstream in realtimeAssetIDs, where widening a filtered count back to
 the whole client would be the dangerous direction to fail in.
 */
-func realtimeCount(ctx context.Context, view, clientID string, assetIDs []string, scope realtimeScope) (realtimeResponse, error) {
-	return realtimeFetch(ctx, view, clientID, strings.Join(assetIDs, ","), scope)
+func realtimeCount(ctx context.Context, view, clientID string, assetIDs []string, scope realtimeScope, dims realtimeDims) (realtimeResponse, error) {
+	return realtimeFetch(ctx, view, clientID, strings.Join(assetIDs, ","), scope, dims)
 }
 
-func realtimeFetch(ctx context.Context, view, clientID, assetIDs string, scope realtimeScope) (realtimeResponse, error) {
+/*
+── Open Web's removal comes from the realtime endpoint ───────────────────────
+
+	The KPI band sums each platform's `removed` out of the curated dashboards
+	tables. On Open Web that figure is the report ETL's, and it is LOWER than the
+	truth by a wide margin: a delisting notice is recorded per CAPTURE, the raw
+	table holds several captures of one URL on one day, and
+	Hybrid_Populate_Sports_Raw_V2 keeps only the LATEST capture's flag. Measured on
+	DAZN / WTA - Toronto Open over 2026-08-01..09-02, 3,197 groups of 11,116 carry
+	an approved notice on an earlier capture and none on the latest — 7,066
+	reported against 10,263 actually delisted.
+
+	The realtime endpoint counts a URL removed when ANY of its captures has an
+	approved notice, which is the figure enforcement recognises, so Open Web's
+	share of `removed` is taken from there instead. Every other platform is summed
+	exactly as before.
+
+	SCOPED TO THE REPORT'S OWN WINDOW, not the configured season. /v1/realtime is
+	normally asked for the season — see scopeFromRequest — and a season-wide
+	removal figure over a month's identified count would be a removal rate above
+	100%. from/to are passed explicitly for that reason.
+
+	ONE PLATFORM, not fifteen. platform=open-web is what keeps this from being a
+	full sweep of the capture schema on every report load.
+
+	FAILS OPEN. A blip leaves the ETL figure in place rather than blanking the
+	tile: a slightly low number beats no number on the band every other figure on
+	the page derives from. It is logged.
+*/
+const openWebLiveRemovalTimeout = 20 * time.Second
+
+// openWebLiveRemoved asks the realtime endpoint for Open Web's removal count over
+// one explicit window. ok is false when it could not be had, and the caller then
+// keeps whatever the ETL gave it.
+func openWebLiveRemoved(clientID, assetIDs, from, to string) (int64, bool) {
+	if !reportsapi.Configured() || clientID == "" || from == "" || to == "" {
+		return 0, false
+	}
+	q := url.Values{}
+	q.Set("clientId", clientID)
+	q.Set("platform", "open-web")
+	/* Bare dates, for the same reason apiWindow sends them: the service reads a
+	   bare date as a calendar day on the report's IST calendar, and one carrying a
+	   time as a literal UTC instant. */
+	q.Set("since", dateOnly(from))
+	q.Set("until", dateOnly(to))
+	if assetIDs != "" {
+		q.Set("assetId", assetIDs)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), openWebLiveRemovalTimeout)
+	defer cancel()
+
+	var body realtimeResponse
+	if err := reportsapi.Get().GetJSON(ctx, "/v1/realtime/sports", q, &body); err != nil {
+		log.Printf("[reports] open-web live removal unavailable (%s..%s): %v - keeping the ETL figure",
+			from, to, err)
+		return 0, false
+	}
+	for _, pl := range body.Platforms {
+		if pl.Key != "open-web" {
+			continue
+		}
+		/* A nil Removed is "not counted", not "none" - see RealtimePlatform.
+		   Substituting zero for it would report a platform that could not be read
+		   as one with no removals. */
+		if pl.Removed == nil {
+			log.Printf("[reports] open-web live removal came back null (%s..%s) - keeping the ETL figure", from, to)
+			return 0, false
+		}
+		return *pl.Removed, true
+	}
+	return 0, false
+}
+
+/*
+isOpenWebSportsTable says whether a spec's table is one of Open Web's two.
+
+NAMED TABLES, and not the inferred role, which is what this replaces and why.
+inferRole reads a "linking" role off any table carrying an InfringingDomain
+column — and dashboards.UnifiedMobileAppsDashboardTable carries one. Attributing
+Open Web's share by role therefore matched Mobile Apps, and the swap put Open
+Web's 10,263 removals onto a page whose identified count was 0, reporting
+"10,263 of 0 taken down" at a removal rate of 0%.
+
+Only these two. Social Media, Telegram and Mobile Apps must never be touched by
+the swap — their ETL removal figures are the ones the report should show — and
+neither should the NON-sports open-web pair: /v1/realtime/sports answers for the
+sports genre only, so substituting its figure into an all-genre report would be a
+sports number under an all-genre denominator.
+*/
+func isOpenWebSportsTable(table string) bool {
+	switch strings.ToLower(strings.TrimSpace(table)) {
+	case "dashboards.sportsurlrawdata", "dashboards.sportssourceurlrawdata":
+		return true
+	}
+	return false
+}
+
+func realtimeFetch(ctx context.Context, view, clientID, assetIDs string, scope realtimeScope, dims realtimeDims) (realtimeResponse, error) {
 	/* Bare calendar days, NOT the scope's display timestamps — see apiWindow.
 	   This is the difference between a count that agrees with the panels beside
 	   the card and one that is a few percent out in both directions. */
@@ -540,6 +734,7 @@ func realtimeFetch(ctx context.Context, view, clientID, assetIDs string, scope r
 	if assetIDs != "" {
 		q.Set("assetId", assetIDs)
 	}
+	dims.apply(q)
 	var body realtimeResponse
 	err := reportsapi.Get().GetJSON(ctx, "/v1/realtime/"+view, q, &body)
 	return body, err
@@ -645,7 +840,7 @@ func realtimeMemoAge(e *realtimeEntry) time.Duration {
 // returned from it may be most of a TTL old, and the card stamps what it is
 // given. Returning only the body is what let the handler date every answer to
 // the moment it was served.
-func cachedRealtimeCount(ctx context.Context, view, clientID string, assetIDs []string, scope realtimeScope) (realtimeResponse, time.Time, error) {
+func cachedRealtimeCount(ctx context.Context, view, clientID string, assetIDs []string, scope realtimeScope, dims realtimeDims) (realtimeResponse, time.Time, error) {
 	// The window is part of the key: two readers on different date ranges are
 	// asking different questions, and sharing one answer between them would
 	// hand one of them the other's numbers.
@@ -682,7 +877,7 @@ func cachedRealtimeCount(ctx context.Context, view, clientID string, assetIDs []
 	   mid-count would otherwise cancel the query every other tab is waiting on.
 	   realtimeCountTimeout is what bounds it. */
 	cctx, cancel := context.WithTimeout(context.Background(), realtimeCountTimeout)
-	e.body, e.err = realtimeCount(cctx, view, clientID, assetIDs, scope)
+	e.body, e.err = realtimeCount(cctx, view, clientID, assetIDs, scope, dims)
 	cancel()
 	e.at = time.Now()
 	close(e.done)

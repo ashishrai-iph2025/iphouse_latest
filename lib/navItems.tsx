@@ -217,7 +217,35 @@ export const CLIENT_ADMIN_NAV_ITEM: NavItem = {
   ),
 }
 
-export const API_INDEPENDENT_PAGES = ['data-sharing']
+/*
+Pages that do NOT need a Markscan token, and so must not be gated on one.
+
+`apiAccess` is one specific thing: whether the portal holds a Markscan bearer
+token for this login. Most client modules genuinely need it — Search Case List,
+Submit URLs, Download Request, IP Tracking and War Room all read Markscan — so
+the gate exists and is right for them.
+
+REPORTS DOES NOT. Every endpoint behind it (ReportsScope, ReportsSections,
+ReportsOptions, ReportsData, ReportsOverview, ReportsAssets and the viz prefs)
+reads reports_api or the warehouse directly, and not one of them touches
+ResolveAPIToken. Reports was nevertheless gated on the Markscan token, which had
+two consequences, both bad:
+
+  - a client whose login holds no Markscan credentials could not open reports
+    that never needed Markscan, and
+  - the failure showed as "Reporting service unavailable", which names the wrong
+    service entirely — the reporting service was up the whole time.
+
+It is worst on an admin "view as client" session, which is where it was found.
+Impersonation swaps the session to the client's own userId, so the token is now
+resolved from THAT client's stored credentials; an admin with a working token of
+their own loses it the moment they step into a client portal.
+
+Add a page here only after checking its handlers for ResolveAPIToken. A page
+that does need the token and is listed here would load and then show empty data,
+which is a worse failure than being told it is unavailable.
+*/
+export const API_INDEPENDENT_PAGES = ['data-sharing', 'Reports']
 
 export function isApiIndependentItem(item: NavItem): boolean {
   return API_INDEPENDENT_PAGES.includes(item.pageName)

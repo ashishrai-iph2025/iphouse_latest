@@ -20,6 +20,7 @@ import {
    read as a control borrowed from another application. Same picker every other
    filter in the product opens. */
 import SearchableSelect from '@/components/ui/SearchableSelect'
+import ReportLoader from '@/components/shared/ReportLoader'
 
 const PER_PAGE = 20
 
@@ -143,9 +144,7 @@ export default function NotificationsListPage({ basePath }: { basePath: string }
 
         {/* List */}
         {loading && items.length === 0 ? (
-          <div className="py-16 grid place-items-center">
-            <span className="w-7 h-7 border-2 border-gray-200 border-t-[#14254A] rounded-full animate-spin" />
-          </div>
+          <ReportLoader size={150} label="Loading" className="py-14" />
         ) : items.length === 0 ? (
           <div className="py-16 text-center px-6">
             <div className="w-12 h-12 mx-auto mb-3 rounded-2xl grid place-items-center bg-gray-50 dark:bg-white/5 text-gray-300 dark:text-white/25">

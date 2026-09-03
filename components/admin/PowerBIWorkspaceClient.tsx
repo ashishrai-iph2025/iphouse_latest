@@ -1,6 +1,7 @@
 'use client'
 import React, { useState, useMemo, useCallback, useRef } from 'react'
 import { useTheme } from '@/lib/ThemeContext'
+import ReportLoader from '@/components/shared/ReportLoader'
 
 /* ─── brand palette (IP House) ─────────────────────────────────────────────── */
 const NAVY   = '#14254A'
@@ -600,10 +601,12 @@ export default function PowerBIWorkspaceClient() {
 
       {/* ── LOADING ── */}
       {loading && (
-        <div style={{ ...cardStyle, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '64px 32px', gap: 14 }}>
-          <span style={{ color: ORANGE, display: 'flex' }}><Ico name="spinner" size={32} className="animate-spin" /></span>
-          <div style={{ fontSize: 14, fontWeight: 700, color: isDark ? '#e2e8f5' : NAVY }}>Fetching workspace data…</div>
-          <div style={{ fontSize: 12, color: C.t2 }}>Retrieving reports, datasets and refresh history.</div>
+        <div style={{ ...cardStyle, padding: '48px 32px' }}>
+          <ReportLoader
+            size={170}
+            label="Fetching workspace data"
+            sublabel="Retrieving reports, datasets and refresh history."
+          />
         </div>
       )}
 

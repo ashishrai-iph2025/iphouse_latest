@@ -22,11 +22,13 @@ import {
 } from 'recharts'
 import { createPortal } from 'react-dom'
 import InfoDot from '@/components/shared/InfoDot'
+import Portal from '@/components/ui/Portal'
 import { Link } from 'react-router-dom'
 import SearchableSelect from '@/components/ui/SearchableSelect'
 import DateRangePicker from '@/components/ui/DateRangePicker'
 import { WORLD_SHAPES, WORLD_VIEWBOX } from './worldShapes'
 import RealtimeCard from '@/components/shared/RealtimeCard'
+import ReportLoader from '@/components/shared/ReportLoader'
 import ReportLayoutEditor from '@/components/reports/ReportLayoutEditor'
 
 /* ── Palette ───────────────────────────────────────────────────────────────────
@@ -353,6 +355,34 @@ Clipped to the period's start too: a period shorter than a week opens on all of
 itself rather than on days that predate its own data.
 */
 const DEFAULT_DAYS = 7
+
+/**
+ * The range a reader has chosen, carried into another section — unless that
+ * section cannot show it.
+ *
+ * switchSection used to replace the range outright whenever the section being
+ * ENTERED had a period of its own, which is every sports report. So picking
+ * 1 Aug - 2 Sep on Summary and clicking Open Web threw the choice away and
+ * reopened on the default week, and the navigation stopped being "the same
+ * question asked of another platform".
+ *
+ * The worry behind that rule was real but wider than it needed to be: a range
+ * carried in from an UNBOUNDED report can land outside the period, and the
+ * server would then clamp it to something the reader never picked and cannot
+ * see the reason for. A range already INSIDE the period has no such problem, so
+ * it travels. Same test the client-change effect applies, for the same reason.
+ */
+function carriedRange(
+  period: { start: string; end: string } | undefined,
+  from: string,
+  to: string,
+): { from: string; to: string } {
+  if (!period) return { from, to }
+  const inside =
+    from >= period.start && from <= period.end &&
+    to >= period.start && to <= period.end
+  return inside ? { from, to } : periodDefaultRange(period)
+}
 
 function periodDefaultRange(period: { start: string; end: string }): { from: string; to: string } {
   const now = today()
@@ -2774,18 +2804,24 @@ function RepeatOffenders({ rows, m, onPick, activeVal = '', limit = 10 }: {
 }
 
 /** Slicer in the right rail. */
-function Slicer({ label, info, value, onChange, options, placeholder = 'All', required, disabled }: {
+function Slicer({ label, info, value, onChange, options, placeholder = 'All', required, disabled, wide }: {
   label: string; value: string; onChange: (v: string) => void
   options: { key: string; label: string }[]
   placeholder?: string; required?: boolean; disabled?: boolean
   /** What this slicer narrows, behind an ⓘ — see reportpaneldesc.go. */
   info?: string
+  /** Rendered in the wide pane rather than the rail. Same control, more room:
+      compact is what makes a dozen of these fit a 244px column, and it is also
+      what cuts "Serie A: Bologna vs Lazio (24 Aug 2026)" to "Serie A: Bologna
+      vs Lazio (24…" — which is the whole reason the wide pane exists. */
+  wide?: boolean
 }) {
   return (
     <div>
       {/* Tight against its control: a dozen of these run down the rail, and the
           label belongs to the box under it rather than floating between two. */}
-      <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider mb-[3px] text-gray-400">
+      <label className={`flex items-center gap-1 font-bold uppercase tracking-wider text-gray-400 ${
+        wide ? 'text-[11px] mb-1.5' : 'text-[10px] mb-[3px]'}`}>
         <span className="truncate">
           {label}
           {required && <span className="text-[#FC934C] ml-0.5">*</span>}
@@ -2793,7 +2829,8 @@ function Slicer({ label, info, value, onChange, options, placeholder = 'All', re
         <InfoDot text={info} />
       </label>
       <SearchableSelect options={options} value={value} onChange={onChange}
-        placeholder={placeholder} emptyLabel={clearLabel(label)} disabled={disabled} compact />
+        placeholder={placeholder} emptyLabel={clearLabel(label)} disabled={disabled}
+        compact={!wide} />
     </div>
   )
 }
@@ -2880,6 +2917,28 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     if (typeof window === 'undefined') return true
     return window.localStorage.getItem('reports.filters') !== 'closed'
   })
+  /* The WIDE pane, off-canvas.
+
+     Not a second filter set — the same one, given room. The rail is 244px so
+     the charts get the rest, and at that width a slicer showing "Serie A:
+     Bologna vs Lazio (24 Aug 2026)" shows "Serie A: Bologna vs Lazio (24…":
+     every fixture in a season truncating to the same nine characters, which
+     makes the control unusable for the one thing it is for.
+
+     Deliberately NOT remembered across visits, unlike the rail's own state.
+     This is a thing a reader opens to make one selection they could not make in
+     the rail, and then closes; reopening the page into a panel covering half the
+     report would be answering a question nobody asked twice. */
+  const [filtersWide, setFiltersWide] = useState(false)
+
+  // Escape closes it, and the body underneath must not scroll while it is open.
+  useEffect(() => {
+    if (!filtersWide) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFiltersWide(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [filtersWide])
+
   useEffect(() => {
     window.localStorage.setItem('reports.filters', filtersOpen ? 'open' : 'closed')
   }, [filtersOpen])
@@ -3040,11 +3099,32 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     return (qualifier ?? '').trim().toLowerCase() === 'sports'
   }, [activeSection])
 
-  /* Whether the live card is on the page at all. Named because it is read in
-     two places that must agree: the card's own render, and the sticky offset
-     the rails are given — a rail held down for a band that is not there would
-     leave a gap at the top of the page with nothing in it. */
-  const showRealtime = !!filters.clientId && isSportsSection
+  /*
+  Whether the live card is on the page at all.
+
+  Named because it is read in two places that must agree: the card's own render,
+  and the sticky offset the rails are given — a rail held down for a band that is
+  not there would leave a gap at the top of the page with nothing in it.
+
+  ── Why it now waits for a narrowing filter ────────────────────────────────
+
+  A client, a sports section, AND one of Match Day / Asset / Franchise.
+
+  Unfiltered, the card counted the client's entire configured season on every
+  visit — the most expensive query in the product, run to answer a question
+  nobody had asked yet, above a report the reader had not finished setting up.
+  It is a LIVE figure, and a live figure is worth its cost when it is about
+  something specific: this fixture, this title, this team. "Everything, ever" is
+  not a live number, it is a total, and the report below already carries it.
+
+  The three that qualify are the ones that name a THING rather than narrow a
+  list. Country or language would leave the card counting most of the season
+  anyway; a match day, an asset or a franchise cuts it to something a reader is
+  actively watching.
+  */
+  const REALTIME_FILTERS = ['matchDay', 'assetId', 'franchiseName'] as const
+  const realtimeNarrowed = REALTIME_FILTERS.some(k => !!filters[k])
+  const showRealtime = !!filters.clientId && isSportsSection && realtimeNarrowed
 
   /*
   How far down the two rails start sticking.
@@ -3368,17 +3448,43 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     // The dates are about to be replaced wholesale; a way back to the previous
     // platform's range would be a way back to nothing.
     setDrill(null)
-    /* Keep client + dates; every other slicer belongs to the section being
-       left. The dates are the exception when the section being ENTERED has a
-       period of its own: a range carried in from an unbounded report is very
-       likely outside it, and the server would clamp it to something the reader
-       never chose and cannot see the reason for. So a governed section opens on
-       its own default week instead. */
+    /* Keep client + dates. The dates are the exception when the section being
+       ENTERED has a period of its own: a range carried in from an unbounded
+       report is very likely outside it, and the server would clamp it to
+       something the reader never chose and cannot see the reason for. So a
+       governed section opens on its own default week instead.
+
+       ── And every slicer the target section ALSO declares ─────────────────
+
+       Every other slicer used to be dropped, on the grounds that it belonged to
+       the section being left. That is right about a slicer the new section has
+       no column for and wrong about the rest, and the difference matters most
+       for exactly the filters a reader sets deliberately: picking Match Day 14
+       and then opening Open Web to see that fixture there threw the fixture
+       away and answered for the whole season instead.
+
+       So a filter travels if the section being entered NAMES it. `filters` is
+       that section's own parameter list — the same list the query is built from
+       a few hundred lines below — so a slicer that survives is one the new
+       report can actually apply, and one that cannot is still dropped rather
+       than sent to a table with no such column.
+
+       It is also what makes the navigation usable as a comparison: the rail
+       stops being "start again somewhere else" and becomes "the same question,
+       asked of another platform". */
     const to = sections.find(s => s.key === key)
-    setFilters(f => ({
-      clientId: f.clientId,
-      ...(to?.period ? periodDefaultRange(to.period) : { from: f.from, to: f.to }),
-    }))
+    const carried = new Set<string>(to?.filters ?? [])
+    setFilters(f => {
+      const kept: Filters = { clientId: f.clientId }
+      for (const [k, v] of Object.entries(f)) {
+        if (v && carried.has(k)) kept[k] = v
+      }
+      return {
+        ...kept,
+        // The reader's dates survive the move where the target can show them.
+        ...carriedRange(to?.period, f.from, f.to),
+      }
+    })
   }
 
   /* The server sends {id, name, count}; a few lists are still plain strings.
@@ -3568,6 +3674,27 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         ?? seenNames.current[`${k} ${filters[k]}`]
         ?? filters[k],
     }))
+
+  /* The asset TITLE for the realtime card's caption, not the GUID the filter
+     carries.
+
+     The card said "1 asset" and never which one, so a reader comparing it with
+     the tiles below could not tell whether the two were even answering about
+     the same fixture. Resolved exactly as the chips above are — option list
+     first, then the seenNames cache, then the raw value — so the card and the
+     chip cannot end up calling one filter two things.
+
+     An array because the prop takes several; the sports rail filters to one
+     asset at a time, so it is an array of one or none. */
+  const realtimeAssetNames = useMemo(() => {
+    const id = filters.assetId
+    if (!id) return []
+    const name = asOpts(opts.assetId).find(o => o.key === id)?.label
+      ?? seenNames.current[`assetId ${id}`]
+    // No name yet: the caption falls back to the asset COUNT rather than
+    // printing a GUID at a reader — see scopeBits.
+    return name ? [name] : []
+  }, [filters.assetId, opts.assetId])
 
   /* The page's shape comes from the server: every visual, in the order and at
      the width this platform is configured for (Report Configuration → Layout,
@@ -3876,15 +4003,118 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     </>
   )
 
+  /*
+  The filter pane's controls, rendered in BOTH places that show them.
+
+  One function rather than two blocks, for the reason written on navItems a few
+  hundred lines up: two copies drift the first time one of them gains a slicer,
+  a chip or an ⓘ. Everything here reads the same `filters` state and the same
+  `opts` lists, so the rail and the wide pane are two views of one control set —
+  a value changed in either is changed in both, with no syncing to get wrong.
+
+  `wide` is the only difference: it turns off the compact rendering that makes a
+  dozen slicers fit a 244px rail and, in doing so, truncates the asset names.
+  */
+  const filterControls = (wide: boolean) => (
+    <>
+    {/* One control owns both ends of the range, with its quick ranges
+        inside — two separate pickers let an invalid window be set and
+        said nothing about which preset produced the dates. */}
+    {/* Clamped to the report's own period where it has one, so a
+        range outside the data cannot be picked in the first place. The
+        server clamps too and is the authority — this is the half that
+        keeps a reader from choosing a window and then being shown a
+        different one. `max` stays today for an ungoverned report, and
+        for a governed one whose period runs past today: there is no
+        data ahead of now either way. */}
+    <DateRangePicker
+      value={{ from: filters.from, to: filters.to }}
+      onChange={r => setFilters(f => ({ ...f, from: r.from, to: r.to }))}
+      min={activeSection?.period?.start}
+      max={activeSection?.period && activeSection.period.end < today()
+        ? activeSection.period.end
+        : today()}
+      /* The quick ranges count back from the newest day the report can
+         show, not from a today the period may have ended before —
+         otherwise "Last 7 days" on a closed season resolves to seven
+         days with nothing in them. */
+      anchor={activeSection?.period && activeSection.period.end < today()
+        ? activeSection.period.end
+        : undefined}
+      compact={!wide} />
+
+    {/* No Platform slicer here. The navigation rail on the left is the
+        same control over the same value — two copies of it meant two
+        places to look for the answer to "which platform am I reading",
+        and the one on the left is the one that reads as navigation. */}
+
+    {/* Step 1 — client. The list is scoped to the platform picked in
+        the rail, so it cannot be populated before one is chosen. */}
+    {/* Staff pick a client; a client login has one, forced by the
+        server from the mapping. Rendering the slicer for them would be
+        a control that changes nothing. */}
+    {!scoped && (
+    <>
+      <Slicer label="1 · Client" value={filters.clientId} onChange={setF('clientId')}
+        options={clientOpts}
+        placeholder={section ? 'Select client' : 'Select platform first'}
+        disabled={!section}
+        required />
+      {/* An empty slicer that means "the call failed" looks exactly like
+          one that means "there are no clients", and the reader has no
+          way to tell which — so when the list could not be fetched, say
+          so instead of leaving a dropdown that opens onto nothing. */}
+      {opts.clientsError && clientOpts.length === 0 && (
+        <p className="text-[11px] mt-1 leading-snug" style={{ color: '#b45309' }}>
+          The client list could not be loaded — {String(opts.clientsError)}
+        </p>
+      )}
+    </>
+    )}
+
+    {/* The filter pane, as Report Configuration arranged it for this
+        platform and this client: which slicers are here at all, and in
+        what order. An older server sends no pane, so fall back to every
+        filter the section understands less the panel-only ones — which
+        is the arrangement this page used to hardcode. */}
+    {(activeSection?.slicers
+      ?? (activeSection?.filters ?? []).filter(k => !PANEL_ONLY_FILTERS.has(k))
+    ).map(key => {
+      /* Renamed and described in Report Configuration → Page Layout,
+         same as any chart. Absent for a slicer nobody touched, which
+         falls back to this page's own label and no ⓘ. */
+      const meta = (activeSection?.slicerMeta ?? {})[key]
+      return (
+        <Slicer key={key} label={meta?.label || FILTER_LABELS[key] || key}
+          info={meta?.desc}
+          value={filters[key] || ''} onChange={setF(key)}
+          options={asOpts(opts[key])} wide={wide} />
+      )
+    })}
+
+    {chips.length > 0 && (
+      <div className="pt-3 border-t border-[#14254A]/10 dark:border-white/10">
+        <div className="flex flex-wrap gap-1.5">
+          {chips.map(c => <Chip key={c.key} label={c.label} value={c.display} onClear={() => setF(c.key)('')} />)}
+        </div>
+        <button onClick={() => setFilters(f => ({ clientId: f.clientId, from: f.from, to: f.to }))}
+          className="mt-2 text-[10px] font-bold text-gray-400 hover:text-[#FC934C]">
+          Reset filters
+        </button>
+      </div>
+    )}
+
+    {lastRun && <p className="text-[10px] text-gray-400 pt-1">Last run {lastRun.toLocaleTimeString()}</p>}
+    </>
+  )
+
   return (
     <div className="p-3 sm:p-4 fade-in">
-      {loading && (
-        <>
-          <div className="fixed top-0 left-0 right-0 h-[3px] z-[9999]"
-            style={{ background: `linear-gradient(90deg,${BRAND_NAVY},${m.ident},${BRAND_ORANGE})`, backgroundSize: '200% 100%', animation: 'rpSlide 1.4s ease infinite' }} />
-          <style>{`@keyframes rpSlide{0%{background-position:100% 0}100%{background-position:-100% 0}}`}</style>
-        </>
-      )}
+      {/* No progress bar pinned to the top of the window any more. It sat above
+          the app chrome, far from the panels it described, and on a re-run the
+          only other signal was the report dimming to 60% — which reads as
+          "disabled" rather than "reloading". The loader below takes over for
+          every run, first and subsequent. */}
 
       <nav className="flex items-center gap-1 text-xs mb-3">
         <Link to={scoped ? '/dashboard' : '/admin/home'}
@@ -4063,6 +4293,16 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             : ''}`}>
           <RealtimeCard view="sports" clientId={filters.clientId}
             assetIds={realtimeAssetIds}
+            /* The narrowing filters that put the card on screen at all — see
+               showRealtime. Sending only the asset was the bug: picking Serie A
+               narrowed every panel below to 22,007 rows and left the card
+               reporting 103,512 for the whole season. */
+            franchise={filters.franchiseName || undefined}
+            matchDay={filters.matchDay || undefined}
+            /* Names for the caption in the card's corner. The filters above
+               narrow the count; this is what tells the reader what it was
+               narrowed TO. */
+            assetNames={realtimeAssetNames}
             pinned={rtPinned} onTogglePin={() => setRtPinned(p => !p)}
             className={rtPinned ? 'shadow-lg' : ''} />
         </div>
@@ -4185,12 +4425,9 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         </aside>
 
         {/* ── Centre: KPI band + panels ────────────────────────────────────── */}
-        {/* A refetch holds the previous render at reduced opacity rather than
-            tearing the page down — no skeleton flash, no layout jump. */}
         {/* The centre takes everything the two rails do not, so collapsing
             either one widens the charts instead of leaving a gap. */}
-        <main className={`w-full xl:flex-1 xl:min-w-0 space-y-3 sm:space-y-4
-          transition-opacity duration-200 ${loading && data ? 'opacity-60' : ''}`}>
+        <main className="w-full xl:flex-1 xl:min-w-0 space-y-3 sm:space-y-4">
 
           {/* The KPI band is a panel like any other now — it is drawn inside the
               layout below, so it can be moved or hidden along with the charts
@@ -4218,16 +4455,26 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
                   ? 'The client list can’t be loaded at the moment. Please try again in a few minutes.'
                   : 'Use the Client slicer on the right. The report runs automatically and re-runs on every filter change.'}
             />
+          ) : loading ? (
+            /* EVERY run, not just the first. A re-run used to leave the old
+               numbers on screen at 60% opacity, which is indistinguishable from
+               a disabled panel and — worse — shows figures for the PREVIOUS
+               filter set as though they answered the new one. */
+            <Card title={activeSection.label}>
+              <ReportLoader
+                fill
+                label="Running the report"
+                sublabel={`${activeSection.label} · querying the analytics warehouse`}
+              />
+            </Card>
           ) : !data ? (
             /* clientId is set but the query has not returned — switching section
                clears `data` while the client stays selected, and every panel
                below dereferences it. */
             <Notice
               cardTitle={activeSection.label}
-              title={loading ? 'Running the report…' : err ? 'The report could not be loaded' : 'No data yet'}
-              body={loading
-                ? 'Querying the analytics warehouse for the current filter set.'
-                : err || 'Adjust the filters on the right to load a result set.'}
+              title={err ? 'The report could not be loaded' : 'No data yet'}
+              body={err || 'Adjust the filters on the right to load a result set.'}
             />
           ) : (
             <>
@@ -4453,6 +4700,18 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
               <span className="flex items-center gap-1">
                 <button onClick={() => { loadHealth(); setFilters(f => ({ ...f })) }} title="Refresh"
                   className="text-sm font-bold text-gray-400 hover:text-[#FC934C]">↻</button>
+                {/* Into the wide pane. Between refresh and hide because that is
+                    the order they are reached in: re-run what is set, open it
+                    up to change something, or put it away. */}
+                <button onClick={() => setFiltersWide(true)}
+                  title="Open the filters in a wider pane" aria-label="Open the filters in a wider pane"
+                  className="w-6 h-6 grid place-items-center rounded-md text-gray-400
+                    hover:text-[#FC934C] hover:bg-[#FC934C]/10 transition-colors">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M15 3h6v6M21 3l-7 7M9 21H3v-6M3 21l7-7" />
+                  </svg>
+                </button>
                 <button onClick={() => setFiltersOpen(false)} title="Hide filters" aria-label="Hide filters"
                   className="w-6 h-6 grid place-items-center rounded-md text-gray-400
                     hover:text-[#14254A] hover:bg-[#14254A]/[0.06]
@@ -4465,99 +4724,92 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
               </span>
             </div>
 
-            {/* One control owns both ends of the range, with its quick ranges
-                inside — two separate pickers let an invalid window be set and
-                said nothing about which preset produced the dates. */}
-            {/* Clamped to the report's own period where it has one, so a
-                range outside the data cannot be picked in the first place. The
-                server clamps too and is the authority — this is the half that
-                keeps a reader from choosing a window and then being shown a
-                different one. `max` stays today for an ungoverned report, and
-                for a governed one whose period runs past today: there is no
-                data ahead of now either way. */}
-            <DateRangePicker
-              value={{ from: filters.from, to: filters.to }}
-              onChange={r => setFilters(f => ({ ...f, from: r.from, to: r.to }))}
-              min={activeSection?.period?.start}
-              max={activeSection?.period && activeSection.period.end < today()
-                ? activeSection.period.end
-                : today()}
-              /* The quick ranges count back from the newest day the report can
-                 show, not from a today the period may have ended before —
-                 otherwise "Last 7 days" on a closed season resolves to seven
-                 days with nothing in them. */
-              anchor={activeSection?.period && activeSection.period.end < today()
-                ? activeSection.period.end
-                : undefined}
-              compact />
-
-            {/* No Platform slicer here. The navigation rail on the left is the
-                same control over the same value — two copies of it meant two
-                places to look for the answer to "which platform am I reading",
-                and the one on the left is the one that reads as navigation. */}
-
-            {/* Step 1 — client. The list is scoped to the platform picked in
-                the rail, so it cannot be populated before one is chosen. */}
-            {/* Staff pick a client; a client login has one, forced by the
-                server from the mapping. Rendering the slicer for them would be
-                a control that changes nothing. */}
-            {!scoped && (
-            <>
-              <Slicer label="1 · Client" value={filters.clientId} onChange={setF('clientId')}
-                options={clientOpts}
-                placeholder={section ? 'Select client' : 'Select platform first'}
-                disabled={!section}
-                required />
-              {/* An empty slicer that means "the call failed" looks exactly like
-                  one that means "there are no clients", and the reader has no
-                  way to tell which — so when the list could not be fetched, say
-                  so instead of leaving a dropdown that opens onto nothing. */}
-              {opts.clientsError && clientOpts.length === 0 && (
-                <p className="text-[11px] mt-1 leading-snug" style={{ color: '#b45309' }}>
-                  The client list could not be loaded — {String(opts.clientsError)}
-                </p>
-              )}
-            </>
-            )}
-
-            {/* The filter pane, as Report Configuration arranged it for this
-                platform and this client: which slicers are here at all, and in
-                what order. An older server sends no pane, so fall back to every
-                filter the section understands less the panel-only ones — which
-                is the arrangement this page used to hardcode. */}
-            {(activeSection?.slicers
-              ?? (activeSection?.filters ?? []).filter(k => !PANEL_ONLY_FILTERS.has(k))
-            ).map(key => {
-              /* Renamed and described in Report Configuration → Page Layout,
-                 same as any chart. Absent for a slicer nobody touched, which
-                 falls back to this page's own label and no ⓘ. */
-              const meta = (activeSection?.slicerMeta ?? {})[key]
-              return (
-                <Slicer key={key} label={meta?.label || FILTER_LABELS[key] || key}
-                  info={meta?.desc}
-                  value={filters[key] || ''} onChange={setF(key)}
-                  options={asOpts(opts[key])} />
-              )
-            })}
-
-            {chips.length > 0 && (
-              <div className="pt-3 border-t border-[#14254A]/10 dark:border-white/10">
-                <div className="flex flex-wrap gap-1.5">
-                  {chips.map(c => <Chip key={c.key} label={c.label} value={c.display} onClear={() => setF(c.key)('')} />)}
-                </div>
-                <button onClick={() => setFilters(f => ({ clientId: f.clientId, from: f.from, to: f.to }))}
-                  className="mt-2 text-[10px] font-bold text-gray-400 hover:text-[#FC934C]">
-                  Reset filters
-                </button>
-              </div>
-            )}
-
-            {lastRun && <p className="text-[10px] text-gray-400 pt-1">Last run {lastRun.toLocaleTimeString()}</p>}
+            {filterControls(false)}
           </div>
           )}
         </aside>
       </div>
       </>
+      )}
+
+      {/* ── The filters, in a pane wide enough to read them ─────────────────
+
+          Off-canvas from the right, over the report rather than beside it. The
+          rail keeps its place and its state; this is the same controls at a
+          width where an asset name is a name rather than a prefix.
+
+          Portalled for the reason every overlay in this product is: the page
+          wrapper carries `.fade-in`, whose fill-mode leaves a permanent
+          transform behind, and a transformed ancestor makes `position: fixed`
+          resolve against the content box instead of the viewport.
+
+          z-[80]: over the report, the rails and the pinned live card, and under
+          the Arrange panel at 69/70 — no, ABOVE it, which is why 80 and not 60:
+          the two never open together, and if they ever did the one the reader
+          just asked for should be the one in front. Portalled selects and date
+          pickers sit at 9999 and stay reachable from inside it. */}
+      {filtersWide && (
+        <Portal>
+          <style>{`@keyframes fpIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
+          <div className="fixed inset-0 z-[80] flex justify-end backdrop-blur-[2px]"
+            style={{ background: 'rgba(20,37,74,0.45)' }}
+            role="dialog" aria-modal="true" aria-label="Report filters"
+            onClick={() => setFiltersWide(false)}>
+            {/* 520px on a desktop, the whole width on a phone. The number is
+                the point of the feature: a fixture label runs to about sixty
+                characters and this is what shows them. */}
+            <aside
+              className="h-full w-full sm:w-[460px] lg:w-[520px] flex flex-col shadow-2xl
+                bg-white dark:bg-[#1a2d55] border-l border-gray-200 dark:border-white/10"
+              style={{ animation: 'fpIn .22s ease-out' }}
+              onClick={e => e.stopPropagation()}>
+
+              <header className="px-5 py-4 flex items-start justify-between gap-3 flex-shrink-0
+                border-b border-gray-100 dark:border-white/10
+                bg-gradient-to-r from-[#14254A]/[0.04] to-transparent dark:from-white/[0.06]">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-[#FC934C]">
+                    {activeSection?.label ?? 'Report'}
+                  </p>
+                  <h2 className="text-base font-extrabold text-[#14254A] dark:text-white leading-tight mt-0.5">
+                    Filters
+                  </h2>
+                  {/* Said once, here: a reader who has just moved a slicer in a
+                      panel covering the report needs to know the report behind
+                      it has already followed. */}
+                  <p className="text-[11px] text-gray-500 dark:text-white/50 mt-1">
+                    The same filters as the rail. Changes apply to the report as you make them.
+                  </p>
+                </div>
+                <button onClick={() => setFiltersWide(false)} aria-label="Close"
+                  className="w-8 h-8 grid place-items-center rounded-lg text-gray-400 flex-shrink-0 text-sm
+                    hover:text-[#14254A] hover:bg-[#14254A]/[0.06]
+                    dark:hover:text-white dark:hover:bg-white/10">
+                  ✕
+                </button>
+              </header>
+
+              {/* The controls scroll, the header and footer do not — a filter
+                  set taller than the panel must not put its Done button past
+                  the fold. */}
+              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3.5">
+                {filterControls(true)}
+              </div>
+
+              <div className="px-5 py-3 flex-shrink-0 border-t border-gray-100 dark:border-white/10
+                bg-gray-50/70 dark:bg-white/[0.03] flex items-center justify-between gap-3">
+                <span className="text-[11px] text-gray-400">
+                  {loading ? 'Running…' : lastRun ? `Last run ${lastRun.toLocaleTimeString()}` : ''}
+                </span>
+                <button onClick={() => setFiltersWide(false)}
+                  className="px-5 py-2 rounded-xl text-xs font-bold text-white hover:opacity-90"
+                  style={{ background: 'linear-gradient(135deg,#14254A,#1e3a6e)' }}>
+                  Done
+                </button>
+              </div>
+            </aside>
+          </div>
+        </Portal>
       )}
 
       {scoped && canArrange && (

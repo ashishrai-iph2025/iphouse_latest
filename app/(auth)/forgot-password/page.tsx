@@ -1,8 +1,9 @@
-﻿'use client'
+'use client'
 import { usePasswordPolicy, checkPassword, PasswordRules } from '@/lib/passwordPolicy'
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import AuthShell from '@/components/auth/AuthShell'
 
 type Step = 'email' | 'reset' | 'done'
 
@@ -123,236 +124,158 @@ export default function ForgotPasswordPage() {
   const stepNum = { email: 1, reset: 2, done: 2 }[step]
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ fontFamily: "'Poppins', sans-serif", background: '#f3f6fb' }}>
-
-      {/* Hero */}
-      <section className="text-center text-white px-4" style={{
-        background: "linear-gradient(rgba(20,37,74,.88),rgba(20,37,74,.88)), url('/background2.png') center/cover no-repeat",
-        padding: '60px 16px 120px',
-      }}>
-        <img src="/newlogo.png" alt="IP House" width={160} height={44} className="h-10 w-auto mx-auto mb-4"
-          style={{ filter: 'brightness(0) invert(1)' }} />
-        <h1 className="text-4xl font-bold m-0">Reset Password</h1>
-        <p className="mt-2 font-light max-w-lg mx-auto" style={{ opacity: 0.9 }}>
-          We'll email you a reset token. Paste it here to set a new password.
-        </p>
-      </section>
-
-      {/* Card */}
-      <main className="w-full px-5 pb-24 z-10 relative" style={{ maxWidth: 480, margin: '-80px auto 0' }}>
-        <div className="bg-white rounded-2xl p-7" style={{ boxShadow: '0 24px 60px rgba(2,18,46,0.12)' }}>
-
-          {/* Back link */}
-          {step !== 'done' && (
-            <div className="mb-4">
-              <Link to="/login"
-                className="inline-flex items-center gap-1.5 text-sm font-medium no-underline"
-                style={{ color: '#14254A' }}>
-                <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd"/>
-                </svg>
-                Back to Login
-              </Link>
-            </div>
-          )}
-
-          {/* Step indicator */}
-          {step !== 'done' && (
-            <div className="flex items-center gap-2 mb-5">
-              {[1, 2].map(n => (
-                <div key={n} className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all"
-                    style={{
-                      background: n < stepNum ? '#16A34A' : n === stepNum ? '#14254A' : '#e5e7eb',
-                      color:      n <= stepNum ? '#fff' : '#9ca3af',
-                    }}>
-                    {n < stepNum ? '✓' : n}
-                  </div>
-                  {n < 2 && <div className="h-px w-8 rounded" style={{ background: n < stepNum ? '#16A34A' : '#e5e7eb' }} />}
-                </div>
-              ))}
-              <span className="text-xs text-gray-400 ml-1">
-                {step === 'email' ? 'Enter email' : 'Reset password'}
-              </span>
-            </div>
-          )}
-
-          {/* Error */}
-          {error && (
-            <div className="rounded-xl px-4 py-2.5 text-sm mb-4 border flex items-center gap-2"
-              style={{ background: '#fef2f2', borderColor: '#fecaca', color: '#b91c1c' }}>
-              <span>⚠</span> {error}
-            </div>
-          )}
-
-          {/* ── STEP 1: Email ── */}
-          {step === 'email' && (
-            <>
-              <h3 className="font-bold text-xl mb-1" style={{ color: '#14254A' }}>Forgot Password?</h3>
-              <p className="text-xs mb-5" style={{ color: '#6b7c93' }}>
-                Enter your registered email and we'll send a reset token valid for 30 minutes.
-              </p>
-              <form onSubmit={handleSend}>
-                <label className="block text-xs font-medium mb-1" style={{ color: '#374151' }}>
-                  Email Address <span style={{ color: '#ef4444' }}>*</span>
-                </label>
-                <input
-                  autoComplete="off" type="email" value={email}
-                  onChange={e => {
-                    setEmail(e.target.value)
-                    // A verdict about the previous value must not linger over
-                    // the new one.
-                    setEmailState('idle')
-                    if (error) setError('')
-                  }}
-                  onBlur={e => { void checkEmail(e.target.value) }}
-                  required
-                  placeholder="you@example.com"
-                  className="w-full px-4 py-2.5 text-sm rounded-xl border focus:outline-none"
-                  style={{ borderColor: emailState === 'missing' ? '#ef4444'
-                         : emailState === 'found' ? '#16A34A' : '#dce3ee' }}
-                />
-
-                {/* One line under the field, so the answer is where the reader
-                    is looking rather than only in the banner above. */}
-                <div className="mb-4 mt-1 text-xs" style={{ minHeight: 16 }}>
-                  {emailState === 'checking' && <span style={{ color: '#6b7c93' }}>Checking…</span>}
-                  {emailState === 'found'    && <span style={{ color: '#16A34A' }}>✓ Account found</span>}
-                  {emailState === 'missing'  && (
-                    <span style={{ color: '#b91c1c' }}>
-                      No account is registered with this email.{' '}
-                      <Link to="/login" style={{ color: '#14254A', fontWeight: 600 }}>Back to login</Link>
-                    </span>
-                  )}
-                </div>
-
-                <button type="submit" disabled={loading || emailState === 'checking' || emailState === 'missing'}
-                  className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-60"
-                  style={{ background: 'linear-gradient(135deg,#FFC82B,#FC934C)', color: '#14254A', border: 'none' }}>
-                  {loading ? 'Sending…' : emailState === 'checking' ? 'Checking…' : 'Send Reset Token'}
-                </button>
-              </form>
-            </>
-          )}
-
-          {/* ── STEP 2: Paste token + new password ── */}
-          {step === 'reset' && (
-            <>
-              <h3 className="font-bold text-xl mb-1" style={{ color: '#14254A' }}>Check Your Email</h3>
-              <p className="text-xs mb-5" style={{ color: '#6b7c93' }}>
-                A reset token was sent to <strong style={{ color: '#14254A' }}>{email}</strong>. Copy it from the email and paste it below.
-              </p>
-
-              <form onSubmit={handleReset}>
-                <label className="block text-xs font-medium mb-1" style={{ color: '#374151' }}>
-                  Reset Token <span style={{ color: '#ef4444' }}>*</span>
-                </label>
-                <textarea
-                  value={resetToken}
-                  onChange={e => setResetToken(e.target.value)}
-                  placeholder="Paste the reset token from your email…"
-                  rows={2}
-                  className="w-full px-4 py-2.5 text-sm rounded-xl border focus:outline-none mb-4 resize-none font-mono"
-                  style={{ borderColor: '#dce3ee', fontSize: 12 }}
-                  onFocus={e => (e.target.style.borderColor = '#14254A')}
-                  onBlur={e  => (e.target.style.borderColor = '#dce3ee')}
-                />
-
-                <label className="block text-xs font-medium mb-1" style={{ color: '#374151' }}>New Password</label>
-                <div className="relative mb-3">
-                  <input
-                    type={showPass ? 'text' : 'password'} value={newPass}
-                    onChange={e => setNewPass(e.target.value)} required minLength={policy.minLength}
-                    placeholder={`Minimum ${policy.minLength} characters`}
-                    className="w-full px-4 py-2.5 text-sm rounded-xl border focus:outline-none pr-10"
-                    style={{ borderColor: '#dce3ee' }}
-                    onFocus={e => (e.target.style.borderColor = '#14254A')}
-                    onBlur={e  => (e.target.style.borderColor = '#dce3ee')}
-                  />
-                  <button type="button" onClick={() => setShowPass(s => !s)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs">
-                    {showPass ? '🙈' : '👁'}
-                  </button>
-                </div>
-
-                {/* Strength, scored against the CONFIGURED minimum rather than a
-                    hardcoded 8 — a meter calling a password "Strong" that the
-                    server is about to refuse is worse than no meter. The rules
-                    below it are the authoritative list. */}
-                {newPass && (() => {
-                  const hits = [
-                    Array.from(newPass).length >= policy.minLength,
-                    /\p{Lu}/u.test(newPass),
-                    /\d/.test(newPass),
-                    /[^\p{L}\p{N}\s]/u.test(newPass),
-                  ].filter(Boolean).length
-                  const colors = ['#ef4444','#f97316','#eab308','#16A34A']
-                  return (
-                    <div className="flex gap-1 mb-3">
-                      {[1,2,3,4].map(n => (
-                        <div key={n} className="flex-1 h-1 rounded-full transition-all"
-                          style={{ background: n <= hits ? colors[hits - 1] : '#e5e7eb' }} />
-                      ))}
-                      <span className="text-[10px] ml-1" style={{ color: '#9ca3af' }}>
-                        {['','Weak','Fair','Good','Strong'][hits]}
-                      </span>
-                    </div>
-                  )
-                })()}
-
-                <PasswordRules policy={policy} value={newPass} />
-
-                <label className="block text-xs font-medium mb-1" style={{ color: '#374151' }}>Confirm Password</label>
-                <input
-                  type={showPass ? 'text' : 'password'} value={confirmPas}
-                  onChange={e => setConfirmPas(e.target.value)} required minLength={policy.minLength}
-                  placeholder="Repeat new password"
-                  className="w-full px-4 py-2.5 text-sm rounded-xl border focus:outline-none mb-4"
-                  style={{ borderColor: '#dce3ee' }}
-                  onFocus={e => (e.target.style.borderColor = '#14254A')}
-                  onBlur={e  => (e.target.style.borderColor = '#dce3ee')}
-                />
-
-                <button type="submit" disabled={loading}
-                  className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-60"
-                  style={{ background: 'linear-gradient(135deg,#FFC82B,#FC934C)', color: '#14254A', border: 'none' }}>
-                  {loading ? 'Saving…' : 'Reset Password'}
-                </button>
-
-                <p className="text-center text-xs mt-3" style={{ color: '#6b7c93' }}>
-                  Didn't receive the email?{' '}
-                  <button type="button" onClick={() => { setStep('email'); setError('') }}
-                    className="font-semibold underline"
-                    style={{ color: '#14254A', background: 'none', border: 'none', cursor: 'pointer' }}>
-                    Try again
-                  </button>
-                </p>
-              </form>
-            </>
-          )}
-
-          {/* ── DONE ── */}
-          {step === 'done' && (
-            <div className="text-center py-6">
-              <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-4"
-                style={{ background: '#f0fdf4' }}>✅</div>
-              <h3 className="font-bold text-xl mb-2" style={{ color: '#14254A' }}>Password Reset!</h3>
-              <p className="text-sm mb-6" style={{ color: '#6b7c93' }}>
-                Your password has been updated successfully. You can now sign in with your new password.
-              </p>
-              <Link to="/login"
-                className="inline-block w-full py-3 rounded-xl font-semibold text-sm text-center no-underline"
-                style={{ background: 'linear-gradient(135deg,#FFC82B,#FC934C)', color: '#14254A' }}>
-                Go to Login
-              </Link>
-            </div>
-          )}
+    <AuthShell
+      eyebrow="Account recovery"
+      title={<>Reset your<br /><em>password</em>.</>}
+      lede={<>
+        We will email you a one-time reset token. Paste it back here with a new
+        password and you are straight back in.
+      </>}
+    >
+      {/* Where the reader is in the two steps. Dots rather than "Step 1 of 2":
+          the shape says it faster than the sentence does, and the sentence is
+          the same length either way. */}
+      {step !== 'done' && (
+        <div className="lp-steps-dots" aria-label={`Step ${stepNum} of 2`}>
+          <i className="on" />
+          <i className={step === 'reset' ? 'on' : ''} />
+          <span style={{ fontSize: 11.5, fontWeight: 700, color: '#8a96a8', marginLeft: 4 }}>
+            {step === 'email' ? 'Enter email' : 'Reset password'}
+          </span>
         </div>
-      </main>
+      )}
 
-      <footer className="text-center py-4 text-xs mt-auto" style={{ color: '#555' }}>
-        © {new Date().getFullYear()} <strong>IP House</strong>. Confidential &amp; proprietary.
-      </footer>
-    </div>
+      {error && (
+        <div className="lp-error">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+          {error}
+        </div>
+      )}
+
+      {step === 'email' && (
+        <>
+          <h2>Forgot your password?</h2>
+          <p className="lp-card-sub">
+            Enter the email address on your account and we will send a reset token to it.
+          </p>
+
+          <form onSubmit={handleSend} className="lp-form">
+            <div>
+              <label className="lp-label">Email address <span className="lp-req">*</span></label>
+              <input autoComplete="off" type="email" value={email}
+                onChange={e => {
+                  setEmail(e.target.value)
+                  // A verdict about the previous value must not linger over the new one.
+                  setEmailState('idle')
+                  if (error) setError('')
+                }}
+                onBlur={e => { void checkEmail(e.target.value) }}
+                required placeholder="you@example.com"
+                className="lp-input lp-input-plain"
+                style={{ borderColor: emailState === 'missing' ? '#e05252'
+                       : emailState === 'found' ? '#16A34A' : undefined }} />
+
+              {/* One line under the field, so the answer is where the reader is
+                  looking rather than only in the banner above. */}
+              <div className="lp-hint">
+                {emailState === 'checking' && <span>Checking&hellip;</span>}
+                {emailState === 'found' && <span className="lp-hint-ok">&#10003; Account found</span>}
+                {emailState === 'missing' && (
+                  <span className="lp-hint-bad">
+                    No account is registered with this email.{' '}
+                    <Link to="/login">Back to sign in</Link>
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <button type="submit"
+              disabled={loading || emailState === 'checking' || emailState === 'missing'}
+              className="lp-btn"
+              style={{
+                opacity: loading || emailState === 'missing' ? 0.62 : 1,
+                cursor: loading || emailState === 'missing' ? 'not-allowed' : 'pointer',
+              }}>
+              {loading ? <><span className="lp-spin" /> Sending&hellip;</>
+                : emailState === 'checking' ? 'Checking…'
+                : 'Send reset token'}
+            </button>
+          </form>
+
+          <p className="lp-alt">
+            Remembered it? <Link to="/login">Back to sign in</Link>
+          </p>
+        </>
+      )}
+
+      {step === 'reset' && (
+        <>
+          <h2>Check your email</h2>
+          <p className="lp-card-sub">
+            Paste the reset token we sent you, then choose a new password.
+          </p>
+
+          <form onSubmit={handleReset} className="lp-form">
+            <div>
+              <label className="lp-label">Reset token <span className="lp-req">*</span></label>
+              <textarea value={resetToken} onChange={e => setResetToken(e.target.value)}
+                rows={3} placeholder="Paste the reset token from your email&hellip;"
+                className="lp-input lp-input-plain lp-textarea"
+                style={{ minHeight: 76, fontSize: 12.5 }} />
+            </div>
+
+            <div>
+              <label className="lp-label">New password <span className="lp-req">*</span></label>
+              <div className="lp-input-wrap">
+                <input type={showPass ? 'text' : 'password'} value={newPass}
+                  onChange={e => setNewPass(e.target.value)} required minLength={policy.minLength}
+                  placeholder={`Minimum ${policy.minLength} characters`}
+                  className="lp-input lp-input-plain" style={{ paddingRight: 42 }} />
+                <button type="button" className="lp-eye" onClick={() => setShowPass(s => !s)}
+                  aria-label={showPass ? 'Hide password' : 'Show password'}>
+                  {showPass
+                    ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                    : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                  }
+                </button>
+              </div>
+              <PasswordRules policy={policy} value={newPass} />
+            </div>
+
+            <div>
+              <label className="lp-label">Confirm password <span className="lp-req">*</span></label>
+              <input type={showPass ? 'text' : 'password'} value={confirmPas}
+                onChange={e => setConfirmPas(e.target.value)} required minLength={policy.minLength}
+                placeholder="Repeat new password" className="lp-input lp-input-plain" />
+            </div>
+
+            <button type="submit" disabled={loading} className="lp-btn"
+              style={{ opacity: loading ? 0.72 : 1, cursor: loading ? 'not-allowed' : 'pointer' }}>
+              {loading ? <><span className="lp-spin" /> Saving&hellip;</> : 'Reset password'}
+            </button>
+          </form>
+
+          <p className="lp-alt">
+            Didn&apos;t receive the email?{' '}
+            <button type="button" onClick={() => { setStep('email'); setError('') }}
+              style={{ color: '#14254A', fontWeight: 700, background: 'none', border: 'none',
+                cursor: 'pointer', font: 'inherit', padding: 0 }}>
+              Try again
+            </button>
+          </p>
+        </>
+      )}
+
+      {step === 'done' && (
+        <div className="lp-done">
+          <div className="lp-tick">&#10003;</div>
+          <h2>Password reset</h2>
+          <p className="lp-card-sub">
+            Your password has been updated. You can sign in with it now.
+          </p>
+          <Link to="/login" className="lp-btn">Go to sign in</Link>
+        </div>
+      )}
+    </AuthShell>
   )
 }

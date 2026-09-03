@@ -10,7 +10,7 @@ import Breadcrumb from '@/components/ui/Breadcrumb'
 import Portal from '@/components/ui/Portal'
 import { useMasterData } from '@/lib/masterDataContext'
 import {
-  categorizePlatforms, platformLabel, isOpenWebPlatform, OPEN_WEB_URL_TYPES,
+  categorizePlatforms, categoryOf, platformLabel, isOpenWebPlatform, OPEN_WEB_URL_TYPES,
   type PlatformCategoryKey, type OpenWebUrlType,
 } from '@/lib/platformCategories'
 
@@ -105,11 +105,28 @@ export default function InfringementPage() {
     setPlatform(inCat.length === 1 ? inCat[0].key : '')
   }
 
-  /** A tile sets both controls, so the dropdowns never disagree with the grid. */
+  /**
+   * A tile sets BOTH controls, so the dropdowns never disagree with the grid.
+   *
+   * It only ever did that for Open Web. Picking Instagram set the platform and
+   * left Category reading "Choose a category…", so the one thing a tile is for
+   * ended in "Please choose a category" — the reader had already said which
+   * platform they wanted, in the most specific way the page offers, and was
+   * asked to say the broader thing as well.
+   *
+   * categoryOf is the same function categorizePlatforms buckets the grid with,
+   * so the category set here is by construction the one whose tile was clicked.
+   * A hand-written map would be a second opinion about which group a platform is
+   * in, and the two would disagree the first time a platform moved.
+   */
   function pickPlatform(key: string) {
     setPlatform(key)
     setError('')
-    if (isOpenWebPlatform(key)) setCategory('open-web')
+    setCategory(categoryOf(key))
+    /* The Open Web URL type has no meaning off Open Web — the form hides it and
+       the search drops it. Cleared on the way out so it cannot be carried back
+       in later as a stale choice nobody can see. */
+    if (!isOpenWebPlatform(key)) setUrlType('all')
   }
 
   /**

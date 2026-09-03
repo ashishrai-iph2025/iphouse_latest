@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Breadcrumb from '@/components/ui/Breadcrumb'
 import { platformLabel, isOpenWebPlatform } from '@/lib/platformCategories'
+import ReportLoader from '@/components/shared/ReportLoader'
 /* The same thumbnail, the same "screenshot expired" mark and the same full-size
    viewer the results lists use. Imported rather than rewritten: a screenshot
    that renders one way on a list and another way here is two behaviours to keep
@@ -399,11 +400,13 @@ export default function SearchPage() {
           )}
 
           {loading && (
-            <div className="flex flex-col items-center justify-center min-h-[520px] gap-4">
-              <span className="w-10 h-10 border-[3px] border-gray-200 border-t-blue-500 rounded-full animate-spin" />
-              <p className="font-bold text-gray-800 text-sm">Analyzing URL</p>
-              <p className="text-xs text-gray-400">Fetching metadata from platform…</p>
-            </div>
+            <ReportLoader
+              fill
+              className="min-h-[520px]"
+              size={170}
+              label="Analyzing URL"
+              sublabel="Fetching metadata from platform…"
+            />
           )}
 
           {error && !loading && (

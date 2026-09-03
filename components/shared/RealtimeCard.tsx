@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 /**
  * Live discovery counts, per platform.
@@ -67,6 +67,11 @@ interface Payload {
   /** The window counted, echoed back. Absent or empty means everything. */
   startDate?: string
   endDate?: string
+  /** The dimension filters the count was narrowed by, echoed back. Read from the
+      ANSWER rather than from what was asked for: a filter the service did not
+      apply must not be described on the card as though it had been. */
+  franchise?: string
+  matchDay?: string
   /** Where that window came from. 'period' is the client's configured sports
       season, which no slicer on the page can move — the caption says so rather
       than calling it "this range". Absent on sources that do not report it. */
@@ -87,6 +92,73 @@ the number did not follow. A RANGE is a window the caller asked for. And no
 window at all is all time, which is only true when the payload carries neither
 end.
 */
+/**
+ * What the card is narrowed to, for the corner of it.
+ *
+ * The filters were already stated in the info tooltip, which nobody opens. On
+ * screen the card said "identified · this season · 1 asset" — the count of
+ * assets but never WHICH, and never the match day or the dates. A reader
+ * comparing it with the tiles below could not tell whether the two were even
+ * answering about the same fixture.
+ *
+ * Dates come LAST and always, because they are the one part that is never
+ * implied by the filter rail: on a sports report the card is scoped to the
+ * configured season, not the range in the picker, and those differ by months.
+ *
+ * Names, not ids. The reports screens carry GUIDs and would otherwise print
+ * one here, which tells a reader nothing and takes the width of the row.
+ */
+function scopeBits(p: {
+  assetNames?: string[]
+  assets?: number
+  franchise?: string
+  matchDay?: string
+  startDate?: string
+  endDate?: string
+  scope?: string
+}): string[] {
+  const bits: string[] = []
+
+  const names = (p.assetNames ?? []).filter(Boolean)
+  const asset = names.length === 1
+    ? names[0]
+    : names.length === 2
+      ? names.join(' + ')
+      : names.length > 2
+        ? `${names.length} assets`
+        /* Filtered by id with no name to hand — say how many rather than
+           printing a GUID at a reader. */
+        : p.assets && p.assets > 0
+          ? `${p.assets} asset${p.assets === 1 ? '' : 's'}`
+          : ''
+  if (asset) bits.push(asset)
+
+  /* The franchise is dropped when the asset title already carries it. Fixture
+     names here read "LaLiga: Barcelona vs Athletic", so naming the franchise
+     beside one produced "LaLiga: Barcelona vs Athletic · LaLiga" — the same
+     word twice, which reads as a rendering fault rather than two filters. */
+  if (p.franchise && !asset.toLowerCase().includes(p.franchise.toLowerCase())) {
+    bits.push(p.franchise)
+  }
+
+  /* Prefixed only where the value does not already say it. The slicer's values
+     are spelled "Matchday 1", so an unconditional prefix gave
+     "Match day Matchday 1". Whichever way the upstream spelling settles, one of
+     the two branches is right and neither doubles the word. */
+  if (p.matchDay) {
+    bits.push(/match\s*day/i.test(p.matchDay) ? p.matchDay : `Match day ${p.matchDay}`)
+  }
+
+  if (p.startDate || p.endDate) {
+    const a = dayWords(p.startDate)
+    const b = dayWords(p.endDate)
+    bits.push(a && b ? (a === b ? a : `${a} – ${b}`) : a || b)
+  } else if (p.scope === 'period') {
+    bits.push('this season')
+  }
+  return bits.filter(Boolean)
+}
+
 function rangeWords(p: { startDate?: string; endDate?: string; scope?: string }) {
   if (p.scope === 'period') return 'this season'
   return p.startDate || p.endDate ? 'in this range' : 'all time'
@@ -132,6 +204,40 @@ function everyWords(ms: number) {
   return m === 1 ? 'every minute' : `every ${m} minutes`
 }
 
+/*
+What a platform's `removed` figure should be CALLED.
+
+Two things travel under one word and they are not the same event. On the open
+web a "removal" is an APPROVED DE-INDEXING NOTICE — an engine agreed to drop
+the link, and the page it pointed at may well still be up. Everywhere else it is
+a URL the crawler can no longer reach: the thing is gone.
+
+Labelling both "removed" made the card disagree with the report beside it by 17%
+with the reason hidden in a tooltip — 1,247 against 1,040 on the same fixture,
+because one counted de-indexings and the other counted pages. Both figures were
+right. Only the word was wrong.
+
+Read off `removalBasis`, which the server derives from the predicate the service
+actually counted by (see removalBasis in realtime.go) — NOT from a list of
+platform names kept here. A platform that changes which of the two it records
+changes its own label, and a platform this does not recognise keeps the neutral
+word rather than being guessed at.
+*/
+function removedWord(basis?: string): string {
+  return /delist|de-?index/i.test(basis ?? '') ? 'de-indexed' : 'removed'
+}
+
+/** The words in play across the platforms actually on screen. One where they
+    agree, both where they do not — a legend naming one of two measures is a
+    legend that mislabels half the bars under it. */
+function removedWords(ps: RealtimePlatform[]): string[] {
+  const seen = new Set<string>()
+  for (const p of ps) {
+    if (typeof p.removed === 'number') seen.add(removedWord(p.removalBasis))
+  }
+  return seen.size > 0 ? [...seen] : ['removed']
+}
+
 function scopeNote(p: Payload, refreshMs: number): string {
   const paras: string[] = []
   const span = p.startDate && p.endDate
@@ -156,6 +262,18 @@ function scopeNote(p: Payload, refreshMs: number): string {
   // state and saying so on every reading is noise.
   if (p.assets && p.assets > 0) {
     paras.push(`Narrowed to ${p.assets} asset${p.assets === 1 ? '' : 's'}.`)
+  }
+
+  /* And the dimension filters, NAMED. The card exists because one of them was
+     chosen, so what it was narrowed to is the first thing to state — and it is
+     the only way a reader can tell a count that honoured the filter from one
+     that quietly ignored it. */
+  const narrowed = [
+    p.franchise && `franchise ${p.franchise}`,
+    p.matchDay && `match day ${p.matchDay}`,
+  ].filter(Boolean)
+  if (narrowed.length > 0) {
+    paras.push(`Narrowed to ${narrowed.join(' and ')}.`)
   }
 
   /* WHY IT WILL NOT MATCH THE TILES. The single most common question about this
@@ -291,6 +409,8 @@ export default function RealtimeCard({
   assetNames,
   startDate,
   endDate,
+  franchise,
+  matchDay,
   className = '',
   pinned,
   onTogglePin,
@@ -327,6 +447,17 @@ export default function RealtimeCard({
       report the moment the report is dated. */
   startDate?: string
   endDate?: string
+  /* The narrowing filters the report page has applied, where they are ones this
+     count can honour.
+
+     The card only appears at all once one of Match Day / Asset / Franchise is
+     chosen — see showRealtime on the reports page — so these are not optional
+     decoration, they are the reason it is on screen. Sending only the asset was
+     the bug: picking Serie A narrowed every panel below to twenty-two thousand
+     rows and left the card reporting a hundred and three thousand for the whole
+     season, two figures about the same subject a hand's width apart. */
+  franchise?: string
+  matchDay?: string
   className?: string
   /* PINNING — the card holding its place while the report scrolls under it.
      Live counts are the reason to leave this screen open, and unpinned they are
@@ -379,6 +510,10 @@ export default function RealtimeCard({
            scopeFromRequest. */
         if (startDate) qs.set('from', startDate)
         if (endDate) qs.set('to', endDate)
+        // Under the same names the report's own slicers use, so one vocabulary
+        // covers the panels and the card.
+        if (franchise) qs.set('franchiseName', franchise)
+        if (matchDay) qs.set('matchDay', matchDay)
       }
 
       const r = await fetch(`${path}?${qs}`, { credentials: 'include' })
@@ -388,7 +523,7 @@ export default function RealtimeCard({
     } catch (e: any) {
       setErr(e?.message || 'Network error')
     }
-  }, [view, source, clientId, userId, assetKey, startDate, endDate])
+  }, [view, source, clientId, userId, assetKey, startDate, endDate, franchise, matchDay])
 
   useEffect(() => { load() }, [load])
 
@@ -609,8 +744,13 @@ export default function RealtimeCard({
                 <span className="text-lg font-bold tabular-nums leading-none text-[#FC934C]">
                   {nf.format(removed)}
                 </span>
+                {/* The same word the bars below use, and for the same reason:
+                    this total SUMS the two measures, so calling it "removed"
+                    mislabels whichever part of it was a de-indexing. Where the
+                    platforms agree it reads as one word and nothing changes. */}
                 <span className="text-[11px] text-gray-500 dark:text-white/50">
-                  removed{removalRate !== null && <> · {removalRate}%</>}
+                  {removedWords(platforms).join(' / ')}
+                  {removalRate !== null && <> · {removalRate}%</>}
                 </span>
               </p>
               {/* Drawn only where the percentage above it was. A bar IS a
@@ -691,7 +831,7 @@ export default function RealtimeCard({
                 return (
                   <div key={p.key}
                     title={`${p.label} — ${nf.format(p.count)} identified${
-                      rem !== null ? `, ${nf.format(rem)} removed` : ''}${
+                      rem !== null ? `, ${nf.format(rem)} ${removedWord(p.removalBasis)}` : ''}${
                       rem !== null && p.removalBasis ? ` (${p.removalBasis})` : ''}`}>
                     <div className="flex items-baseline justify-between gap-2">
                       <span className={`text-xs truncate ${p.count > 0
@@ -727,7 +867,7 @@ export default function RealtimeCard({
                     </div>
                     {rem !== null && (
                       <p className="mt-0.5 text-[10px] tabular-nums text-gray-400 dark:text-white/40 truncate">
-                        {nf.format(rem)} removed{p.count > 0 && <> · {share}%</>}
+                        {nf.format(rem)} {removedWord(p.removalBasis)}{p.count > 0 && <> · {share}%</>}
                       </p>
                     )}
                   </div>
@@ -753,13 +893,50 @@ export default function RealtimeCard({
           {hasRemovals && platforms.length > 0 && (
             <p className="mt-2 flex items-center gap-3 text-[10px] text-gray-400 dark:text-white/40">
               <span className="inline-flex items-center gap-1.5">
-                <span className="w-2.5 h-1 rounded-full bg-[#FC934C]" />removed
+                <span className="w-2.5 h-1 rounded-full bg-[#FC934C]" />{removedWords(platforms).join(' / ')}
               </span>
               <span className="inline-flex items-center gap-1.5">
                 <span className="w-2.5 h-1 rounded-full bg-[#14254A]/25 dark:bg-white/30" />still live
               </span>
             </p>
           )}
+
+          {/* WHAT THIS READING IS OF, in the corner.
+
+              A TITLE with a tooltip, not a printout. Spelled out inline it ran
+              to "LaLiga: Barcelona vs Athletic (28-08-2026) · LaLiga · Match day
+              Matchday 1 · 1 Aug 2026 – 31 Dec 2026" — wider than the platform
+              grid above it and competing with the figures for attention, which
+              is the opposite of what a caption is for.
+
+              So the line is truncated to one row and the whole of it is on
+              `title`. Quiet, bottom right, and complete on hover. */}
+          {(() => {
+            const bits = scopeBits({
+              assetNames,
+              assets: shown.assets,
+              franchise,
+              matchDay,
+              /* The reading's OWN dates, not the props'. On a sports report the
+                 card is scoped to the configured season and the props carry the
+                 picker's range, so printing the props would caption the figure
+                 with a window it was not counted over. */
+              startDate: shown.startDate,
+              endDate: shown.endDate,
+              scope: shown.scope,
+            })
+            if (bits.length === 0) return null
+            const full = bits.join(' · ')
+            return (
+              <p
+                title={full}
+                className="mt-2 text-right text-[10px] leading-4 text-gray-400 dark:text-white/40
+                           truncate cursor-default"
+              >
+                {full}
+              </p>
+            )
+          })()}
         </div>
       </div>
     </div>

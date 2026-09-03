@@ -2,8 +2,12 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"os"
+	"sync"
+	"time"
 
 	ipauth "github.com/ip-house/iphouse-api/auth"
 	"github.com/ip-house/iphouse-api/config"
@@ -37,6 +41,67 @@ func ResolveAPIToken(claims *ipauth.Claims) string {
 // that user's stored (encrypted) API credentials and caches the result. Used both
 // for the session user (ResolveAPIToken) and, in the admin War Room, for a
 // selected client whose token an admin generates on their behalf.
+/*
+Login stampede control.
+
+The token cache is in memory, so every restart empties it — and a single page can
+fan out into a dozen Markscan-backed requests at once. Each of those used to miss
+the cache and start its OWN login, and Login retried three times, so one restart
+turned into a burst of login attempts from one IP. Markscan counts logins per IP
+("Rate limit exceeded (LoginIp)"), so the burst tripped the limit, every login
+then failed, nothing was ever cached, and the next request did it again. The
+lockout sustained itself and the whole portal read as empty.
+
+Two gates fix it:
+
+  · loginGate serialises attempts PER USER, so concurrent requests wait for the
+    first login rather than each starting one. The winner caches the token and
+    the rest re-read the cache.
+  · loginHold is when not to try at all. A 429 is held GLOBALLY because the limit
+    is counted per IP — one user's rate-limited login means nobody on this host
+    may log in yet — while any other failure is held per user, since that one is
+    about those credentials.
+*/
+var (
+	loginMu   sync.Mutex
+	loginGate = map[int64]*sync.Mutex{}
+	loginHold = map[int64]time.Time{} // key 0 is the global (per-IP) hold
+)
+
+func gateFor(userID int64) *sync.Mutex {
+	loginMu.Lock()
+	defer loginMu.Unlock()
+	g, ok := loginGate[userID]
+	if !ok {
+		g = &sync.Mutex{}
+		loginGate[userID] = g
+	}
+	return g
+}
+
+func holding(userID int64) bool {
+	loginMu.Lock()
+	defer loginMu.Unlock()
+	now := time.Now()
+	if t, ok := loginHold[0]; ok && now.Before(t) {
+		return true
+	}
+	t, ok := loginHold[userID]
+	return ok && now.Before(t)
+}
+
+func holdLogin(userID int64, d time.Duration) {
+	loginMu.Lock()
+	defer loginMu.Unlock()
+	loginHold[userID] = time.Now().Add(d)
+}
+
+func clearHold(userID int64) {
+	loginMu.Lock()
+	defer loginMu.Unlock()
+	delete(loginHold, userID)
+}
+
 func TokenForUser(userID int64) string {
 	if userID == 0 {
 		return ""
@@ -45,9 +110,23 @@ func TokenForUser(userID int64) string {
 	if t := markscan.GetCachedToken(userID); t != "" {
 		return t
 	}
-	// 2. fresh login from DB credentials (cache miss / after a server restart).
+
+	// 2. one login at a time per user; the losers read what the winner cached.
+	gate := gateFor(userID)
+	gate.Lock()
+	defer gate.Unlock()
+	if t := markscan.GetCachedToken(userID); t != "" {
+		return t
+	}
+	if holding(userID) {
+		return ""
+	}
+
+	// 3. fresh login from DB credentials (cache miss / after a server restart).
 	row, err := db.QueryOne("SELECT api_user_name, api_password FROM dcp_user WHERE userId = ? AND deleted = 0", userID)
 	if err != nil || row == nil {
+		log.Printf("[markscan] no API credentials row for user %d (err=%v)", userID, err)
+		holdLogin(userID, 60*time.Second)
 		return ""
 	}
 	apiUser := ipauth.DecryptMain(strFromAny(row["api_user_name"]))
@@ -59,12 +138,30 @@ func TokenForUser(userID int64) string {
 		apiPass = strFromAny(row["api_password"])
 	}
 	if apiUser == "" || apiPass == "" {
+		// Not an outage: this login simply holds no Markscan credentials.
+		log.Printf("[markscan] user %d has no API username/password stored", userID)
+		holdLogin(userID, 5*time.Minute)
 		return ""
 	}
 	t, err := markscan.Login(apiUser, apiPass)
 	if err != nil {
+		/* LOGGED, always. Every path here used to return "" in silence, so a
+		   rate-limited or rejected login looked identical to a client that
+		   genuinely has no data — an empty page, no error, nothing in the log to
+		   say which. */
+		var rl *markscan.RateLimitedError
+		if errors.As(err, &rl) {
+			// Per IP, so it applies to everyone on this host, not just this user.
+			holdLogin(0, rl.RetryAfter)
+			log.Printf("[markscan] login rate-limited by upstream; holding ALL logins for %s (user %d)",
+				rl.RetryAfter, userID)
+		} else {
+			holdLogin(userID, 60*time.Second)
+			log.Printf("[markscan] login failed for user %d: %v (holding 60s)", userID, err)
+		}
 		return ""
 	}
+	clearHold(userID)
 	markscan.SetCachedToken(userID, t)
 	return t
 }

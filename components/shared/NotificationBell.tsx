@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import ReportLoader from '@/components/shared/ReportLoader'
 
 const POLL_MS = 60_000
 
@@ -265,9 +266,7 @@ export default function NotificationBell({ variant = 'admin', tone }: {
           {/* List */}
           <div className="max-h-[380px] overflow-y-auto bg-[#f6f8fc] dark:bg-transparent">
             {loading && items.length === 0 ? (
-              <div className="py-12 grid place-items-center">
-                <span className="w-6 h-6 border-2 border-gray-200 border-t-[#14254A] rounded-full animate-spin" />
-              </div>
+              <ReportLoader size={120} label={null} className="py-10" />
             ) : items.length === 0 ? (
               <div className="py-12 text-center px-6">
                 <div className="w-11 h-11 mx-auto mb-3 rounded-2xl grid place-items-center bg-[#14254A]/[0.07] dark:bg-white/5 text-[#14254A]/30 dark:text-white/25">

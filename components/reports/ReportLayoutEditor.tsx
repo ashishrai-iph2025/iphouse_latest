@@ -49,6 +49,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import SearchableSelect from '@/components/ui/SearchableSelect'
 
+import LayoutPreview, { GRID_COLS, SPAN_COLS, packRows } from '@/components/reports/LayoutPreview'
+
 const ORANGE = '#FC934C'
 const NAVY = '#14254A'
 
@@ -212,6 +214,36 @@ export default function ReportLayoutEditor({ platform, sections, open, onClose, 
     })
   }
 
+  /*
+    Drag-and-drop's move: put the dragged panel WHERE THE DROP TARGET SITS,
+    rather than swapping the two.
+
+    Different from move() above on purpose. The arrows step one place, so a swap
+    is what a step means; dragging is "put this here", and swapping would send
+    the panel you dropped on back to where the dragged one came from — halfway
+    across the report, having touched nothing you pointed at.
+
+    A filter cannot cross into the grid and a chart cannot cross into the rail.
+    They are two lists in one array — the pane is drawn beside the report, not in
+    it — so a slicer dropped on a chart would be moved out of the only place it
+    can be drawn. Refused rather than clamped: the drop just does nothing, which
+    is what a drop on an impossible target should do.
+  */
+  function moveByKey(fromKey: string, toKey: string) {
+    if (fromKey === toKey) return
+    setNote('')
+    setPanels(cur => {
+      const from = cur.findIndex(p => p.key === fromKey)
+      const to = cur.findIndex(p => p.key === toKey)
+      if (from < 0 || to < 0) return cur
+      if (isFilter(cur[from]) !== isFilter(cur[to])) return cur
+      const next = [...cur]
+      const [moved] = next.splice(from, 1)
+      next.splice(to, 0, moved)
+      return next
+    })
+  }
+
   async function save() {
     setSaving(true); setErr(''); setNote('')
     try {
@@ -249,6 +281,20 @@ export default function ReportLayoutEditor({ platform, sections, open, onClose, 
 
   const grid = useMemo(() => panels.filter(p => !isFilter(p)), [panels])
   const rail = useMemo(() => panels.filter(isFilter), [panels])
+
+  /* The grid panels split by whether they are drawn, and the drawn ones packed
+     into the rows the report will lay them out in — the same packRows the
+     preview uses, so the "Row 2" a control sits under is the row the panel
+     actually lands in rather than a second opinion about it. */
+  /* Which panel is being dragged, and which one it is currently over. Held
+     here rather than inside the preview because the preview is presentational
+     and the array it reorders lives here. */
+  const [dragKey, setDragKey] = useState('')
+  const [overKey, setOverKey] = useState('')
+
+  const shownGrid = useMemo(() => grid.filter(p => !p.hidden), [grid])
+  const hiddenGrid = useMemo(() => grid.filter(p => p.hidden), [grid])
+  const packedRows = useMemo(() => packRows(shownGrid), [shownGrid])
   const shownCount = panels.filter(p => !p.hidden).length
 
   const row = (p: Panel) => {
@@ -427,8 +473,15 @@ export default function ReportLayoutEditor({ platform, sections, open, onClose, 
     <>
       {open && <div className="fixed inset-0 bg-black/30 z-[69]" onClick={onClose} />}
 
-      <div className={`fixed top-0 right-0 h-full z-[70] flex flex-col shadow-2xl
-        w-full sm:w-3/4 bg-[#eef2f7] dark:bg-[#0f1f3d]
+      {/* FULL screen, not a three-quarter drawer.
+
+          This is a two-pane workspace now — the wireframe on one side and the
+          controls on the other — and at 3/4 width the two panes were each about
+          a third of the glass, so the preview's twelve columns were drawn across
+          400px and the panel names truncated in both. There is nothing behind it
+          worth keeping in view while it is open. */}
+      <div className={`fixed inset-0 h-full z-[70] flex flex-col shadow-2xl
+        w-full bg-[#eef2f7] dark:bg-[#0f1f3d]
         transition-transform duration-300 ease-in-out
         ${open ? 'translate-x-0' : 'translate-x-full'}`}
         aria-hidden={!open}>
@@ -502,30 +555,98 @@ export default function ReportLayoutEditor({ platform, sections, open, onClose, 
         ) : panels.length === 0 ? (
           <p className="text-sm text-gray-400">This report has nothing you can arrange.</p>
         ) : (
-          <div className="max-w-6xl mx-auto grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
-            <div className="xl:col-span-2 space-y-2">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">
-                Cards &amp; charts
-              </p>
-              {grid.length === 0
-                ? <p className="text-xs text-gray-400">Nothing on this report can be arranged.</p>
-                : grid.map(row)}
+          /* TWO SECTIONS, side by side: the shape on the left and the
+             controls on the right.
+
+             They were stacked — the wireframe above a flat list of every panel
+             — which meant the one thing the list cannot tell you (what the page
+             looks like) scrolled out of view as soon as you started changing it.
+             Beside each other, and with the preview pinned, every toggle is made
+             while looking at what it does.
+
+             The right-hand side is grouped BY ROW rather than run as one list,
+             for the same reason: "Row 2 · 12/12 columns" is what explains why a
+             panel set to a quarter has landed where it has. */
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
+
+            <div className="rounded-2xl border border-gray-100 dark:border-white/10
+              bg-white dark:bg-[#1a2d55] p-4 xl:sticky xl:top-0">
+              {/* Draggable, the same as the admin Layout tab. The arrows on
+                  each control row remain: they are the precise, keyboard-
+                  reachable way to step one place, and dragging is the fast way
+                  to move something a long way. Neither is a substitute for the
+                  other, and only one of the two works without a mouse. */}
+              <LayoutPreview
+                panels={panels}
+                drag={{ dragKey, overKey, setDragKey, setOverKey, moveByKey }}
+              />
             </div>
 
-            {rail.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">
-                  Filters
-                </p>
-                {/* Said once: a slicer is ordered and switched on or off but
-                    never given a width, because it sits in a rail rather than
-                    in the grid. */}
-                <p className="text-[10px] text-gray-400 leading-snug pb-1">
-                  Slicers sit in their own rail, so they have an order but no width.
-                </p>
-                {rail.map(row)}
-              </div>
-            )}
+            <div className="space-y-3">
+              {shownGrid.length === 0 && rail.length === 0 && (
+                <p className="text-xs text-gray-400">Nothing on this report can be arranged.</p>
+              )}
+
+              {packedRows.map((r, i) => {
+                const used = r.reduce((n, p) => n + (SPAN_COLS[p.span] ?? 6), 0)
+                return (
+                  <div key={`row${i}`} className="rounded-2xl border border-gray-100
+                    dark:border-white/10 bg-white dark:bg-[#1a2d55] overflow-hidden">
+                    <div className="flex items-center gap-2 px-3 py-1.5
+                      bg-[#14254A]/[0.025] dark:bg-white/[0.03]">
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                        Row {i + 1}
+                      </span>
+                      <span className="h-px flex-1 bg-gray-100 dark:bg-white/10" />
+                      {/* Amber when a row is short: a row that does not fill its
+                          twelve columns leaves a gap on the report, which is
+                          legitimate and worth seeing rather than being told. */}
+                      <span className={`text-[10px] font-semibold tabular-nums ${
+                        used === GRID_COLS ? 'text-gray-300' : 'text-amber-600 dark:text-amber-400'}`}>
+                        {used}/{GRID_COLS} columns
+                      </span>
+                    </div>
+                    <div className="p-2 space-y-2">{r.map(row)}</div>
+                  </div>
+                )
+              })}
+
+              {/* Hidden panels keep their place in the order — they are one
+                  save away from being back on the page — so they are listed
+                  rather than dropped. */}
+              {hiddenGrid.length > 0 && (
+                <div className="rounded-2xl border border-gray-100 dark:border-white/10
+                  bg-white dark:bg-[#1a2d55] overflow-hidden">
+                  <div className="flex items-center gap-2 px-3 py-1.5
+                    bg-[#14254A]/[0.025] dark:bg-white/[0.03]">
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                      Hidden
+                    </span>
+                    <span className="h-px flex-1 bg-gray-100 dark:bg-white/10" />
+                    <span className="text-[10px] text-gray-300">not drawn on the report</span>
+                  </div>
+                  <div className="p-2 space-y-2">{hiddenGrid.map(row)}</div>
+                </div>
+              )}
+
+              {rail.length > 0 && (
+                <div className="rounded-2xl border border-gray-100 dark:border-white/10
+                  bg-white dark:bg-[#1a2d55] overflow-hidden">
+                  <div className="flex items-center gap-2 px-3 py-1.5
+                    bg-[#14254A]/[0.025] dark:bg-white/[0.03]">
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                      Filters
+                    </span>
+                    <span className="h-px flex-1 bg-gray-100 dark:bg-white/10" />
+                    {/* Said once: a slicer is ordered and switched on or off but
+                        never given a width, because it sits in a rail rather
+                        than in the grid. */}
+                    <span className="text-[10px] text-gray-300">an order, but no width</span>
+                  </div>
+                  <div className="p-2 space-y-2">{rail.map(row)}</div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

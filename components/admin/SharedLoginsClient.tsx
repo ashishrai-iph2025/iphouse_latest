@@ -8,6 +8,7 @@ import SearchableSelect from '@/components/ui/SearchableSelect'
 import LoginSecurityPanel from './LoginSecurityPanel'
 import LoginClientAdmin from './LoginClientAdmin'
 import LoginModuleAccess, { type LoginAssignment } from './LoginModuleAccess'
+import ReportLoader from '@/components/shared/ReportLoader'
 
 interface LoginGroup {
   loginId: number
@@ -732,9 +733,7 @@ export default function SharedLoginsClient() {
           />
         </div>
         {loading ? (
-          <div className="flex justify-center py-16">
-            <div className="w-8 h-8 border-4 border-gray-100 border-t-[#14254A] rounded-full animate-spin" />
-          </div>
+          <ReportLoader size={150} label="Loading logins" className="py-16" />
         ) : error ? (
           <div className="text-center py-12 text-red-500 text-sm">{error}</div>
         ) : (

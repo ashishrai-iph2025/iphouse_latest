@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
+import ReportLoader from '@/components/shared/ReportLoader'
 import {
   sourceOf, parseMeta, orderedMeta, formatMetaValue, exactTime, relativeTime,
   META_LABELS, type PortalNotification, type Scope,
@@ -83,8 +84,8 @@ export default function NotificationDetailPage({ id, basePath }: { id: string; b
     return (
       <div className="fade-in">
         {backLink}
-        <div className="mt-4 bg-white dark:bg-[#14213a] rounded-2xl border border-gray-100 dark:border-white/10 shadow-card py-16 grid place-items-center">
-          <span className="w-7 h-7 border-2 border-gray-200 border-t-[#14254A] rounded-full animate-spin" />
+        <div className="mt-4 bg-white dark:bg-[#14213a] rounded-2xl border border-gray-100 dark:border-white/10 shadow-card">
+          <ReportLoader size={150} label="Loading" className="py-16" />
         </div>
       </div>
     )

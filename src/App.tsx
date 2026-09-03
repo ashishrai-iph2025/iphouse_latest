@@ -24,6 +24,10 @@ const DashboardPage        = lazy(() => import('@/app/(client)/dashboard/page'))
 const InfringementPage     = lazy(() => import('@/app/(client)/infringement/page'))
 // The staff report in scoped mode — see app/(client)/reports/page.tsx.
 const ClientReportsPage    = lazy(() => import('@/app/(client)/reports/page'))
+/* The client landing page for a Reports login — see the redirect in
+   app/(client)/dashboard/page.tsx. Not a nav item: it is reached by signing in,
+   or via the logo, which routes through /dashboard. */
+const WelcomePage          = lazy(() => import('@/app/(client)/welcome/page'))
 const InfringementPlatPage = lazy(() => import('@/app/(client)/infringement/[platform]/page'))
 const InfringementCatPage  = lazy(() => import('@/app/(client)/infringement/category/page'))
 const SearchPage           = lazy(() => import('@/app/(client)/search/page'))
@@ -97,7 +101,25 @@ function RequireAdmin({ children }: { children: ReactNode }) {
 }
 
 // ── Full-page access denied ───────────────────────────────────────────────────
-function AccessDenied({ moduleName }: { moduleName: string }) {
+/*
+ * Two DIFFERENT failures used to wear the same face.
+ *
+ * "You don't have permission to access the Reports module" is true when the
+ * module was never granted. It is a lie when the grant is fine and the portal
+ * simply has no Markscan token this minute — an upstream login that was
+ * rate-limited, or a service that is briefly down. The reader is told to go and
+ * ask for access they already hold, and the admin is told the same, so the real
+ * fault (transient, self-healing) gets chased as a permissions bug.
+ *
+ * `reason` splits them: 'grant' is the permissions card, 'api' says the
+ * reporting service could not be reached and offers to try again.
+ */
+function AccessDenied({ moduleName, reason = 'grant' }: {
+  moduleName: string
+  reason?: 'grant' | 'api'
+}) {
+  const api = reason === 'api'
+  const tint = api ? '#FC934C' : '#b3091a'
   return (
     <div style={{
       flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -110,33 +132,69 @@ function AccessDenied({ moduleName }: { moduleName: string }) {
       }}>
         {/* shield icon */}
         <div style={{
-          width: 72, height: 72, borderRadius: 20, background: '#b3091a0e',
+          width: 72, height: 72, borderRadius: 20, background: `${tint}12`,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           margin: '0 auto 22px',
         }}>
-          <svg width="36" height="36" fill="none" viewBox="0 0 24 24" stroke="#b3091a" strokeWidth={1.8}>
+          <svg width="36" height="36" fill="none" viewBox="0 0 24 24" stroke={tint} strokeWidth={1.8}>
             <path strokeLinecap="round" strokeLinejoin="round"
               d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-            <line x1="12" y1="9" x2="12" y2="13" stroke="#b3091a" strokeWidth={2} strokeLinecap="round" />
-            <circle cx="12" cy="16" r="0.75" fill="#b3091a" stroke="#b3091a" />
+            <line x1="12" y1="9" x2="12" y2="13" stroke={tint} strokeWidth={2} strokeLinecap="round" />
+            <circle cx="12" cy="16" r="0.75" fill={tint} stroke={tint} />
           </svg>
         </div>
 
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#14254A' }}>
-          Access Restricted
+          {api ? 'Reporting service unavailable' : 'Access Restricted'}
         </h2>
-        <p style={{ margin: '10px 0 6px', fontSize: 14, color: '#5b6678', lineHeight: 1.6 }}>
-          You don&apos;t have permission to access
-          {moduleName ? <> the <strong style={{ color: '#14254A' }}>{moduleName}</strong> module</> : ' this page'}.
-        </p>
-        <p style={{ margin: '0 0 28px', fontSize: 13, color: '#8a96a8' }}>
-          Please contact the <strong style={{ color: '#FC934C' }}>IP House team</strong> to request access.
-        </p>
+        {api ? (
+          <>
+            <p style={{ margin: '10px 0 6px', fontSize: 14, color: '#5b6678', lineHeight: 1.6 }}>
+              The portal could not reach the reporting service, so
+              {moduleName ? <> <strong style={{ color: '#14254A' }}>{moduleName}</strong></> : ' this page'} cannot
+              be shown right now.
+            </p>
+            {/* NOT "this usually clears on its own within a few minutes", which
+                is what it used to say.
+
+                That is true of two of the four causes — an upstream rate-limit,
+                or a service briefly down — and false of the commonest one, which
+                is that this login holds no API credentials at all. That never
+                clears, and the old wording sent people away to wait for
+                something that was not coming. It cannot be told apart from here,
+                so this says both and commits to neither. */}
+            <p style={{ margin: '0 0 28px', fontSize: 13, color: '#8a96a8' }}>
+              Your permissions have not changed. This is often temporary and clears within a few
+              minutes &mdash; but it can also mean this account has no API credentials set up, which
+              will not resolve on its own. If it persists, contact support.
+            </p>
+          </>
+        ) : (
+          <>
+            <p style={{ margin: '10px 0 6px', fontSize: 14, color: '#5b6678', lineHeight: 1.6 }}>
+              You don&apos;t have permission to access
+              {moduleName ? <> the <strong style={{ color: '#14254A' }}>{moduleName}</strong> module</> : ' this page'}.
+            </p>
+            <p style={{ margin: '0 0 28px', fontSize: 13, color: '#8a96a8' }}>
+              Please contact the <strong style={{ color: '#FC934C' }}>IP House team</strong> to request access.
+            </p>
+          </>
+        )}
 
         {/* divider */}
         <div style={{ borderTop: '1px solid #f0f2f5', margin: '0 0 24px' }} />
 
         <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+          {api && (
+            <button onClick={() => window.location.reload()}
+              style={{
+                padding: '10px 28px', borderRadius: 12, border: 'none',
+                background: 'linear-gradient(135deg,#14254A,#1e3a6e)', color: '#fff',
+                fontSize: 14, fontWeight: 700, cursor: 'pointer',
+              }}>
+              Try again
+            </button>
+          )}
           <a href="/dashboard"
             style={{
               padding: '10px 28px', borderRadius: 12, border: 'none',
@@ -170,16 +228,16 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
   const pathname = usePathname()
   const { data: session, status } = useSession()
   const user = session?.user as any
-  const [state, setState] = useState<{ checked: boolean; allowed: boolean; label: string }>(
-    { checked: false, allowed: true, label: '' }
-  )
+  const [state, setState] = useState<{
+    checked: boolean; allowed: boolean; label: string; reason: 'grant' | 'api'
+  }>({ checked: false, allowed: true, label: '', reason: 'grant' })
 
   useEffect(() => {
     if (status === 'loading') return
 
     // Profile and switch-account are utility pages — always accessible
     if (pathname === '/dashboard' || pathname === '/profile' || pathname === '/switch-account') {
-      setState({ checked: true, allowed: true, label: '' })
+      setState({ checked: true, allowed: true, label: '', reason: 'grant' })
       return
     }
 
@@ -187,7 +245,7 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
     const item = NAV_ITEMS.find(i => isNavItemActive(i, pathname))
     if (!item) {
       // No nav item matches — allow through (unknown path)
-      setState({ checked: true, allowed: true, label: '' })
+      setState({ checked: true, allowed: true, label: '', reason: 'grant' })
       return
     }
 
@@ -198,7 +256,7 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
       .then(r => r.json())
       .then(d => {
         if (!d.success) {
-          setState({ checked: true, allowed: false, label: item.label })
+          setState({ checked: true, allowed: false, label: item.label, reason: 'grant' })
           return
         }
         const liveApiAccess = typeof d.apiAccess === 'boolean' ? d.apiAccess : !!user?.apiAccess
@@ -206,25 +264,25 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
           // No API token → API-dependent non-dashboard routes are restricted.
           // API-independent modules (e.g. Data Sharing) fall through to the
           // grant check below so they work without API credentials.
-          setState({ checked: true, allowed: false, label: item.label })
+          setState({ checked: true, allowed: false, label: item.label, reason: 'api' })
           return
         }
         // Match on the stable pageName (not the module name), so renaming a
         // module in /admin/modules never revokes access.
         const allowedPages = (d.allowedModules as { pageName: string }[]).map(m => m.pageName)
         const allowed = allowedPages.includes(item.pageName)
-        setState({ checked: true, allowed, label: item.label })
+        setState({ checked: true, allowed, label: item.label, reason: 'grant' })
       })
       .catch(() => {
         // Network error — fail open to avoid locking users out on transient errors
-        setState({ checked: true, allowed: true, label: '' })
+        setState({ checked: true, allowed: true, label: '', reason: 'grant' })
       })
   }, [pathname, status, user?.apiAccess])
 
   if (!state.checked || status === 'loading') return <PageLoader />
   if (!state.allowed) return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-      <AccessDenied moduleName={state.label} />
+      <AccessDenied moduleName={state.label} reason={state.reason} />
     </div>
   )
   return <>{children}</>
@@ -494,6 +552,7 @@ export default function App() {
         {/* Client pages */}
         <Route element={<ClientLayout />}>
           <Route path="/dashboard"                element={<DashboardPage />} />
+          <Route path="/welcome"                  element={<WelcomePage />} />
           <Route path="/war-room"                 element={<WarRoomPage />} />
           <Route path="/reports"                  element={<ClientReportsPage />} />
           <Route path="/infringement"             element={<InfringementPage />} />
