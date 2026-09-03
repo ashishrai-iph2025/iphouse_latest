@@ -145,168 +145,30 @@ function LoginForm() {
   return (
     <AuthShell
       eyebrow="Anti-piracy platform"
-      title={<>Protect what you<br />own, <em>everywhere</em>.</>}
+      title={<>Online <em>Dashboard</em></>}
       lede={<>
         Live infringement analytics, takedown enforcement and embedded Power BI
-        reporting &mdash; so rights holders can see what is being taken, and stop it.
+        dashboards.
       </>}
+      powered="Powered by IP House"
       stats={[
         { value: '8.2k+', label: 'Takedowns / Hour' },
         { value: '96%', label: 'Detection rate' },
         { value: '150+', label: 'Clients served' },
       ]}
-      aside={<>
-          <section className="lp-sec" id="how">
-            <div className="lp-in">
-              <h2>How it works</h2>
-              <p className="lp-sec-lede">
-                One continuous cycle, running against every title you protect &mdash; each
-                pass closing on the sources that keep coming back.
-              </p>
+      /* The four stages, named across the foot of the brand panel and set out
+         in full in the sections below. This is what stands where the mocked-up
+         dashboard window used to: the shape of the service rather than a
+         picture of the software. */
+      marks={['Detect', 'Disrupt', 'Escalate', 'Enforce']}
+      /* No `aside`, and no prop to pass it to.
 
-              <div className="lp-cycle">
-                {/* The four stages and the services under each, as IP House
-                    defines them.
-
-                    This replaced a written-out paraphrase of the cycle, and the
-                    paraphrase was not merely vaguer — it was wrong about the
-                    business. It had Disrupt "scoring and grouping matches",
-                    Escalate reaching for "de-indexing where a takedown is not
-                    enough", and Enforce "tracking notices to resolution". In
-                    fact Escalate is investigations, tracing, test purchases and
-                    surveillance, and Enforce is legal action — cease and desist,
-                    trial support, asset recovery, criminal referrals. A rights
-                    holder reading the old copy would have understood the offer
-                    to stop at de-indexing.
-
-                    Each heading is the full definition rather than the one-word
-                    label; the ring beside it carries the short form, and the
-                    numbers tie the two together. */}
-                <ol className="lp-stages">
-                  <li>
-                    <b>01</b>
-                    <div>
-                      <h3>Detect counterfeits, piracy, and other IP infringements</h3>
-                      <ul className="lp-svc">
-                        <li>Online Monitoring</li>
-                        <li>Market Assessment and Research</li>
-                        <li>Threat Analysis and Intelligence</li>
-                      </ul>
-                    </div>
-                  </li>
-                  <li>
-                    <b>02</b>
-                    <div>
-                      <h3>Disrupt illicit activities</h3>
-                      <ul className="lp-svc">
-                        <li>Notice and Takedown at Scale</li>
-                        <li>Targeted Takedowns of Websites and Supporting Infrastructure</li>
-                      </ul>
-                    </div>
-                  </li>
-                  <li>
-                    <b>03</b>
-                    <div>
-                      <h3>Escalate to strategic intelligence gathering and investigations</h3>
-                      <ul className="lp-svc">
-                        <li>Online and Offline Investigations</li>
-                        <li>People and Asset Tracing</li>
-                        <li>Test Purchases and Controlled Buys</li>
-                        <li>Covert Communication and Surveillance</li>
-                      </ul>
-                    </div>
-                  </li>
-                  <li>
-                    <b>04</b>
-                    <div>
-                      <h3>Enforce IPR with legal support and action</h3>
-                      <ul className="lp-svc">
-                        <li>Cease and Desist Notices</li>
-                        <li>Civil and Criminal Trial Support / Expert Witness Statements</li>
-                        <li>Asset Recovery and Seizures</li>
-                        <li>Criminal Referrals and Law Enforcement Collaboration</li>
-                      </ul>
-                    </div>
-                  </li>
-                </ol>
-
-                <div className="lp-cycle-art">
-                  {/* Drawn rather than placed: an SVG stays sharp at any width, takes
-                      the brand orange from the same palette as the rest of the page,
-                      and its labels are real text a screen reader can read. */}
-                  <svg viewBox="0 0 540 540" role="img"
-                    aria-label="The protection cycle: detect, disrupt, escalate, enforce, repeating.">
-                    <defs>
-                      <marker id="lpArrow" viewBox="0 0 10 10" refX="8" refY="5"
-                        markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
-                        <path d="M0 0 L10 5 L0 10" fill="none" stroke="#F5883F"
-                          strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                      </marker>
-                    </defs>
-                  <g transform="translate(270,112)">
-                    <circle r="72" fill="none" stroke="#FBE0CC" strokeWidth="15" />
-                    <circle r="72" fill="none" stroke="#F5883F" strokeWidth="15"
-                      strokeLinecap="round" transform="rotate(-90)"
-                      className="lp-arc" style={{ animationDelay: '0s' }}
-                      strokeDasharray="113 452.4" strokeDashoffset="0" />
-                    <text textAnchor="middle" dy="6" fontSize="17" fontWeight="800"
-                      letterSpacing="1.1" fill="#14254A">DETECT</text>
-                  </g>
-                  <g transform="translate(428,270)">
-                    <circle r="72" fill="none" stroke="#FBE0CC" strokeWidth="15" />
-                    <circle r="72" fill="none" stroke="#F5883F" strokeWidth="15"
-                      strokeLinecap="round" transform="rotate(-90)"
-                      className="lp-arc" style={{ animationDelay: '0.15s' }}
-                      strokeDasharray="226 452.4" strokeDashoffset="0" />
-                    <text textAnchor="middle" dy="6" fontSize="17" fontWeight="800"
-                      letterSpacing="1.1" fill="#14254A">DISRUPT</text>
-                  </g>
-                  <g transform="translate(270,428)">
-                    <circle r="72" fill="none" stroke="#FBE0CC" strokeWidth="15" />
-                    <circle r="72" fill="none" stroke="#F5883F" strokeWidth="15"
-                      strokeLinecap="round" transform="rotate(-90)"
-                      className="lp-arc" style={{ animationDelay: '0.3s' }}
-                      strokeDasharray="339 452.4" strokeDashoffset="0" />
-                    <text textAnchor="middle" dy="6" fontSize="17" fontWeight="800"
-                      letterSpacing="1.1" fill="#14254A">ESCALATE</text>
-                  </g>
-                  <g transform="translate(112,270)">
-                    <circle r="72" fill="none" stroke="#FBE0CC" strokeWidth="15" />
-                    <circle r="72" fill="none" stroke="#F5883F" strokeWidth="15"
-                      strokeLinecap="round" transform="rotate(-90)"
-                      className="lp-arc" style={{ animationDelay: '0.45s' }}
-                      strokeDasharray="452 452.4" strokeDashoffset="0" />
-                    <text textAnchor="middle" dy="6" fontSize="17" fontWeight="800"
-                      letterSpacing="1.1" fill="#14254A">ENFORCE</text>
-                  </g>
-                    <g fill="none" stroke="#F5883F" strokeWidth="3.2" strokeLinecap="round"
-                      markerEnd="url(#lpArrow)">
-                      <path d="M352 158 Q 396 186 400 196" />
-                      <path d="M400 344 Q 396 354 352 382" />
-                      <path d="M188 382 Q 144 354 140 344" />
-                      <path d="M140 196 Q 144 186 188 158" />
-                    </g>
-                  </svg>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section className="lp-sec" id="capabilities">
-            <div className="lp-in">
-              <h2>Built for rights holders</h2>
-              <p className="lp-sec-lede">
-                The portal your team signs into is the same one your reporting runs on.
-              </p>
-              <div className="lp-caps">
-                {['Power BI Embedded', 'IP House API', 'Real-time Analytics',
-                  'Secure OTP Login', 'Multi-Client Portal', 'Takedown Enforcement'].map(f => (
-                  <span key={f}>{f}</span>
-                ))}
-              </div>
-            </div>
-          </section>
-      </>}
+         This carried the "How it works" section — the four stages with every
+         service listed under each — and a "Built for rights holders" section of
+         capability chips, plus the SVG cycle diagram. All of it was a second,
+         longer answer to the question the hero already answers: the eyebrow, the
+         headline, the figures and the four stages named. A page whose only job
+         is to be signed in to should not need scrolling. */
     >
                 <h2>Welcome back</h2>
                 <p className="lp-card-sub">Sign in to access your dashboards &amp; reports.</p>
