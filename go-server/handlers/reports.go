@@ -391,6 +391,33 @@ func ReportsData(w http.ResponseWriter, r *http.Request) {
 			Fail(w, 403, "You do not have access to this report")
 			return
 		}
+		/*
+			A POWER BI PLATFORM ANSWERS HERE AND GOES NO FURTHER.
+
+			Before the scope is built, the period clamped or the cache consulted:
+			none of it applies to an embed. Everything below this point is about
+			turning a window into SQL, and a report that is a Power BI report has
+			no window and no SQL — running any of it would spend a warehouse
+			round trip to produce a payload the page discards.
+
+			The reason travels back on `ok: false` rather than as an HTTP error.
+			Both failures — no dashboard chosen, or none assigned to this client —
+			are configuration a reader cannot act on but an admin can, and the
+			page already has somewhere to print an explanation. A 500 would put
+			the same sentence behind a browser console.
+		*/
+		if p.isPowerBI() {
+			rep, ok, why := powerBIReportFor(p, clientID)
+			if !ok {
+				OK(w, map[string]any{"ok": false, "available": true,
+					"sourceKind": sourceKindPowerBI, "error": why})
+				return
+			}
+			OK(w, map[string]any{"ok": true, "available": true,
+				"sourceKind": sourceKindPowerBI, "powerbi": rep})
+			return
+		}
+
 		scope := flatQuery(q)
 		/* A sports report reads only inside its configured period, whatever the
 		   request asked for — see sportsperiod.go. Clamped BEFORE the cache

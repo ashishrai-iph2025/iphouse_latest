@@ -120,6 +120,11 @@ func ReportsSections(w http.ResponseWriter, r *http.Request) {
 
 		entry := map[string]any{
 			"key": p.Key, "label": p.Label,
+			/* What this section IS, so the page knows before it asks for data.
+			   A Power BI section has no panels, no slicers and no date range to
+			   honour — it is an embed — and a page that discovered that from the
+			   data response would have already drawn a filter rail for it. */
+			"sourceKind": p.SourceKind,
 			"dimensions": dims, "filters": filters, "extraKpi": extras,
 			/* `filters` is what the section UNDERSTANDS — every parameter a click
 			   on a panel may set. `slicers` is the subset that gets a dropdown in

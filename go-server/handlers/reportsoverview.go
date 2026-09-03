@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"regexp"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
+	ipauth "github.com/ip-house/iphouse-api/auth"
 	"github.com/ip-house/iphouse-api/reportsapi"
 )
 
@@ -62,8 +63,67 @@ can only ever be a dataset the service already publishes.
    whose measures the page finds nothing under and draws as em-dashes. */
 const defaultOverviewDataset = "urls"
 
-/* Where the endpoint lives. A constant so the one fact this file is most likely
-   to get wrong is stated once, beside the test that pins it. */
+/*
+fallbackOverviewDataset is what a client with NO SPORTS REPORT is shown.
+
+The default above reads the sports URL table, which is the right source for a
+sports client and empty for everyone else — so a VOD client opened /welcome and
+was told "Nothing new was found this week" for a week in which plenty had been
+found. The page was reading the one table their reports do not use.
+
+`unified` is dashboards.Unified_BI_Dashboard: every platform in one row set —
+search engines, Open Web, YouTube, Telegram and social. It declares identified,
+removed, domains and assets, which are four of the five tiles this page draws,
+and the endpoint derives removalRatePct from the first two.
+
+It does NOT declare `delisted`, and that is deliberate upstream rather than a
+gap: the unified table records Google and Bing separately, and a URL dropped by
+both engines is one delisted URL, so the pair cannot be added. The page already
+draws that card only when the figure is present, so it is absent here instead of
+wrong.
+*/
+const fallbackOverviewDataset = "unified"
+
+/*
+hasSportsReport reports whether this login can open a sports report at all.
+
+The same two questions ReportsSections asks of every platform — is it enabled,
+and is it inside this login's allow-list — so the answer cannot disagree with
+what the reader actually has in their navigation. A client whose Report
+Configuration grants them Open Web Sports gets the sports overview; one granted
+only the VOD platforms does not.
+
+The allow-list is the LOGIN's, and on this page that is the client's: /welcome is
+a client route, and an admin viewing a client portal is doing so through an
+impersonated session whose claims are that client's. There is no staff-picks-a-
+client case here for it to get wrong.
+
+Assignment, not data. A client who holds a sports report and had a quiet week
+still sees the sports figures — an empty week in their own report is a true
+answer, and probing for rows to decide which table to read would make the page's
+source depend on how the week went.
+*/
+func hasSportsReport(claims *ipauth.Claims) bool {
+	allowed := reportsAllowedForClaims(claims)
+	for _, p := range loadPlatforms() {
+		if !p.Enabled || p.Key == summaryKey {
+			continue
+		}
+		if allowed != nil && !allowed[p.Key] {
+			continue
+		}
+		if isSportsPlatform(p) {
+			return true
+		}
+	}
+	return false
+}
+
+/*
+Where the endpoint lives. A constant so the one fact this file is most likely
+
+	to get wrong is stated once, beside the test that pins it.
+*/
 const overviewPath = "/v1/overview/"
 
 // A dataset key, and nothing that could steer the path elsewhere: lowercase,
@@ -108,7 +168,14 @@ func ReportsOverview(w http.ResponseWriter, r *http.Request) {
 	*/
 	ds := strings.TrimSpace(r.URL.Query().Get("dataset"))
 	if ds == "" {
-		ds = defaultOverviewDataset
+		/* The sports table for a sports client, the unified one for everybody
+		   else — see fallbackOverviewDataset. An explicit ?dataset= still wins,
+		   so this only decides what an unqualified request means. */
+		if hasSportsReport(claims) {
+			ds = defaultOverviewDataset
+		} else {
+			ds = fallbackOverviewDataset
+		}
 	}
 	/* Shape-checked, not membership-checked.
 

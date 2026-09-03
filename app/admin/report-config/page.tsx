@@ -197,6 +197,10 @@ interface Platform {
   tableDetail?: TableDetail[]
   sources?: SourceSummary[]
   tableCount?: number
+  /** 'table' or 'powerbi'. Absent on a response from a server that predates the
+   *  column, and read as 'table' — which is what such a platform is. */
+  sourceKind?: string
+  powerbiModuleId?: number
 }
 /** One row per platform × table: a platform reading three tables gets three. */
 interface InventoryRow {
@@ -385,6 +389,20 @@ export default function ReportConfigPage() {
   const [draftLabel, setDraftLabel] = useState<Record<string, string>>({})
   const [newLabel, setNewLabel] = useState('')
   const [newTables, setNewTables] = useState<string[]>([])
+  /*
+    What the new platform IS: warehouse tables, or a Power BI report.
+
+    Some reports cannot be queried from the dashboards at all — ESA's P2P
+    tracking, where the infohashes and captured IP addresses live in Power BI and
+    nowhere this service can reach with SQL. Such a platform names a DASHBOARD
+    instead of tables, and each client's actual report comes from the assignment
+    already made on /admin/dashboards.
+  */
+  const [newKind, setNewKind] = useState<'table' | 'powerbi'>('table')
+  const [newModule, setNewModule] = useState(0)
+  /* The dashboards a Power BI platform can point at, sent with the platform
+     list so the picker costs no second request. */
+  const [dashModules, setDashModules] = useState<{ moduleId: number; moduleName: string }[]>([])
   const [confirmDelete, setConfirmDelete] = useState<Platform | null>(null)
   const [tables, setTables] = useState<{ key: string; label: string }[]>([])
   const [inventory, setInventory] = useState<InventoryRow[]>([])
@@ -463,6 +481,9 @@ export default function ReportConfigPage() {
          decision and the response is already shaped by it: reading it here
          cannot disagree with what was actually sent. */
       setCanEditSources(d.canEditSources === true)
+      /* The dashboards a Power BI platform may point at, carried on this same
+         response so the picker in the add form needs no request of its own. */
+      setDashModules(Array.isArray(d.dashboardModules) ? d.dashboardModules : [])
       // Whether THIS response carries the names, so nothing has to infer which
       // of the two shapes it is holding.
       setRevealed(d.revealed === true)
@@ -805,18 +826,32 @@ export default function ReportConfigPage() {
     } catch (e: any) { flash(e.message, false) } finally { setBusy('') }
   }
 
-  async function savePlatform(key: string, label: string, tables: string[], enabled = true) {
+  /*
+    `source` is optional, and absent means "leave this platform as it is".
+
+    Every existing caller — the Hide button, the reorder, the table editor on
+    each row — saves without it, and those must not turn a Power BI platform into
+    a queried one as a side effect of renaming it. So the field is only sent when
+    the caller is actually choosing, which today is the add form.
+  */
+  async function savePlatform(
+    key: string, label: string, tables: string[], enabled = true,
+    source?: { kind: 'table' | 'powerbi'; moduleId: number },
+  ) {
     setBusy(key || 'new')
     try {
       const r = await fetch('/api/admin/report-platforms', {
         method: 'PUT', credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key, label, tables, enabled }),
+        body: JSON.stringify({
+          key, label, tables, enabled,
+          ...(source ? { sourceKind: source.kind, powerbiModuleId: source.moduleId } : {}),
+        }),
       })
       const d = await r.json()
       if (!d.success) throw new Error(d.error || 'Save failed')
       flash(key ? 'Platform saved' : `Platform "${label}" added`)
-      setNewLabel(''); setNewTables([])
+      setNewLabel(''); setNewTables([]); setNewKind('table'); setNewModule(0)
       await loadPlatforms()
       setInventory([])   // stale once the mapping changed
     } catch (e: any) { flash(e.message, false) } finally { setBusy('') }
@@ -1687,14 +1722,45 @@ export default function ReportConfigPage() {
             <Card className="p-4">
               <div className="text-sm font-bold text-[#14254A] dark:text-white mb-1">Add a platform</div>
               <p className="text-xs text-gray-500 dark:text-white/45 mb-3 max-w-2xl leading-relaxed">
-                A platform is a name and the warehouse tables behind it. Pick more than one and their
-                numbers are added together. Everything else — which column holds the client, which holds
-                the date, how rows are counted — is worked out from the tables themselves.
-                <br />
-                The list offers what the <b className="text-[#14254A] dark:text-white">Warehouse</b> tab
-                leaves visible. A table marked <i>not served by the reports service</i> can be chosen but
-                will not return data until a dataset for it exists there.
+                A platform is a name and what sits behind it: either warehouse tables, or a Power BI
+                report for reports that cannot be queried from the dashboards at all.
+                {newKind === 'table' ? <>
+                  {' '}Pick more than one table and their numbers are added together. Everything else —
+                  which column holds the client, which holds the date, how rows are counted — is worked
+                  out from the tables themselves.
+                  <br />
+                  The list offers what the <b className="text-[#14254A] dark:text-white">Warehouse</b> tab
+                  leaves visible. A table marked <i>not served by the reports service</i> can be chosen but
+                  will not return data until a dataset for it exists there.
+                </> : <>
+                  {' '}Name the dashboard this report is. Each client's actual Power BI report comes from
+                  what has been assigned to them under{' '}
+                  <b className="text-[#14254A] dark:text-white">Dashboards</b> — so one client sees theirs
+                  and another sees theirs, and there is nothing to assign twice here. A client with no
+                  assignment is told so rather than shown somebody else's report.
+                </>}
               </p>
+
+              {/* ── Which kind, before anything else ──────────────────────────
+                  First because it decides what the rest of the form asks for.
+                  Two buttons rather than a dropdown: there are two answers, and a
+                  select would hide one of them behind a click. */}
+              <div className="flex flex-wrap gap-2 mb-3">
+                {([
+                  ['table', 'Warehouse tables', 'Queried from the dashboards'],
+                  ['powerbi', 'Power BI report', 'Embedded, assigned per client'],
+                ] as const).map(([kind, title, sub]) => (
+                  <button key={kind} type="button" onClick={() => setNewKind(kind)}
+                    className={`text-left rounded-xl border px-3.5 py-2 transition-colors ${
+                      newKind === kind
+                        ? 'border-[#14254A] bg-[#14254A]/[0.05] dark:border-white/40 dark:bg-white/10'
+                        : 'border-gray-200 hover:border-gray-300 dark:border-white/15 dark:hover:border-white/25'}`}>
+                    <span className="block text-xs font-bold text-[#14254A] dark:text-white">{title}</span>
+                    <span className="block text-[10.5px] text-gray-500 dark:text-white/45">{sub}</span>
+                  </button>
+                ))}
+              </div>
+
               <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,240px)_1fr_auto] gap-3 lg:items-end">
                 <Field label="Platform name" hint="This is the name shown in the Reports sidebar">
                   <input value={newLabel} onChange={e => setNewLabel(e.target.value)}
@@ -1704,12 +1770,41 @@ export default function ReportConfigPage() {
                       focus:outline-none focus:border-[#14254A]
                       dark:bg-white/5 dark:border-white/15 dark:text-white dark:placeholder-white/30" />
                 </Field>
-                <Field label="Warehouse tables">
-                  <MultiSearchableSelect options={tables} values={newTables} onChange={setNewTables}
-                    noun={['table', 'tables']} placeholder="Search warehouse tables…" />
-                </Field>
-                <button onClick={async () => { await savePlatform('', newLabel.trim(), newTables); setAddOpen(false) }}
-                  disabled={!newLabel.trim() || newTables.length === 0 || busy === 'new'}
+                {newKind === 'table' ? (
+                  <Field label="Warehouse tables">
+                    <MultiSearchableSelect options={tables} values={newTables} onChange={setNewTables}
+                      noun={['table', 'tables']} placeholder="Search warehouse tables…" />
+                  </Field>
+                ) : (
+                  <Field label="Power BI dashboard"
+                    hint="Which dashboard this report is. The report itself is assigned per client under Dashboards.">
+                    {dashModules.length === 0 ? (
+                      /* Said plainly rather than left as an empty dropdown: there
+                         is nothing to choose until a dashboard exists, and an
+                         empty picker looks like a broken screen. */
+                      <p className="text-xs text-amber-700 dark:text-amber-300 leading-snug py-2">
+                        No dashboards exist yet — add one under Dashboards first, then it can be
+                        chosen here.
+                      </p>
+                    ) : (
+                      <SearchableSelect clearable={false}
+                        value={newModule ? String(newModule) : ''}
+                        onChange={v => setNewModule(+v)}
+                        placeholder="Choose a dashboard…"
+                        options={dashModules.map(m => ({
+                          key: String(m.moduleId), label: m.moduleName,
+                        }))} />
+                    )}
+                  </Field>
+                )}
+                <button onClick={async () => {
+                  await savePlatform('', newLabel.trim(),
+                    newKind === 'table' ? newTables : [],
+                    true, { kind: newKind, moduleId: newModule })
+                  setAddOpen(false)
+                }}
+                  disabled={!newLabel.trim() || busy === 'new' ||
+                    (newKind === 'table' ? newTables.length === 0 : newModule === 0)}
                   className="px-5 py-2.5 rounded-xl text-xs font-bold text-white transition-all
                     disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
                   style={{ background: NAVY }}>
@@ -1798,10 +1893,22 @@ export default function ReportConfigPage() {
                       {/* A table name here would defeat the whole exercise for
                           the sake of a subtitle: the count says as much about
                           whether to open the row, and says nothing else. */}
-                      {revealed && p.tables?.length === 1
-                        ? p.tables[0].split('.').pop()
-                        : `${sourceCount} source${sourceCount === 1 ? '' : 's'}`}
+                      {/* A Power BI platform has no tables, so a source count
+                          would read "0 sources" — true, and indistinguishable
+                          from a queried report somebody forgot to point at
+                          anything. It says what it is instead. */}
+                      {p.sourceKind === 'powerbi'
+                        ? (dashModules.find(m => m.moduleId === p.powerbiModuleId)?.moduleName
+                           ?? 'no dashboard chosen')
+                        : revealed && p.tables?.length === 1
+                          ? p.tables[0].split('.').pop()
+                          : `${sourceCount} source${sourceCount === 1 ? '' : 's'}`}
                     </span>
+                    {p.sourceKind === 'powerbi' && (
+                      <Pill tone={p.powerbiModuleId ? 'mute' : 'warn'}>
+                        {p.powerbiModuleId ? 'Power BI' : 'Power BI · not configured'}
+                      </Pill>
+                    )}
                     {dirty && <Pill tone="warn">Unsaved</Pill>}
                     {brokenCount > 0 && (
                       <Pill tone="warn">
@@ -1813,6 +1920,8 @@ export default function ReportConfigPage() {
 
                   {/* Visibility without opening anything: the commonest change
                       on this screen is "take that one off the sidebar". */}
+                  {/* No `source` argument: toggling visibility must leave what
+                      the platform IS alone — see savePlatform. */}
                   <button onClick={() => savePlatform(p.key, p.label, p.tables ?? [], !p.enabled)}
                     disabled={busy === p.key}
                     title={p.enabled ? 'Hide from the Reports sidebar' : 'Show in the Reports sidebar'}
@@ -1836,7 +1945,32 @@ export default function ReportConfigPage() {
                             focus:outline-none focus:border-[#14254A]
                             dark:bg-white/5 dark:border-white/15 dark:text-white" />
                       </Field>
-                      {revealed ? (
+                      {/* A POWER BI PLATFORM READS NO TABLES.
+
+                          Offering the warehouse picker here was worse than
+                          useless: it invited an operator to choose tables for a
+                          report that never queries any, saved them, and left the
+                          row looking configured. The dashboard it points at is
+                          the only thing there is to change. */}
+                      {p.sourceKind === 'powerbi' ? (
+                        <Field label="Power BI dashboard it opens"
+                          hint="Each client's own report is assigned under Dashboards, not here.">
+                          {dashModules.length === 0 ? (
+                            <p className="text-xs text-amber-700 dark:text-amber-300 leading-snug py-2">
+                              No dashboards exist yet — add one under Dashboards first.
+                            </p>
+                          ) : (
+                            <SearchableSelect clearable={false}
+                              value={p.powerbiModuleId ? String(p.powerbiModuleId) : ''}
+                              onChange={v => savePlatform(p.key, labelDraft || p.label, [], p.enabled,
+                                { kind: 'powerbi', moduleId: +v })}
+                              placeholder="Choose a dashboard…"
+                              options={dashModules.map(m => ({
+                                key: String(m.moduleId), label: m.moduleName,
+                              }))} />
+                          )}
+                        </Field>
+                      ) : revealed ? (
                         <Field label="Warehouse tables it reads"
                           hint={tablesDraft.length > 1 ? 'Numbers from these tables are added together' : undefined}>
                           <MultiSearchableSelect options={tables} values={tablesDraft}

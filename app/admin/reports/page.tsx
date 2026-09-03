@@ -29,6 +29,7 @@ import DateRangePicker from '@/components/ui/DateRangePicker'
 import { WORLD_SHAPES, WORLD_VIEWBOX } from './worldShapes'
 import RealtimeCard from '@/components/shared/RealtimeCard'
 import ReportLoader from '@/components/shared/ReportLoader'
+import PowerBIReport from '@/components/shared/PowerBIReport'
 import ReportLayoutEditor from '@/components/reports/ReportLayoutEditor'
 
 /* ── Palette ───────────────────────────────────────────────────────────────────
@@ -320,6 +321,18 @@ interface SectionPanel {
 interface Section {
   key: string
   label: string
+  /**
+   * What this report IS: a warehouse query, or an embedded Power BI report.
+   *
+   * Known from the SECTION list rather than discovered in the data response,
+   * and that ordering is the point: a Power BI report has no panels, no slicers
+   * and no date range to honour, so a page that found out from the data would
+   * already have drawn a filter rail and a KPI band for it.
+   *
+   * Absent from an older server, and read as a queried report — which is what
+   * every section was before this existed.
+   */
+  sourceKind?: 'table' | 'powerbi'
   dimensions: SectionDim[]
   /** The page's shape. Absent from an older server — see the fallback in the
       page body, which is the layout this file used to hardcode. */
@@ -4455,6 +4468,45 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
                   ? 'The client list can’t be loaded at the moment. Please try again in a few minutes.'
                   : 'Use the Client slicer on the right. The report runs automatically and re-runs on every filter change.'}
             />
+          ) : activeSection.sourceKind === 'powerbi' ? (
+            /*
+              ── AN EMBEDDED REPORT, AND NOTHING ELSE ──────────────────────
+
+              Ahead of the loading branch and every panel below it, because this
+              report has none of what they draw. A Power BI report is not a
+              result set: there are no KPI tiles to fill, no breakdowns to
+              cross-filter and no window to honour, so drawing the band and the
+              charts produced a page of "No figure for this period" over a
+              report that was never going to answer them.
+
+              The server has already resolved WHICH report — see
+              handlers/reportpowerbi.go — out of the assignment made for this
+              client under Dashboards. What arrives here is the reference, or a
+              reason there is not one.
+            */
+            <Card title={activeSection.label}>
+              {loading ? (
+                <ReportLoader fill label="Opening the report"
+                  sublabel={activeSection.label} />
+              ) : data?.powerbi?.link ? (
+                <PowerBIReport reportRef={String(data.powerbi.link)}
+                  title={String(data.powerbi.moduleName || activeSection.label)} />
+              ) : (
+                /* The two ways this has nothing to show are different problems
+                   with different owners — no dashboard chosen for the platform,
+                   or none assigned to this client — and the server says which.
+                   Printed as sent rather than replaced with one sentence
+                   covering both. */
+                <div className="px-5 py-12 text-center">
+                  <p className="font-bold text-[#14254A] dark:text-white mb-1.5">
+                    This report is not available yet
+                  </p>
+                  <p className="text-sm max-w-md mx-auto leading-relaxed text-gray-500 dark:text-white/45">
+                    {err || 'No Power BI report has been assigned for this client.'}
+                  </p>
+                </div>
+              )}
+            </Card>
           ) : loading ? (
             /* EVERY run, not just the first. A re-run used to leave the old
                numbers on screen at 60% opacity, which is indistinguishable from
@@ -4662,8 +4714,20 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         </main>
 
         {/* ── Right: slicers ───────────────────────────────────────────────── */}
-        {/* Same inset as the navigation rail, and for the same reason — the
-            live card above spans both of them now. See railInset. */}
+        {/*
+            NOT DRAWN FOR AN EMBEDDED REPORT.
+
+            A Power BI report honours none of this: the date range and every
+            slicer here become a query string the server discards, so a rail
+            offering them would be a set of controls whose only visible effect
+            is nothing. The report carries its own filters — see the panes
+            settings in PowerBIReport — and two sets that do not know about each
+            other is worse than one.
+
+            Same inset as the navigation rail otherwise, and for the same reason
+            — the live card above spans both of them. See railInset.
+        */}
+        {activeSection?.sourceKind !== 'powerbi' && (
         <aside style={railInset}
           className={`w-full xl:flex-none xl:sticky
             xl:top-[calc(0.5rem_+_var(--rt-band,0px))] ${
@@ -4728,6 +4792,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
           </div>
           )}
         </aside>
+        )}
       </div>
       </>
       )}

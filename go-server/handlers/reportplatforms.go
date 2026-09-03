@@ -62,6 +62,39 @@ func ensurePlatformSchema() {
 			log.Printf("[platforms] create %s: %v", platformTableTable, err)
 			return
 		}
+		/*
+		  ── A PLATFORM NEED NOT BE A WAREHOUSE QUERY ─────────────────────────
+
+		  Added after the table above existed, so ALTERed rather than declared —
+		  CREATE TABLE IF NOT EXISTS does nothing to a table that is already
+		  there, and an install created before this would read columns that do
+		  not exist and get zero for every platform.
+
+		    source_kind        'table' (the default, and everything that came
+		                       before) or 'powerbi'.
+		    powerbi_module_id  which dashboard MODULE this platform is, when it
+		                       is a Power BI report.
+
+		  The module, not a report id, and that is the whole design. A Power BI
+		  report is per CLIENT — ESA's P2P report is not another client's — and
+		  those assignments already exist at /admin/dashboards as
+		  dcp_user_module_map(userId, moduleId, link). Storing a single report id
+		  here would either show every client the same report or need a second
+		  per-client table beside the one that already holds exactly this. So the
+		  platform records which module it is and the report id is looked up per
+		  reader. See powerBIReportFor.
+		*/
+		for _, alter := range []string{
+			"ADD COLUMN source_kind VARCHAR(16) NOT NULL DEFAULT 'table'",
+			"ADD COLUMN powerbi_module_id INT NULL DEFAULT NULL",
+		} {
+			if _, _, err := db.Exec("ALTER TABLE " + platformTable + " " + alter); err != nil {
+				if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+					log.Printf("[platforms] %s: %v", alter, err)
+				}
+			}
+		}
+
 		seedPlatformsFromRegistry()
 		adoptSourceURLIntoOpenWeb()
 	})
@@ -1215,11 +1248,34 @@ type platformDef struct {
 	Order   int64
 	Enabled bool
 	Tables  []string
+	/*
+		What this platform IS: a warehouse query, or an embedded Power BI report.
+
+		Empty is read as "table" everywhere rather than as unset. Every platform
+		that existed before this column did is a queried report, and a zero value
+		that means the old behaviour is what lets the column be added without a
+		migration pass over the rows.
+	*/
+	SourceKind string
+	// The dashboard module a Power BI platform maps to. 0 when it has none,
+	// which is a Power BI platform nobody can open yet — see powerBIReportFor.
+	PowerBIModuleID int64
 }
+
+// A platform is a queried report unless it says otherwise.
+func (p platformDef) isPowerBI() bool { return p.SourceKind == sourceKindPowerBI }
+
+const (
+	sourceKindTable   = "table"
+	sourceKindPowerBI = "powerbi"
+)
 
 func loadPlatforms() []platformDef {
 	ensurePlatformSchema()
-	rows, err := db.Query("SELECT platform_key, label, sort_order, is_enabled FROM " + platformTable + " ORDER BY sort_order, label")
+	rows, err := db.Query("SELECT platform_key, label, sort_order, is_enabled, " +
+		"COALESCE(source_kind, '') AS source_kind, " +
+		"COALESCE(powerbi_module_id, 0) AS powerbi_module_id " +
+		"FROM " + platformTable + " ORDER BY sort_order, label")
 	if err != nil {
 		return nil
 	}
@@ -1233,10 +1289,17 @@ func loadPlatforms() []platformDef {
 	out := make([]platformDef, 0, len(rows))
 	for _, r := range rows {
 		key := strFromAny(r["platform_key"])
+		kind := strings.ToLower(strings.TrimSpace(strFromAny(r["source_kind"])))
+		if kind != sourceKindPowerBI {
+			// Anything unrecognised is a queried report, which is what every
+			// platform written before this column was one.
+			kind = sourceKindTable
+		}
 		out = append(out, platformDef{
 			Key: key, Label: strFromAny(r["label"]),
 			Order: numOf(r["sort_order"]), Enabled: numOf(r["is_enabled"]) == 1,
-			Tables: tablesBy[key],
+			Tables:     tablesBy[key],
+			SourceKind: kind, PowerBIModuleID: numOf(r["powerbi_module_id"]),
 		})
 	}
 	return out
@@ -1294,6 +1357,12 @@ func ReportPlatformsList(w http.ResponseWriter, r *http.Request) {
 		item := map[string]any{
 			"key": p.Key, "label": p.Label, "order": p.Order,
 			"enabled": p.Enabled,
+			/* What the platform IS. Reported to everyone who can open this
+			   screen, aliased view included: which kind of report a platform is
+			   says nothing about a warehouse table, and a page that cannot see
+			   it would draw the table controls for a Power BI report. */
+			"sourceKind":      p.SourceKind,
+			"powerbiModuleId": p.PowerBIModuleID,
 			// Always. The aliased view is the default one, whoever is looking.
 			"tableCount": len(p.Tables),
 			"sources":    sourceSummaryFor(p),
@@ -1333,8 +1402,22 @@ func ReportPlatformsList(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, item)
 	}
+	/* The dashboards a Power BI platform can point at, sent with the list so the
+	   picker needs no second request. Read from dcp_module, which is what
+	   /admin/dashboards assigns per client — see reportpowerbi.go. */
+	mods := []map[string]any{}
+	if rows, err := db.Query(
+		"SELECT moduleId, moduleName FROM dcp_module WHERE deleted = 0 ORDER BY moduleName"); err == nil {
+		for _, m := range rows {
+			mods = append(mods, map[string]any{
+				"moduleId": numOf(m["moduleId"]), "moduleName": strFromAny(m["moduleName"]),
+			})
+		}
+	}
+
 	OK(w, map[string]any{
 		"success": true, "platforms": out, "configured": reportsBackendReady(),
+		"dashboardModules": mods,
 		// What the page may offer, decided by the server. A screen that works
 		// out its own permissions works them out from what it was sent, and
 		// what it was sent is the thing being restricted.
@@ -1356,6 +1439,10 @@ func ReportPlatformSave(w http.ResponseWriter, r *http.Request) {
 		Tables  []string `json:"tables"`
 		Enabled *bool    `json:"enabled"`
 		Order   *int64   `json:"order"`
+		/* 'table' or 'powerbi'. Absent is read as 'table', so a caller written
+		   before this existed keeps saving queried reports. */
+		SourceKind      string `json:"sourceKind"`
+		PowerBIModuleID int64  `json:"powerbiModuleId"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 
@@ -1409,6 +1496,36 @@ func ReportPlatformSave(w http.ResponseWriter, r *http.Request) {
 		clean = stored
 	}
 
+	/*
+		A queried report unless Power BI is chosen, and the module comes with it.
+
+		Validated as a PAIR rather than separately: 'powerbi' with no module is a
+		report nobody can open, and a module with kind 'table' is a value that
+		changes nothing and will confuse whoever reads the row next. So the kind
+		decides whether the module is kept at all.
+	*/
+	kind := strings.ToLower(strings.TrimSpace(body.SourceKind))
+	if kind != sourceKindPowerBI {
+		kind = sourceKindTable
+	}
+	var moduleID any
+	if kind == sourceKindPowerBI {
+		if body.PowerBIModuleID <= 0 {
+			Fail(w, 422, "Choose which dashboard this Power BI report is")
+			return
+		}
+		/* Checked against dcp_module, because the alternative is a platform
+		   pointing at a module id that does not exist — which fails for the
+		   READER, on a report page, with nothing to say why. */
+		if row, err := db.QueryOne(
+			"SELECT moduleId FROM dcp_module WHERE moduleId = ? AND deleted = 0 LIMIT 1",
+			body.PowerBIModuleID); err != nil || row == nil {
+			Fail(w, 422, "That dashboard no longer exists")
+			return
+		}
+		moduleID = body.PowerBIModuleID
+	}
+
 	enabled := 1
 	if body.Enabled != nil && !*body.Enabled {
 		enabled = 0
@@ -1439,11 +1556,13 @@ func ReportPlatformSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, _, err := db.Exec(`
-		INSERT INTO `+platformTable+` (platform_key, label, sort_order, is_enabled, updated_by)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO `+platformTable+`
+		  (platform_key, label, sort_order, is_enabled, source_kind, powerbi_module_id, updated_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE label=VALUES(label), sort_order=VALUES(sort_order),
-		  is_enabled=VALUES(is_enabled), updated_by=VALUES(updated_by)`,
-		key, label, order, enabled, who); err != nil {
+		  is_enabled=VALUES(is_enabled), source_kind=VALUES(source_kind),
+		  powerbi_module_id=VALUES(powerbi_module_id), updated_by=VALUES(updated_by)`,
+		key, label, order, enabled, kind, moduleID, who); err != nil {
 		log.Printf("[platforms] save %s: %v", key, err)
 		Fail(w, 500, "Could not save this platform")
 		return
