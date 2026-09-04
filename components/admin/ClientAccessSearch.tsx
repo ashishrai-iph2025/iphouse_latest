@@ -81,11 +81,46 @@ export default function ClientAccessSearch() {
 
   return (
     <>
-      {/* Nav trigger — styled like a search box */}
+      {/*
+        ── THE TRIGGER, TWICE ─────────────────────────────────────────
+
+        A search BOX needs a couple of hundred pixels, which a phone header does
+        not have beside a hamburger, a breadcrumb and three icons. So the box
+        starts at md and an icon stands in below it.
+
+        An icon rather than nothing, which is what was here: the box was
+        md-and-up only with no fallback, so on a phone there was no way to reach
+        a client portal at all — not a cramped one, none. A feature that
+        disappears on small screens reads as a bug to whoever is holding the
+        phone, and this one is how staff open a client account.
+      */}
       <button onClick={() => setOpen(true)}
-        className="hidden md:flex items-center gap-2 h-[34px] pl-2.5 pr-2 rounded-lg border text-sm bg-white dark:bg-white/5 border-gray-200 dark:border-white/10 text-gray-400 hover:border-[#FC934C]/50 transition-colors">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3" strokeLinecap="round"/></svg>
-        <span className="w-40 lg:w-48 text-left">Search client to access…</span>
+        aria-label="Search a client to access"
+        title="Search a client to access"
+        className="md:hidden p-2 rounded-lg text-gray-500 dark:text-white/60 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3" strokeLinecap="round"/></svg>
+      </button>
+
+      <button onClick={() => setOpen(true)}
+        title="Search a client to access their portal"
+        className="hidden md:flex items-center gap-2 h-9 w-[200px] lg:w-[248px] px-3 rounded-lg border text-sm
+          bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 text-gray-400
+          hover:border-[#FC934C]/50 hover:text-gray-500 dark:hover:text-white/70 transition-colors">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3" strokeLinecap="round"/></svg>
+        {/*
+          min-w-0 and truncate together, and the label kept SHORT.
+
+          The label was "Search client to access…" inside a fixed w-40 (160px)
+          span. That string is about 165px at this size, so it wrapped to two
+          lines inside a control with a fixed height and spilled out of its own
+          border — the box in the screenshot. Nothing clipped it because the
+          span could wrap freely.
+
+          Now the width lives on the button, the label cannot wrap, and if a
+          translation does run long it truncates instead of breaking the header.
+          The full sentence moved to the title attribute.
+        */}
+        <span className="flex-1 min-w-0 text-left truncate">Search a client…</span>
       </button>
 
       {open && createPortal(
