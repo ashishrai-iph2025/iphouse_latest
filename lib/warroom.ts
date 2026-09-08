@@ -400,6 +400,15 @@ const PLATFORM_ORDER = [
   'ugc and other social media',
   'i-tunes', 'play store', 'third party app', 'third party mobile app',
 ]
+/**
+ * What a platform is CALLED, against the key MarkScan sends.
+ *
+ * The keys are wire values — `internet`, `ugc and other social media` — and
+ * they belong in requests and nowhere else. Everything the reader sees goes
+ * through this map, which is why it is one map: the platform cards, the report
+ * the server builds and the filter chips all label from here, so they cannot
+ * end up calling one platform two things on the same screen.
+ */
 const PLATFORM_LABELS: Record<string, string> = {
   'facebook': 'Facebook', 'youtube': 'YouTube', 'instagram': 'Instagram',
   'twitter': 'X (Twitter)', 'telegram': 'Telegram',
@@ -408,6 +417,22 @@ const PLATFORM_LABELS: Record<string, string> = {
   'i-tunes': 'iTunes', 'play store': 'Play Store',
   'third party app': 'Third-Party App', 'third party mobile app': 'Third-Party Mobile',
 }
+
+/**
+ * The reader-facing name for a platform key.
+ *
+ * Exported because the WIRE VALUE was reaching the screen: the War Room's active
+ * filter chips printed the raw value they were set from, so clicking a card
+ * labelled "Open Web" produced a chip reading "Platform: internet" — an endpoint
+ * name, shown to a client, for a platform the same page had just named properly
+ * two inches above.
+ *
+ * An unknown key is returned unchanged rather than blanked. A platform this map
+ * has not been told about is still a platform, and its key is a worse label than
+ * its name but a much better one than nothing.
+ */
+export const platformDisplayName = (key: string): string =>
+  PLATFORM_LABELS[String(key ?? '').trim().toLowerCase()] ?? key
 
 const num = (v: unknown): number => {
   if (typeof v === 'number') return v

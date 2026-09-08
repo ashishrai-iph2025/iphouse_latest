@@ -58,16 +58,20 @@ import ReportLoader from '@/components/shared/ReportLoader'
 import ProgramCalendar from '@/components/client/ProgramCalendar'
 
 /* ── The brand palette ──────────────────────────────────────────────────────
-   Navy, orange and gold, plus the named tints of those three — the same set
-   /admin/reports draws its marks from, copied here as values rather than
-   invented again. The tint number is how much white is mixed in, so N40 is navy
-   at 40% white; the steps were chosen so neighbouring slots differ in LIGHTNESS
-   as well as in family, which keeps a split readable in greyscale. */
+   Navy and orange plus one tint of each — the same set /admin/reports draws its
+   marks from, copied here as values rather than invented again. The tint number
+   is how much white is mixed in, so N20 is navy at 20% white.
+
+   FOUR gradients, because the row is four cards and each has to be tellable
+   from its neighbours at a glance. Gold carries the rate — the one figure that
+   is neither found nor removed, which is the same job gold does on the reports
+   page — and the pale navy carries the queue, which is not a measurement at all
+   and should not look like one of the three that are. */
 const NAVY = '#14254A'
 const ORANGE = '#FC934C'
 const GOLD = '#FFC82B'
 const N20 = '#43516E'   // navy + 20% white
-const N40 = '#727C92'
+const N40 = '#727C92'   // navy + 40% white
 const O40 = '#FDBE94'   // orange + 40% white
 const G45 = '#FFE18A'   // gold + 45% white
 
@@ -77,11 +81,13 @@ const G45 = '#FFE18A'   // gold + 45% white
 const TILES = {
   identified: { from: NAVY,   to: N20, ink: '#fff', sub: 'rgba(255,255,255,.62)' },
   removed:    { from: ORANGE, to: O40, ink: NAVY,   sub: 'rgba(20,37,74,.60)' },
-  live:       { from: N20,    to: N40, ink: '#fff', sub: 'rgba(255,255,255,.62)' },
-  websites:   { from: GOLD,   to: G45, ink: NAVY,   sub: 'rgba(20,37,74,.60)' },
-  /* A wider sweep of the same navy than `identified`, so the row's two dark
-     tiles read apart at the ends of it without a sixth colour entering. */
-  assets:     { from: NAVY,   to: N40, ink: '#fff', sub: 'rgba(255,255,255,.62)' },
+  /* Gold takes NAVY ink: white on gold fails contrast outright, and a headline
+     figure nobody can read is not a headline. */
+  rate:       { from: GOLD,   to: G45, ink: NAVY,   sub: 'rgba(20,37,74,.60)' },
+  /* The queue, on the palest navy of the set. It is the one card in the row
+     that is not a number about the week, so it reads as the quiet end of a
+     navy-to-orange-to-gold row rather than as a fourth measurement. */
+  queue:      { from: N20,    to: N40, ink: '#fff', sub: 'rgba(255,255,255,.66)' },
 } as const
 
 const nf = new Intl.NumberFormat()
@@ -226,13 +232,28 @@ function Card({ title, sub, children }: {
 /** One waiting queue. The count is optional on purpose — some queues can be
     counted from an endpoint this page can call cheaply and some cannot, and a
     row without a number is still a way in. A row with a WRONG number is not. */
-function QueueRow({ href, label, count }: { href: string; label: string; count: number | null }) {
+/*
+QueueRow, on a coloured tile rather than on white.
+
+The row used to be dark text on a faint navy wash, which is unreadable on the
+navy tile the queue now sits on. Its own ink comes from the tile's tone, and its
+ground is a translucent WHITE rather than a fixed colour so it lifts off
+whatever gradient it is dropped on — the same trick the tiles' `sub` ink uses.
+
+The count keeps its own weight but not its own hue: orange on navy is the
+brand's other colour fighting the tile it is inside, and the number is already
+the only thing on the row that is bold and right-aligned.
+*/
+function QueueRow({ href, label, count, ink, muted }: {
+  href: string; label: string; count: number | null; ink: string; muted: string
+}) {
   return (
     <Link to={href}
-      className="flex items-center justify-between gap-3 rounded-xl px-3 py-2 transition-colors
-        bg-[#14254A]/[0.04] dark:bg-white/5 hover:bg-[#FC934C]/10">
-      <span className="text-[12px] font-semibold text-[#14254A] dark:text-white/85 truncate">{label}</span>
-      <span className="text-[13px] font-extrabold tabular-nums flex-shrink-0 text-[#FC934C]">
+      className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 transition-colors"
+      style={{ background: 'rgba(255,255,255,.12)', color: ink }}>
+      <span className="text-[11.5px] font-semibold truncate">{label}</span>
+      <span className="text-[12.5px] font-extrabold tabular-nums flex-shrink-0"
+        style={{ color: count === null ? muted : ink }}>
         {count === null ? '›' : nf.format(count)}
       </span>
     </Link>
@@ -330,32 +351,25 @@ export default function WelcomePage() {
 
   const identified = measure(cur, 'identified')
   const removed = measure(cur, 'removed')
-  const domains = measure(cur, 'domains')
-  const assets = measure(cur, 'assets')
   const delisted = measure(cur, 'delisted')
   const google = measure(cur, 'googleDelisted')
   const bing = measure(cur, 'bingDelisted')
   const batches = measure(cur, 'delistingBatches')
   const rate = measure(cur, 'removalRatePct')
 
-  /* Still live: the one figure here that is not a measure the endpoint returns.
-     It is identified minus removed, which is how the portal has always defined
-     pending removal — reportsrun.go computes exactly max(0, ident - removed).
-     Subtracting two figures from the SAME period is safe in a way that inventing
-     a measure is not, and it is the number a client opens this page for: what is
-     still up. It gets no delta, because a change the endpoint did not report is
-     not one to derive from two that it did. */
-  const live = identified !== null && removed !== null ? Math.max(0, identified - removed) : null
-
   /* An empty period, in the payload's own terms: every count 0 and firstDate
      null — "nothing happened, rather than nothing is known". Zeroes alone are
      NOT this; they are a real reading and get drawn as figures. */
   const emptyWeek = !!cur && cur.firstDate == null
 
-  /* Waiting on EITHER fetch. Gated on the grant as well, because with Reports
-     ungranted the calendar is never mounted and would never report itself
-     finished — the page would wait on a panel that does not exist. */
-  const busy = has('Reports') && (loading || calLoading)
+  /* Waiting on EITHER fetch, EACH under its own grant.
+
+     A panel that is not mounted never reports itself finished, so waiting on
+     one the login cannot see is a loader that never clears. That was already
+     why this was gated — but the two panels answer to two different modules
+     now, and keeping them both behind Reports would hang the page for a login
+     holding Calendar alone. */
+  const busy = (has('Reports') && loading) || (has('welcome') && calLoading)
 
   const name = String((session?.user as any)?.name || '').split(' ')[0] || 'there'
   const from = String(cur?.from ?? '')
@@ -390,7 +404,18 @@ export default function WelcomePage() {
       {/* Mounted even while the page is still waiting: it renders nothing until
           its own fetch lands, and unmounting it until the wait ended would mean
           that fetch never started. */}
-      {has('Reports') && <ProgramCalendar onLoadingChange={setCalLoading} />}
+      {/* Its OWN grant, not the Reports one it used to borrow. The calendar has
+          its own endpoint and its own failure state, so a client who should see
+          the week's figures but not the fixture schedule is something an admin
+          can express.
+
+          The identifier is "welcome" — the PAGE this grant opens, which is how
+          module_permission is keyed throughout and what the row an admin
+          created actually says. It is the same string the nav item matches on
+          (lib/navItems.tsx) and the same one /api/reports/assets checks
+          server-side (handlers/calendarmodule.go), so the tab, the panel and
+          the endpoint cannot disagree about one login. */}
+      {has('welcome') && <ProgramCalendar onLoadingChange={setCalLoading} />}
 
       {/*
         ONE loader for the whole page.
@@ -456,10 +481,15 @@ export default function WelcomePage() {
           <section className={`${boxCls} p-4 sm:p-5 space-y-4`}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-[15px] font-extrabold text-[#14254A] dark:text-white">This week</h2>
-              <p className="text-[12px] text-gray-500 dark:text-white/50 mt-0.5">
-                The last {days} days, compared with the {days} before them.
-              </p>
+              {/* Named for the WINDOW, not for a calendar week. "This week"
+                  read as Monday-to-today; the figures are a rolling seven days
+                  ending now, which is a different period and the one the tiles
+                  below actually cover. The comparison is not restated here
+                  because every tile that has one says "compare to last week" on
+                  its own face. */}
+              <h2 className="text-[15px] font-extrabold text-[#14254A] dark:text-white">
+                Last {days} days details
+              </h2>
             </div>
             {/* Navy on the light ground, gold on the dark one. A single fixed
                 colour cannot do both: navy is what the dark page is MADE of, and
@@ -478,40 +508,108 @@ export default function WelcomePage() {
             </Link>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
+          {/* TWO tiles, and the grid says two.
+
+              Still live, Websites affected and Assets targeted were dropped from
+              this page: the landing page answers "how much was found and how much
+              came down", and the rest of the breakdown is a click away behind
+              Open full report. Removal rate — the third figure kept — stays in
+              its own card below rather than becoming a third tile, because the
+              bar and the "12,191 of 29,241 taken down" line under it are the
+              part that makes a percentage mean something.
+
+              The column count had to come down with them. Left at
+              xl:grid-cols-5 the two tiles would have held the first two fifths
+              of the row and stretched nothing across the other three. */}
+          {/*
+              ── ONE ROW, FOUR CARDS, ONE SURFACE ─────────────────────────
+
+              These were two rows on two different surfaces: two gradient tiles
+              inside this panel, then Removal rate and Needs you as white cards
+              below it. Four things about one week, in two visual languages, with
+              a panel edge between them.
+
+              They are one grid now and every card is a gradient tile, so the row
+              reads as one answer to one question. `items-stretch` is what keeps
+              it honest: the queue card is taller than a figure, and without it
+              the three number cards would sit short beside it.
+
+              Anything conditional — the De-indexed card below — flows into the
+              row after these four and wraps to a second line, which is why the
+              column count is fixed at four rather than counting what is
+              actually rendered.
+          */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-stretch">
             <MiniTile label="Infringements identified" value={fmt(identified)}
               change={chg?.identified} good="down" tone={TILES.identified} />
             <MiniTile label="Removed" value={fmt(removed)}
               change={chg?.removed} good="up" tone={TILES.removed} />
-            {/* No delta: see the note on `live`. */}
-            <MiniTile label="Still live" value={fmt(live)}
-              change={null} tone={TILES.live} />
-            <MiniTile label="Websites affected" value={fmt(domains)}
-              change={chg?.domains} good="down" tone={TILES.websites} />
-            <MiniTile label="Assets targeted" value={fmt(assets)}
-              change={chg?.assets} good="down" tone={TILES.assets} />
+
+            {/* The rate, as a tile. It keeps the bar and the "x of y taken down"
+                line, which is the part that makes a percentage mean something —
+                a bare 41.7% is the one figure on this row a reader cannot sanity
+                check against anything. The bar's track and fill are drawn from
+                the tile's own ink rather than in orange: on a gold ground the
+                brand orange is the neighbouring tile's colour arriving inside
+                this one. */}
+            <div className="rounded-xl px-3.5 py-3 overflow-hidden shadow-card flex flex-col"
+              style={{ background: `linear-gradient(135deg,${TILES.rate.from} 0%,${TILES.rate.to} 100%)`,
+                       color: TILES.rate.ink }}>
+              <p className="text-[11.5px] font-bold leading-tight opacity-90">Removal rate</p>
+              <p className="text-[25px] font-extrabold leading-none mt-2 tabular-nums">
+                {rate === null ? '—' : `${rate}%`}
+              </p>
+              <div className="h-1.5 rounded-full overflow-hidden mt-2.5"
+                style={{ background: 'rgba(20,37,74,.15)' }}>
+                <div className="h-full rounded-full transition-[width] duration-700"
+                  style={{ width: `${rate === null ? 0 : Math.min(100, rate)}%`,
+                           background: TILES.rate.ink }} />
+              </div>
+              {/* Points, not per cent — see the note on Delta. */}
+              <Delta change={chg?.removalRatePct} good="up"
+                muted={TILES.rate.sub} ink={TILES.rate.ink} />
+              <p className="text-[10.5px] mt-1" style={{ color: TILES.rate.sub }}>
+                {fmt(removed)} of {fmt(identified)} taken down
+              </p>
+            </div>
+
+            {/* The queue, on the same surface as the figures beside it. Its
+                three destinations survive the restyle — collapsing them into one
+                number would have made the row uniform by deleting two places a
+                reader can go. */}
+            {(has('PerformQC') || has('DownloadRequest')) && (
+              <div className="rounded-xl px-3.5 py-3 overflow-hidden shadow-card flex flex-col"
+                style={{ background: `linear-gradient(135deg,${TILES.queue.from} 0%,${TILES.queue.to} 100%)`,
+                         color: TILES.queue.ink }}>
+                <p className="text-[11.5px] font-bold leading-tight opacity-90">Needs you</p>
+                <div className="mt-2 space-y-1.5">
+                  {has('PerformQC') && (
+                    <QueueRow href="/pending-count" label="Awaiting approval" count={null}
+                      ink={TILES.queue.ink} muted={TILES.queue.sub} />
+                  )}
+                  {has('DownloadRequest') && (
+                    <QueueRow href="/download-request" label="Downloads ready" count={downloads}
+                      ink={TILES.queue.ink} muted={TILES.queue.sub} />
+                  )}
+                  <QueueRow href="/notifications" label="Unread notifications" count={unread}
+                    ink={TILES.queue.ink} muted={TILES.queue.sub} />
+                </div>
+              </div>
+            )}
+
           </div>
           </section>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <Card title="Removal rate" sub={`Across the last ${days} days`}>
-              <p className="text-[34px] font-extrabold leading-none tabular-nums text-[#14254A] dark:text-white">
-                {rate === null ? '—' : `${rate}%`}
-              </p>
-              <div className="h-2 rounded-full bg-gray-100 dark:bg-white/10 overflow-hidden mt-3">
-                <div className="h-full rounded-full bg-[#FC934C] transition-[width] duration-700"
-                  style={{ width: `${rate === null ? 0 : Math.min(100, rate)}%` }} />
-              </div>
-              {/* Points, not per cent — see the note on Delta. */}
-              <Delta change={chg?.removalRatePct} good="up" />
-              <p className="text-[11px] text-gray-500 dark:text-white/50 mt-1">
-                {fmt(removed)} of {fmt(identified)} taken down
-              </p>
-            </Card>
+          {/* De-indexing is its own outcome — a link an engine dropped is not a
+              page taken down, and the report names the two apart.
 
-            {/* De-indexing is its own outcome — a link an engine dropped is not a
-                page taken down, and the report names the two apart. */}
-            {delisted !== null && (
+              OUTSIDE the row above, and on its own white surface. That row is
+              four gradient tiles about the week; this appears only for clients
+              whose engines dropped something, and a lone white card sitting in
+              a row of four coloured ones reads as a card that failed to load
+              rather than as an extra answer. */}
+          {delisted !== null && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               <Card title="De-indexed" sub="Search results dropped this week">
                 <p className="text-[34px] font-extrabold leading-none tabular-nums text-[#14254A] dark:text-white">
                   {fmt(delisted)}
@@ -540,22 +638,8 @@ export default function WelcomePage() {
                   )}
                 </div>
               </Card>
-            )}
-
-            {(has('PerformQC') || has('DownloadRequest')) && (
-              <Card title="Needs you" sub="Waiting on your account">
-                <div className="space-y-2">
-                  {has('PerformQC') && (
-                    <QueueRow href="/pending-count" label="Awaiting approval" count={null} />
-                  )}
-                  {has('DownloadRequest') && (
-                    <QueueRow href="/download-request" label="Downloads ready" count={downloads} />
-                  )}
-                  <QueueRow href="/notifications" label="Unread notifications" count={unread} />
-                </div>
-              </Card>
-            )}
-          </div>
+            </div>
+          )}
         </>
       )}
     </div>

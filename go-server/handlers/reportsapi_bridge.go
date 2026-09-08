@@ -647,6 +647,48 @@ func apiScope(s reportSpec, ds reportsapi.Dataset, q map[string]string, except s
 			v.Set(key, val)
 		}
 	}
+
+	/* ── A sports report on an all-genre table narrows to the genre ──────────
+
+	   Mobile Apps is a sports report by configuration reading a source that
+	   holds every genre a client has: a store listing is a store listing
+	   whatever it infringes, so the table carries the fixtures and the feature
+	   films together. Every other sports report reads a Sports* table its own
+	   ETL has already narrowed, and this is skipped for them — see
+	   sportsReportOnAllGenreTable, which is what sets the flag.
+
+	   ONE parameter, applied to the SCOPE, and that is the point of putting it
+	   here rather than anywhere else. Everything a section draws is built from
+	   this url.Values — the KPI summary, the daily trend, every breakdown, the
+	   raw rows, and the cross-platform Summary that merges them. Narrowing the
+	   scope narrows all of them at once and cannot narrow some and miss others,
+	   which is exactly the state this replaces: the Asset slicer and the Assets
+	   panel were held to sport while every figure beside them counted films.
+
+	   ── Why the portal does not do this itself ─────────────────────────────
+
+	   It cannot. Genre belongs to the TITLE, recorded in mediascan.AssetGenre,
+	   and no fact table repeats it — so there is nothing on the row to compare.
+	   The service's dataset filters are single-value equality on a column, so a
+	   list of the client's sports asset ids is not expressible either. What is
+	   expressible is a PREDICATE, and reports_api now declares one on this
+	   dataset: an EXISTS over AssetGenre keyed on the fact table's AssetId. See
+	   ExprFilters on the mobile-apps entry in that service's registry.
+
+	   ── The overall report is untouched ────────────────────────────────────
+
+	   A Mobile Apps platform configured WITHOUT "sports" in its key or label
+	   reads the same table through the same code and sends no genre at all, so
+	   it stays the all-genre report it is meant to be. The two sections differ
+	   by this one parameter and nothing else; the flag is derived from the
+	   platform's own name, so which of the two a section is follows from what an
+	   admin called it.
+
+	   An older reports_api ignores a parameter it does not declare, so a portal
+	   ahead of the service degrades to exactly the behaviour it has today. */
+	if s.SportsAssetsOnly {
+		v.Set(sportsGenreParam, sportsGenreName)
+	}
 	return v
 }
 
@@ -694,6 +736,26 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		if firstErr == "" {
 			firstErr = err.Error()
 		}
+		/*
+			LOGGED, every one of them.
+
+			The reader's banner says only "Some panels could not be loaded",
+			deliberately — the reason is a failed request naming a dataset and a
+			column, and the person reading a report cannot act on it. The comment
+			on that banner has always said the reason is in the server log for
+			whoever can.
+
+			It was not. This counted the failure and kept the first message for
+			the warning string, and logged nothing — so the one place the
+			explanation was supposed to be was the one place it never appeared,
+			and "why does it say some panels could not be loaded" had no answer
+			short of reading the JSON in a browser's network tab.
+
+			Every failure, not just the first: `firstErr` is what the reader's
+			warning quotes, but a report with six broken panels for six different
+			reasons is six things to fix and the log is where they belong.
+		*/
+		log.Printf("[reports] %s panel failed for %s: %v", s.Key, s.Table, err)
 	}
 
 	/* Caveats are NOT failures and must not travel with them.
@@ -734,6 +796,119 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			rowsCache, rowsCapped, rowsErr = scanRows(ctx, c, ds, scope)
 		})
 		return rowsCache, rowsCapped, rowsErr
+	}
+
+	/* ── The asset breakdown, held to this report's own genre ─────────────
+
+	   A sports report reading an all-genre table has to drop the titles that are
+	   not sport, and the drop cannot happen after a top-ten: cutting to ten and
+	   then removing the films leaves three bars under a title that says ten, and
+	   the seven sports titles ranked eleventh onwards — the ones the panel exists
+	   to show — never arrive. So the WHOLE list is asked for, narrowed, and cut
+	   afterwards.
+
+	   Which also answers "how many titles are in scope" exactly, for free: the
+	   length of the narrowed list. That figure replaces the tile below, because a
+	   report whose Assets panel shows six titles and whose tile says two hundred
+	   and forty is asking the reader to decide which of the two to believe.
+
+	   One request, memoised, and only for the reports that need it — see
+	   reportassetgenre.go for which those are and why. */
+	sportsAssetDim := ""
+	if s.SportsAssetsOnly {
+		for _, d := range s.Dimensions {
+			if d.Column == "" || DIMFilterParam(d.Key) != assetFilterParam {
+				continue
+			}
+			if key, ok := ds.DimByColumn(d.Column); ok {
+				sportsAssetDim = key
+				break
+			}
+		}
+	}
+	var (
+		sportsAssetOnce sync.Once
+		sportsAssetRows []map[string]any
+		sportsAssetOK   bool
+	)
+	/* narrowedAssetRows is the breakdown with the non-sports titles removed, or
+	   ok=false meaning "narrowing could not be established" — on which every
+	   caller must fall through to the unnarrowed behaviour rather than show a
+	   short list as a complete one. */
+	narrowedAssetRows := func() ([]map[string]any, bool) {
+		sportsAssetOnce.Do(func() {
+			if sportsAssetDim == "" {
+				return
+			}
+			ids, err := sportsAssetIDs(ctx, strings.TrimSpace(q["clientId"]))
+			if err != nil {
+				log.Printf("[reports] %s asset panel left unnarrowed: %v", s.Table, err)
+				return
+			}
+			/* Every value, not a top slice, for the reason above. The fallback is
+			   the same one the slicer values use: against a service that still
+			   caps a breakdown, the commonest N beats nothing — and a capped list
+			   is still narrowed correctly, it is only incomplete in the tail. */
+			rows, truncated, err := c.BreakdownFull(ctx, ds, scope, sportsAssetDim, reportsapi.BreakdownAll)
+			if err != nil {
+				rows, truncated, err = c.BreakdownFull(ctx, ds, scope, sportsAssetDim, maxAPIBreakdownRows)
+			}
+			if err != nil {
+				note(err)
+				return
+			}
+			/* The named groups only, which is also what the tile counts: a row
+			   whose asset is null is not a title, and letting it into the list
+			   would have it counted as one and then reported as a drop. */
+			listed := make([]string, 0, len(rows))
+			named := make([]map[string]any, 0, len(rows))
+			for _, r := range rows {
+				grp := strFromAny(r["grp"])
+				if grp == "" || grp == noneLabel {
+					continue
+				}
+				listed = append(listed, grp)
+				named = append(named, r)
+			}
+			keep, dropped := keepSportsAssets(ids, listed)
+			survives := make(map[string]bool, len(keep))
+			for _, id := range keep {
+				survives[id] = true
+			}
+			out := make([]map[string]any, 0, len(keep))
+			for _, r := range named {
+				if survives[strFromAny(r["grp"])] {
+					out = append(out, r)
+				}
+			}
+			/* Ranked here rather than trusted from the service: this list is
+			   about to be cut to ten under a title that says "Top 10", and the
+			   ordering of an uncapped breakdown is the service's business, not a
+			   contract. */
+			sort.SliceStable(out, func(i, j int) bool {
+				return numOf(out[i]["identified"]) > numOf(out[j]["identified"])
+			})
+			sportsAssetRows, sportsAssetOK = out, true
+			logAssetNarrowing("Assets panel on "+s.Label, strings.TrimSpace(q["clientId"]), dropped, len(out))
+			if dropped > 0 {
+				/* The whole report is held to the genre now, not just this list —
+				   apiScope sends the filter on the scope every panel is built
+				   from. The sentence that used to end this notice ("the volume
+				   figures are not narrowed") described the half-narrowed state
+				   this replaced, and leaving it would have the report deny what
+				   it is now doing. */
+				notice("This report is held to the %s genre, read from the title master: its "+
+					"source records every genre a client has. %d of the %d titles found in this "+
+					"window are %s, and every figure on the page counts those titles only.",
+					sportsGenreName, len(out), len(listed), sportsGenreName)
+			}
+			if truncated {
+				notice("The %s title list was cut short by the reporting service, so the "+
+					"Assets panel and the titles-in-scope figure cover the busiest %d of them.",
+					sportsGenreName, maxAPIBreakdownRows)
+			}
+		})
+		return sportsAssetRows, sportsAssetOK
 	}
 
 	/* Removals counted from those rows, where the service cannot count them —
@@ -904,6 +1079,13 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		phase1.Add(1)
 		go func() { defer phase1.Done(); allRows() }()
 	}
+	/* Fetched with the summary rather than lazily from a panel, because the KPI
+	   band below reads its length: leaving it to the panels would set the tile
+	   after the band had already been assembled. */
+	if sportsAssetDim != "" {
+		phase1.Add(1)
+		go func() { defer phase1.Done(); narrowedAssetRows() }()
+	}
 	phase1.Wait()
 
 	if wantRows {
@@ -1012,6 +1194,26 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		if haveRowMx && hasProfileColumns(ds) {
 			kpi["profilesSuspended"] = rowMx.profilesSuspended
 			kpi["impactedSubscribers"] = rowMx.impactedSubscribers
+		}
+
+		/* ── Titles in scope, on a report that may only name some of them ──
+
+		   REPLACED, not added. The service's `assets` measure counts every asset
+		   the table holds in the window, and on a sports report reading an
+		   all-genre source most of them are titles the report is not about — so
+		   the tile disagreed with the Assets panel and the Asset slicer beside
+		   it, which are both narrowed. Three views of one number, and the two
+		   that were right were the ones a reader could check.
+
+		   Only where the tile already exists: a table with no asset column has
+		   none, and inventing one here would put a figure on a report that
+		   cannot measure it. Same guard, same reasoning, as applyAssetScope —
+		   which still overrides this later when the reader has named the titles
+		   themselves, and should: what they asked for beats what was found. */
+		if _, has := kpi["totalAssets"]; has {
+			if rows, ok := narrowedAssetRows(); ok {
+				kpi["totalAssets"] = int64(len(rows))
+			}
 		}
 	}
 
@@ -1341,8 +1543,20 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		if limit <= 0 {
 			limit = 200
 		}
-		rows, err := c.Breakdown(ctx, ds, scope, key, limit)
-		if err != nil {
+		/* The asset panel of a genre-narrowed report is cut from the NARROWED
+		   list, not asked for fresh — see narrowedAssetRows. Falls through to the
+		   ordinary breakdown when the narrowing could not be established, which
+		   is the unnarrowed panel this report has always drawn. */
+		var (
+			rows []map[string]any
+			err  error
+		)
+		if narrowed, ok := narrowedAssetRows(); ok && key == sportsAssetDim {
+			rows = narrowed
+			if limit > 0 && len(rows) > limit {
+				rows = rows[:limit]
+			}
+		} else if rows, err = c.Breakdown(ctx, ds, scope, key, limit); err != nil {
 			note(err)
 			return []map[string]any{}
 		}
@@ -1700,6 +1914,17 @@ func mergeSpecOptionsViaAPI(specs []reportSpec, clientID string, q map[string]st
 			v.count += numOf(r["identified"])
 		}
 	}
+
+	/* ── A sports report may only offer sports titles ─────────────────────────
+
+	   Applied to the merged list rather than per table, because that is where
+	   the Asset slicer actually is: a platform reading several tables offers the
+	   union of what they found, and narrowing one table's contribution would
+	   leave the others' films in the dropdown.
+
+	   Before the naming pass below, so the master is not asked to name a title
+	   that is about to be dropped. */
+	narrowSportsAssetOptions(ctx, specs, clientID, flat)
 
 	/* The names the datasets could not supply. A table that records only an id
 	   labels every row with that id, so without this the slicer lists GUIDs —

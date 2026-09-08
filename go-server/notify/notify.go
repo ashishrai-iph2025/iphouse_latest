@@ -42,6 +42,10 @@ const (
 	// Raised by the background watcher when MarkScan finishes an extraction,
 	// not by a user action — the only event type nobody triggers directly.
 	TypeDownloadReady = "download_ready"
+	// A client user asking for a title's protection to be started or stopped.
+	// Nothing in this platform can apply it — see handlers/assetregister.go —
+	// so the notification and the emails ARE the mechanism, not a record of one.
+	TypeAssetProtection = "asset_protection"
 )
 
 // Table names. Exported so the read side can't drift from the write side.

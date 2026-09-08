@@ -6,6 +6,8 @@
 
 import type { ReactNode } from 'react'
 
+import { platformLabel } from '@/lib/platformCategories'
+
 export interface PortalNotification {
   id: number
   event_type: string
@@ -142,6 +144,17 @@ export const META_ORDER = [
 
 export function formatMetaValue(key: string, value: unknown): string {
   if (value === null || value === undefined || value === '') return '—'
+  /* The platform is stored as the WIRE name — "Internet" is what MarkScan calls
+     the open web, and it is what the request carried and the row holds. Nothing
+     outside the API is called that, so it is mapped on the way out, through the
+     same table the rest of the portal reads (lib/platformCategories.ts).
+
+     It was the one place the raw name still reached a reader, and it did it on a
+     page that names the platform twice: the heading above already said "Open
+     Web", from the server's own platformDisplay, while the row below it said
+     "Internet". One event, two names, and no way to tell they were the same
+     platform. */
+  if (key === 'platform') return platformLabel(String(value))
   if (key === 'fileSize') {
     const n = Number(value)
     if (!isFinite(n)) return String(value)

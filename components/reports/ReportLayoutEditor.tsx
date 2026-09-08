@@ -58,7 +58,9 @@ type Span = 'full' | 'half' | 'third' | 'quarter'
 
 interface Panel {
   key: string
-  kind: 'tile' | 'heading' | 'trend' | 'rate' | 'dim' | 'filter'
+  /** `realtime` is the live counts strip above a sports report — arranged here
+      like any other panel, and renamed or described the same way. */
+  kind: 'tile' | 'heading' | 'trend' | 'rate' | 'dim' | 'filter' | 'realtime'
   name: string
   viz?: string
   span: Span
@@ -82,7 +84,7 @@ export interface EditableSection { key: string; label: string }
 
 const KIND_LABEL: Record<Panel['kind'], string> = {
   tile: 'KPI card', heading: 'Section rule', trend: 'Trend', rate: 'Trend',
-  dim: 'Chart', filter: 'Filter',
+  dim: 'Chart', filter: 'Filter', realtime: 'Live counts',
 }
 
 /* The fraction, not the word — four of these per row and "Full row / Half /

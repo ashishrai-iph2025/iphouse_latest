@@ -58,6 +58,16 @@ func main() {
 	   boot rather than recorded as done once. */
 	handlers.EnsureReportsAccess()
 
+	/* And the Calendar module, on the same terms and for the same reason: the
+	   programme calendar on the landing page is its own grant now, and the row
+	   an admin grants has to exist before anyone can be given it. It also
+	   REPAIRS a Calendar row added by hand with no page name — which joins to
+	   nothing, so it looked like a permission and governed nothing. See
+	   handlers/calendarmodule.go; the one-time backfill from Reports is step 121
+	   in schema_manifest.go, not here, because it is a migration and not a
+	   policy to re-assert. */
+	handlers.EnsureCalendarModule()
+
 	/* The reports API credentials come from the database first and the
 	   environment second — see handlers/admin/reportsapiconfig.go. Installed
 	   here, before anything serves, so no request can be made with the
@@ -151,9 +161,20 @@ func main() {
 	mux.Handle("POST /api/auth/switch-account", auth(handlers.SwitchAccount))
 
 	// Client routes
-	mux.Handle("POST /api/infringement", auth(handlers.Infringement))
+	//
+	// `mod` additionally requires the login to hold the module grant that puts
+	// the page in the nav. Without it these were enforced only by
+	// ClientModuleGuard in the browser, so any signed-in client could read
+	// another module's data by calling its endpoint directly — the same hole
+	// `cfg` closes on the admin side below. Reports, Dashboard and War Room keep
+	// the per-handler gates they already had. See handlers/modulegate.go.
+	mod := func(pageName string, h http.HandlerFunc) http.Handler {
+		return auth(handlers.RequireModule(pageName, h))
+	}
+
+	mux.Handle("POST /api/infringement", mod(handlers.PageSearchCases, handlers.Infringement))
 	// One search across every platform in a category, results kept per platform.
-	mux.Handle("POST /api/infringement/category", auth(handlers.InfringementByCategory))
+	mux.Handle("POST /api/infringement/category", mod(handlers.PageSearchCases, handlers.InfringementByCategory))
 	mux.Handle("POST /api/warroom", auth(handlers.WarRoom))
 	mux.Handle("POST /api/warroom/stream", auth(handlers.WarRoomStream))
 	mux.Handle("GET /api/warroom/assets", auth(handlers.WarRoomAssets))
@@ -166,16 +187,20 @@ func main() {
 	   warehouse — the same source its report is built from. See
 	   handlers/warroomrealtime.go for why both sources are kept. */
 	mux.Handle("GET /api/warroom/realtime", auth(handlers.WarRoomRealtime))
-	mux.Handle("POST /api/search", auth(handlers.Search))
-	mux.Handle("GET /api/download", auth(handlers.DownloadList))
-	mux.Handle("POST /api/download", auth(handlers.DownloadTrigger))
-	mux.Handle("GET /api/download/{id}", auth(handlers.DownloadByID))
-	mux.Handle("GET /api/upload-url", auth(handlers.UploadURL))
-	mux.Handle("POST /api/upload-url", auth(handlers.UploadURL))
-	mux.Handle("POST /api/enforce", auth(handlers.Enforce))
-	mux.Handle("POST /api/qc-urls", auth(handlers.QCUrls))
-	mux.Handle("POST /api/qc-enforce", auth(handlers.QCEnforce))
-	mux.Handle("POST /api/pending-count", auth(handlers.PendingCount))
+	mux.Handle("POST /api/search", mod(handlers.PageSearchCases, handlers.Search))
+	mux.Handle("GET /api/download", mod(handlers.PageDownload, handlers.DownloadList))
+	mux.Handle("POST /api/download", mod(handlers.PageDownload, handlers.DownloadTrigger))
+	mux.Handle("GET /api/download/{id}", mod(handlers.PageDownload, handlers.DownloadByID))
+	mux.Handle("GET /api/upload-url", mod(handlers.PageUploadURL, handlers.UploadURL))
+	mux.Handle("POST /api/upload-url", mod(handlers.PageUploadURL, handlers.UploadURL))
+	/* Enforcement is an action on a search result, reached from the Search Case
+	   List results view (ResultsView.tsx) — so it is that module's grant, not a
+	   module of its own. */
+	mux.Handle("POST /api/enforce", mod(handlers.PageSearchCases, handlers.Enforce))
+	// The Infringements Approval queue and the two actions taken on it.
+	mux.Handle("POST /api/qc-urls", mod(handlers.PageQC, handlers.QCUrls))
+	mux.Handle("POST /api/qc-enforce", mod(handlers.PageQC, handlers.QCEnforce))
+	mux.Handle("POST /api/pending-count", mod(handlers.PageQC, handlers.PendingCount))
 	mux.Handle("GET /api/notifications", auth(handlers.Notifications))
 	mux.Handle("POST /api/notifications", auth(handlers.Notifications))
 	mux.Handle("GET /api/token", auth(handlers.Token))
@@ -192,12 +217,16 @@ func main() {
 	mux.Handle("PUT /api/user/report-layout", auth(handlers.UserReportLayout))
 	mux.Handle("DELETE /api/user/report-layout", auth(handlers.UserReportLayout))
 	mux.Handle("POST /api/profile/change-password", auth(handlers.ChangePassword))
-	mux.Handle("POST /api/ip-tracking", auth(handlers.IPTracking))
-	mux.Handle("GET /api/ip-tracking/client-details", auth(handlers.IPTrackingClientDetails))
+	mux.Handle("POST /api/ip-tracking", mod(handlers.PageIPTracking, handlers.IPTracking))
+	mux.Handle("GET /api/ip-tracking/client-details", mod(handlers.PageIPTracking, handlers.IPTrackingClientDetails))
+	/* NOT gated: the shared asset / language / country lookup behind several
+	   modules' filter rails. Tying it to any one of them would empty the
+	   dropdowns of the others, and it is scoped to the caller's own client
+	   inside the handler. */
 	mux.Handle("POST /api/master-data", auth(handlers.MasterData))
 	mux.Handle("GET /api/master-data", auth(handlers.MasterData))
-	mux.Handle("POST /api/data-sharing/upload", auth(handlers.DataSharingUpload))
-	mux.Handle("GET /api/data-sharing/history", auth(handlers.DataSharingHistory))
+	mux.Handle("POST /api/data-sharing/upload", mod(handlers.PageDataSharing, handlers.DataSharingUpload))
+	mux.Handle("GET /api/data-sharing/history", mod(handlers.PageDataSharing, handlers.DataSharingHistory))
 
 	// Client Admin: company-scoped user administration for a client login that
 	// holds the grant. Authorization is inside the handler (claims.ClientAdmin,
@@ -339,6 +368,14 @@ func main() {
 	   /admin/registrations, and requiring Report Configuration would put half of
 	   that drawer out of reach of the people who administer accounts. The
 	   catalogue it grants from is dcp_module — see handlers/dashboardaccess.go. */
+	/* asset-REGISTER, not asset-access. /api/admin/asset-access is already taken
+	   by admin.AssetAccess, which answers a different question — WHICH assets a
+	   login may see in reports (dcp_assigned_assets). This one answers whether
+	   they get the register screen and may raise protection requests at all.
+	   Registering both on one path does not fail to compile; ServeMux panics at
+	   boot, so the whole service would have stopped starting. */
+	mux.Handle("GET /api/admin/asset-register", cfg("asset-register", handlers.AssetAccessAdmin))
+	mux.Handle("POST /api/admin/asset-register", cfg("asset-register", handlers.AssetAccessAdmin))
 	mux.Handle("GET /api/admin/dashboard-access", adminAuth(handlers.DashboardAccess))
 	mux.Handle("POST /api/admin/dashboard-access", adminAuth(handlers.DashboardAccess))
 
@@ -387,6 +424,13 @@ func main() {
 	   StartDate/EndDate/ReleaseDate the calendar places rows by; see
 	   handlers/reportsassets.go. */
 	mux.Handle("GET /api/reports/assets", auth(handlers.ReportsAssets))
+
+	/* The asset register. Signed-in routes, not Reports routes — the grant is
+	   its own (asset_user_access) and the handlers check it, so gating these on
+	   the Reports module here would be a second, quieter rule that disagrees. */
+	mux.Handle("GET /api/assets/access", auth(handlers.AssetAccessSelf))
+	mux.Handle("GET /api/assets/register", auth(handlers.AssetRegister))
+	mux.Handle("POST /api/assets/protection-request", auth(handlers.AssetProtectionRequest))
 	// The chart shapes this login has kept for itself. A reading preference, so
 	// it is scoped to the caller's own login and needs no admin grant beyond the
 	// Reports module the handlers already check.
@@ -510,12 +554,56 @@ func main() {
 	}
 	staticFS := http.FileServer(http.Dir(distDir))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		/*
+			── CACHING, AND THE BUG IT CAUSED ──────────────────────────────
+
+			index.html names the hashed bundles: /assets/index-BHNAzVzL.js. Served
+			with no Cache-Control it carried only Last-Modified, which leaves the
+			browser to invent its own freshness — typically a fraction of the
+			file's age — and reuse it WITHOUT asking. So after a deploy a returning
+			reader loaded yesterday's index.html, which named yesterday's chunks,
+			and ran an old bundle against a new server. Pressing reload
+			revalidated and fixed it, which is exactly how it was reported: wrong
+			on the first visit, right after a refresh.
+
+			That is not a cosmetic problem. The two halves disagreeing is how the
+			ghost "Realtime / No data." card appeared on the report — the server
+			had gained a panel kind the cached bundle had no case for. Any
+			front-end/back-end contract can break the same way, and each one looks
+			like a different bug.
+
+			So: the ENTRY DOCUMENT must always be revalidated, and the HASHED
+			ASSETS can be cached for ever. Those two rules are the same rule —
+			content-addressed files never change, so the only thing that must stay
+			fresh is the document naming them.
+
+			no-cache does not mean "do not store": it means store it and ask before
+			reusing. The conditional request that follows is answered 304 from
+			Last-Modified, so this costs one round trip and no bytes.
+		*/
+		const (
+			revalidate = "no-cache, must-revalidate"
+			immutable  = "public, max-age=31536000, immutable"
+		)
+
 		// Check if the file exists in dist/
 		fPath := distDir + r.URL.Path
 		if _, err := os.Stat(fPath); os.IsNotExist(err) {
 			// SPA fallback: serve index.html for all non-API paths
+			w.Header().Set("Cache-Control", revalidate)
 			http.ServeFile(w, r, distDir+"/index.html")
 			return
+		}
+		/*
+			Hashed build output only. /assets is what Vite fills with
+			content-hashed filenames; everything else under dist — index.html
+			itself, the logos, the favicon — keeps its real name across builds, so
+			a year-long cache would pin a stale copy with no way to bust it.
+		*/
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			w.Header().Set("Cache-Control", immutable)
+		} else {
+			w.Header().Set("Cache-Control", revalidate)
 		}
 		staticFS.ServeHTTP(w, r)
 	})

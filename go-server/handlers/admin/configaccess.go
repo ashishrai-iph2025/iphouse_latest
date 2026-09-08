@@ -23,6 +23,7 @@ var configModuleKeys = []string{
 	"registration-requests",
 	"tracking",
 	"asset-access",
+	"asset-register",
 	"war-room-assets",
 	"email-templates",
 	"email-event-types",

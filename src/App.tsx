@@ -70,6 +70,7 @@ const DashboardModulesPage = lazy(() => import('@/app/admin/dashboard-modules/pa
 const ModulePermsPage      = lazy(() => import('@/app/admin/module-permissions/page'))
 const SettingsPage         = lazy(() => import('@/app/admin/settings/page'))
 const AssetAccessPage      = lazy(() => import('@/app/admin/asset-access/page'))
+const AssetRegisterAccessPage = lazy(() => import('@/app/admin/asset-register/page'))
 const WarRoomAssetsPage    = lazy(() => import('@/app/admin/war-room-assets/page'))
 const PlatformBriefPage    = lazy(() => import('@/app/admin/platform-brief/page'))
 const DatabaseBackupPage   = lazy(() => import('@/app/admin/database-backup/page'))
@@ -116,9 +117,15 @@ function RequireAdmin({ children }: { children: ReactNode }) {
  */
 function AccessDenied({ moduleName, reason = 'grant' }: {
   moduleName: string
-  reason?: 'grant' | 'api'
+  reason?: 'grant' | 'api' | 'error'
 }) {
-  const api = reason === 'api'
+  /* 'error' is the third answer, and it is deliberately NOT drawn as a refusal.
+     The check itself failed — a dropped request, a reload mid-flight — so the
+     reader's permissions are not in question and the card must not imply they
+     are. It borrows the API card's shape because the two share a remedy: wait a
+     moment and try again. */
+  const err = reason === 'error'
+  const api = reason === 'api' || err
   const tint = api ? '#FC934C' : '#b3091a'
   return (
     <div style={{
@@ -145,9 +152,21 @@ function AccessDenied({ moduleName, reason = 'grant' }: {
         </div>
 
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#14254A' }}>
-          {api ? 'Reporting service unavailable' : 'Access Restricted'}
+          {err ? 'Could not check your access' : api ? 'Reporting service unavailable' : 'Access Restricted'}
         </h2>
-        {api ? (
+        {err ? (
+          <>
+            <p style={{ margin: '10px 0 6px', fontSize: 14, color: '#5b6678', lineHeight: 1.6 }}>
+              The portal could not confirm whether you have access to
+              {moduleName ? <> <strong style={{ color: '#14254A' }}>{moduleName}</strong></> : ' this page'}, so
+              it has not been opened.
+            </p>
+            <p style={{ margin: '0 0 28px', fontSize: 13, color: '#8a96a8' }}>
+              This is a connection problem, not a permissions one &mdash; nothing about your account
+              has changed. Try again in a moment.
+            </p>
+          </>
+        ) : api ? (
           <>
             <p style={{ margin: '10px 0 6px', fontSize: 14, color: '#5b6678', lineHeight: 1.6 }}>
               The portal could not reach the reporting service, so
@@ -223,29 +242,66 @@ function AccessDenied({ moduleName, reason = 'grant' }: {
   )
 }
 
-// ── Module permission guard (client routes only) ──────────────────────────────
+/* ── Module permission guard (client routes only) ─────────────────────────────
+
+   THIS IS NOT THE ACCESS CONTROL. Every client endpoint behind these pages is
+   gated on the same module grant on the SERVER — see handlers/modulegate.go and
+   the `mod` wrapper in main.go. This decides what to RENDER, so an ungranted
+   page says so plainly instead of drawing a shell that then fills with 403s.
+
+   It used to be the only check, and it leaked in three ways, all of which are
+   the same mistake — defaulting to "allowed" when the answer was not known yet:
+
+     · `state` was not reset when the path changed. The verdict from the PREVIOUS
+       route stayed on screen while the new route's check was in flight, so a
+       navigation from a granted page to an ungranted one rendered the ungranted
+       page — and its data — until the fetch came back. First load was fine;
+       every click was not.
+     · a slow answer for path A could land after the user had moved to path B and
+       be applied to B, because nothing tied a response to the path that asked.
+     · any network error resolved to allowed, on the reasoning that a blip should
+       not lock people out. With the server enforcing, an unknown answer can be
+       reported as unknown instead of guessed in the permissive direction.
+*/
 function ClientModuleGuard({ children }: { children: ReactNode }) {
   const pathname = usePathname()
   const { data: session, status } = useSession()
   const user = session?.user as any
   const [state, setState] = useState<{
-    checked: boolean; allowed: boolean; label: string; reason: 'grant' | 'api'
-  }>({ checked: false, allowed: true, label: '', reason: 'grant' })
+    checked: boolean; allowed: boolean; label: string; reason: 'grant' | 'api' | 'error'
+  }>({ checked: false, allowed: false, label: '', reason: 'grant' })
 
   useEffect(() => {
     if (status === 'loading') return
 
-    // Profile and switch-account are utility pages — always accessible
+    /* Unchecked until this path's own answer arrives. The pathname is in the
+       dependency list, so this runs on every navigation and each one starts
+       from "not known yet" — which renders the loader, not the page. */
+    setState({ checked: false, allowed: false, label: '', reason: 'grant' })
+
+    /* Ties the answer to the path that asked for it. A response that arrives
+       after the reader has moved on is dropped rather than applied to whatever
+       is on screen now. */
+    let live = true
+    const settle = (s: { allowed: boolean; label: string; reason: 'grant' | 'api' | 'error' }) => {
+      if (live) setState({ checked: true, ...s })
+    }
+
+    // Utility pages, reachable on any grant: the dashboard landing, your own
+    // profile, and the account switcher.
     if (pathname === '/dashboard' || pathname === '/profile' || pathname === '/switch-account') {
-      setState({ checked: true, allowed: true, label: '', reason: 'grant' })
+      settle({ allowed: true, label: '', reason: 'grant' })
       return
     }
 
-    // Find which nav item owns this path
+    /* No nav item owns this path — notification detail, Access Details and the
+       like. Allowed HERE because these are not module pages and have no grant to
+       check; the ones that need a permission check it in their own handler (see
+       Client Admin in lib/navItems.tsx). A module page always has a nav item, so
+       nothing gated falls through this. */
     const item = NAV_ITEMS.find(i => isNavItemActive(i, pathname))
     if (!item) {
-      // No nav item matches — allow through (unknown path)
-      setState({ checked: true, allowed: true, label: '', reason: 'grant' })
+      settle({ allowed: true, label: '', reason: 'grant' })
       return
     }
 
@@ -256,7 +312,7 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
       .then(r => r.json())
       .then(d => {
         if (!d.success) {
-          setState({ checked: true, allowed: false, label: item.label, reason: 'grant' })
+          settle({ allowed: false, label: item.label, reason: 'grant' })
           return
         }
         const liveApiAccess = typeof d.apiAccess === 'boolean' ? d.apiAccess : !!user?.apiAccess
@@ -264,19 +320,24 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
           // No API token → API-dependent non-dashboard routes are restricted.
           // API-independent modules (e.g. Data Sharing) fall through to the
           // grant check below so they work without API credentials.
-          setState({ checked: true, allowed: false, label: item.label, reason: 'api' })
+          settle({ allowed: false, label: item.label, reason: 'api' })
           return
         }
         // Match on the stable pageName (not the module name), so renaming a
         // module in /admin/modules never revokes access.
         const allowedPages = (d.allowedModules as { pageName: string }[]).map(m => m.pageName)
-        const allowed = allowedPages.includes(item.pageName)
-        setState({ checked: true, allowed, label: item.label, reason: 'grant' })
+        settle({ allowed: allowedPages.includes(item.pageName), label: item.label, reason: 'grant' })
       })
       .catch(() => {
-        // Network error — fail open to avoid locking users out on transient errors
-        setState({ checked: true, allowed: true, label: '', reason: 'grant' })
+        /* Could not find out — which is neither "you may" nor "you may not", and
+           is reported as itself. Guessing "allowed" here is what let an
+           ungranted page render on a dropped request; guessing "denied" would
+           tell a reader their permissions had been taken away, which is a
+           worse thing to say wrongly. The card offers a retry. */
+        settle({ allowed: false, label: item.label, reason: 'error' })
       })
+
+    return () => { live = false }
   }, [pathname, status, user?.apiAccess])
 
   if (!state.checked || status === 'loading') return <PageLoader />
@@ -600,6 +661,7 @@ export default function App() {
           <Route path="/admin/module-permissions"         element={<ModulePermsPage />} />
           <Route path="/admin/settings"                   element={<SettingsPage />} />
           <Route path="/admin/asset-access"               element={<AssetAccessPage />} />
+          <Route path="/admin/asset-register"             element={<AssetRegisterAccessPage />} />
           <Route path="/admin/war-room-assets"            element={<WarRoomAssetsPage />} />
           <Route path="/admin/platform-brief"             element={<PlatformBriefPage />} />
           <Route path="/admin/database-backup"            element={<DatabaseBackupPage />} />

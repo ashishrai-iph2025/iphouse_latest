@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import SearchableSelect from '@/components/ui/SearchableSelect'
@@ -62,6 +62,12 @@ const DATE_PRESETS = [
 ] as const
 
 const DEFAULT_PRESET_DAYS = 30
+
+/* The live card's window choices, 24 hours first so that is the default — see
+   the note where it is passed. The same seven the reports page offers, because
+   the same card on two screens offering different windows is two behaviours to
+   learn for no reason. Not the REPORT's range, which stays at 30 days. */
+const REALTIME_WINDOWS = [24, 48, 72, 96, 120, 144, 168]
 
 // n-th day before `iso` (inclusive window: shiftIso('2026-08-10', 6) starts a
 // 7-day window ending on the 10th).
@@ -577,7 +583,21 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
 
           The reports screens keep the unscoped card, where a client-wide total
           is what that page is about. */}
-      {(!admin || clientId) && assetNames.length > 0 && (
+      {/*
+          ON SCREEN FROM THE FIRST PAINT, waiting or not.
+
+          The gate here used to include `assetNames.length > 0`, so the live
+          counts were absent until an asset had been picked — the reader could
+          not tell the card existed, and the page jumped when it appeared. It is
+          now always drawn and says what it is waiting for; see RealtimeCard's
+          `waitingFor`, which also stops it calling an endpoint that answers 422
+          without an asset.
+
+          The client gate stays for staff: an admin who has not chosen a company
+          has no MarkScan token to count with, which is a different and equally
+          real absence.
+      */}
+      {(!admin || clientId) && (
         <div className="mb-4">
           {/* Counted by MARKSCAN, not the warehouse — the same system this
               page's report is pulled from, over the same date window. A card
@@ -589,7 +609,24 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
           <RealtimeCard view="war-room" source="markscan"
             assetNames={assetNames}
             userId={admin ? clientId : undefined}
-            startDate={startDate} endDate={endDate} />
+            startDate={startDate} endDate={endDate}
+            /*
+              THE CARD'S OWN WINDOW, defaulting to the first option: 24 hours.
+
+              Without this the card followed the report's range, which starts at
+              30 days — so the "live" counts opened as a month's total that
+              barely moved between refreshes. A live figure has to be recent
+              enough to change while somebody is watching it.
+
+              What it costs, stated because it was once deliberately avoided:
+              the card no longer agrees with the platform strip below it, which
+              still covers the report's range. The card captions its own window,
+              and a reader who wants them to match can widen it to 7 days.
+            */
+            windowOptions={REALTIME_WINDOWS}
+            waitingFor={assetNames.length === 0
+              ? 'Pick an asset to start counting. The live figures cover the window selected here.'
+              : undefined} />
         </div>
       )}
 

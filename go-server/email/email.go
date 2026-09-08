@@ -407,6 +407,67 @@ func SendInfringementUserNotification(to, userName, platform, assetName string, 
 	)
 }
 
+/*
+The two asset-protection emails.
+
+A request to start or stop protecting a title changes nothing by itself — this
+platform reads mediascan and does not write to it. The email IS the mechanism:
+it is how the request reaches the people who can action it, which is why both
+messages say plainly that it has been passed on rather than done.
+
+Two recipients, two different messages. The CLIENT gets the one that has to be
+acted on and carries who asked and why. The REQUESTER gets a receipt, so the
+request is not something they have to remember having made.
+
+Event keys asset_protection_client and asset_protection_user, so both bodies can
+be rewritten from Configuration -> Email Templates without a deploy, like every
+other message here.
+*/
+
+func assetActionWord(action string) string {
+	if action == "disable" {
+		return "Stop protection"
+	}
+	return "Start protection"
+}
+
+// SendAssetProtectionClient tells the client account that one of their users has
+// asked for a title's protection to be changed. Event key: asset_protection_client.
+func SendAssetProtectionClient(to, clientName, assetName, action, note, requestedBy string) error {
+	act := assetActionWord(action)
+	if note == "" {
+		note = "—"
+	}
+	return sendTemplate("asset_protection_client", to, map[string]string{
+		"name": clientName, "client_name": clientName, "user_name": clientName,
+		"asset_name": assetName, "action": act, "request_action": action,
+		"note": note, "requested_by": requestedBy,
+		"date": time.Now().UTC().Format("02 Jan 2006, 15:04"),
+	},
+		fmt.Sprintf("Asset protection request: %s", assetName),
+		fmt.Sprintf(`<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;"><div style="background:#14254A;padding:22px 28px;"><h2 style="color:#fff;margin:0;font-size:18px;">Asset Protection Request</h2></div><div style="padding:28px;color:#14254A;"><p>Dear <strong>%s</strong>,</p><p><strong>%s</strong> has requested a change to the protection status of a title on your account.</p><table style="width:100%%;font-size:14px;border-collapse:collapse;margin:12px 0;"><tr><td style="padding:6px 0;color:#5f768b;">Asset</td><td style="padding:6px 0;font-weight:600;">%s</td></tr><tr><td style="padding:6px 0;color:#5f768b;">Requested</td><td style="padding:6px 0;font-weight:600;">%s</td></tr><tr><td style="padding:6px 0;color:#5f768b;">Note</td><td style="padding:6px 0;">%s</td></tr></table><p style="font-size:13px;color:#5f768b;">This request has been recorded and passed on. Protection is not changed automatically — the IP House team will confirm once it has been applied.</p></div></div>`,
+			clientName, requestedBy, assetName, act, note),
+	)
+}
+
+// SendAssetProtectionUser is the requester's receipt. Event key: asset_protection_user.
+func SendAssetProtectionUser(to, userName, assetName, action, note string) error {
+	act := assetActionWord(action)
+	if note == "" {
+		note = "—"
+	}
+	return sendTemplate("asset_protection_user", to, map[string]string{
+		"user_name": userName, "name": userName,
+		"asset_name": assetName, "action": act, "request_action": action,
+		"note": note,
+		"date": time.Now().UTC().Format("02 Jan 2006, 15:04"),
+	},
+		fmt.Sprintf("Your asset protection request: %s", assetName),
+		fmt.Sprintf(`<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;"><div style="background:#14254A;padding:22px 28px;"><h2 style="color:#fff;margin:0;font-size:18px;">Request Recorded</h2></div><div style="padding:28px;color:#14254A;"><p>Hi <strong>%s</strong>,</p><p>Your request has been recorded and sent to your account contact.</p><table style="width:100%%;font-size:14px;border-collapse:collapse;margin:12px 0;"><tr><td style="padding:6px 0;color:#5f768b;">Asset</td><td style="padding:6px 0;font-weight:600;">%s</td></tr><tr><td style="padding:6px 0;color:#5f768b;">Requested</td><td style="padding:6px 0;font-weight:600;">%s</td></tr><tr><td style="padding:6px 0;color:#5f768b;">Note</td><td style="padding:6px 0;">%s</td></tr></table><p style="font-size:13px;color:#5f768b;">Protection is not changed automatically. You will be told once the change has been applied.</p></div></div>`,
+			userName, assetName, act, note),
+	)
+}
+
 // SendRegistrationReceivedApplicant sends a confirmation to the person who submitted
 // the registration form. Event key: registration_received_applicant.
 func SendRegistrationReceivedApplicant(firstName, lastName, emailAddr, designation string) error {

@@ -220,8 +220,21 @@ func ModulePermissions(w http.ResponseWriter, r *http.Request) {
 			fail(w, 422, "moduleName required")
 			return
 		}
+		/* AND the page name, which was optional and is the thing that actually
+		   does the work. pageName is the join key for all of it — the nav
+		   (lib/navItems.tsx), the module-access context in the browser, and
+		   every server-side gate — so a row saved without one joins to nothing:
+		   it appears in Modules Access, it can be granted, and it governs
+		   NOTHING. The Calendar module was saved that way and sat there looking
+		   like a permission for as long as it took somebody to notice the blank
+		   in the column. A module that cannot be wrong is better than one that
+		   is silently inert. */
+		if strings.TrimSpace(body.PageName) == "" {
+			fail(w, 422, "pageName required — it is the identifier the nav and every access check join on, so a module without one grants nothing")
+			return
+		}
 		db.Exec("INSERT INTO module_permission (ModuleName, pageName, status, created, updated) VALUES (?, ?, 0, UTC_TIMESTAMP(), UTC_TIMESTAMP())",
-			body.ModuleName, body.PageName)
+			body.ModuleName, strings.TrimSpace(body.PageName))
 		ok(w, map[string]any{"success": true})
 	case http.MethodPut:
 		var body struct {
@@ -242,8 +255,14 @@ func ModulePermissions(w http.ResponseWriter, r *http.Request) {
 				fail(w, 422, "moduleName required")
 				return
 			}
+			// Same rule on the way through as on the way in — an edit that
+			// clears the page name breaks every grant already made against it.
+			if strings.TrimSpace(body.PageName) == "" {
+				fail(w, 422, "pageName required — clearing it would break every grant already made against this module")
+				return
+			}
 			db.Exec("UPDATE module_permission SET ModuleName = ?, pageName = ?, updated = UTC_TIMESTAMP() WHERE Id = ?",
-				body.ModuleName, body.PageName, body.ID)
+				body.ModuleName, strings.TrimSpace(body.PageName), body.ID)
 		}
 		ok(w, map[string]any{"success": true})
 	case http.MethodDelete:

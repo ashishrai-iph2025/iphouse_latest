@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -440,6 +441,17 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 	suspensionRows := []map[string]any{}
 	noticeRows := []map[string]any{}
 	warnings := []string{}
+	/* CAVEATS from the platforms, carried up.
+
+	   A caveat is a sentence about how a figure was arrived at — "assets are held
+	   to the Sports genre", "this panel was counted over the first N rows" — and
+	   it belongs to the number, not to the page it was first drawn on. The
+	   summary adds those numbers together, so dropping the sentence here would
+	   present a merged figure as unqualified when one of its parts is not. Kept
+	   apart from `warnings`, which are FAILURES, for the reason runSpecViaAPI
+	   keeps its own two apart: a banner that fires for both teaches a reader to
+	   ignore the one that matters. */
+	notices := []string{}
 	skipped := []string{}
 	// Platforms that answered nothing because no table of theirs carries a column
 	// an active slicer needs. Reported, not silently dropped: "Instagram" is a
@@ -470,6 +482,14 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 		covered = append(covered, pt.p.Label)
 		if wv := strFromAny(d["queryWarning"]); wv != "" {
 			warnings = append(warnings, pt.p.Label+": "+wv)
+		}
+		for _, n := range asStrings(d["notices"]) {
+			// Named, because the same sentence can be true of one platform and
+			// not of its neighbour — an unattributed caveat on a merged report
+			// reads as a caveat about all of it.
+			if msg := pt.p.Label + ": " + n; !containsString(notices, msg) {
+				notices = append(notices, msg)
+			}
 		}
 		skipped = append(skipped, asStrings(d["skippedTables"])...)
 
@@ -728,6 +748,9 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 	if len(warnings) > 0 {
 		out["queryWarning"] = strings.Join(warnings, " · ")
 	}
+	if len(notices) > 0 {
+		out["notices"] = notices
+	}
 	if len(covered) == 0 {
 		out["error"] = "No platform could answer this filter set"
 	}
@@ -788,6 +811,41 @@ func foldDim(breakdowns map[string]map[string]map[string]int64, values map[strin
 func summaryDistinctAssets(platforms []platformDef, q map[string]string) (int64, bool) {
 	ids := map[string]struct{}{}
 	any := false
+
+	/* ── The genre scope, read once for the whole union ──────────────────────
+
+	   One spec in this loop can be a sports report on an all-genre table —
+	   Mobile Apps — and its ids are the client's whole catalogue, films
+	   included. Every OTHER sports table was narrowed by the ETL that filled it,
+	   so this is the one place the union picks up titles the report is not
+	   about, and it is why the sports Summary reported a title count larger than
+	   the sections under it.
+
+	   Read lazily and once: an install with no such spec never asks, and one
+	   with three asks a single time rather than per table.
+
+	   ok=false means the scope could not be established, and then NOTHING is
+	   dropped. The two failures are not symmetrical — see the header of
+	   reportassetgenre.go — and a title count that is a little too high is the
+	   figure this reported yesterday, while one narrowed on a lookup that did
+	   not work is a confident wrong answer. */
+	var (
+		genreOnce  sync.Once
+		genreIDs   map[string]bool
+		genreOK    bool
+		genreScope = func() (map[string]bool, bool) {
+			genreOnce.Do(func() {
+				got, err := sportsAssetIDs(context.Background(), strings.TrimSpace(q["clientId"]))
+				if err != nil {
+					log.Printf("[summary] title count left unnarrowed: %v", err)
+					return
+				}
+				genreIDs, genreOK = got, true
+			})
+			return genreIDs, genreOK
+		}
+	)
+
 	for _, p := range platforms {
 		specs, _ := specsForPlatform(p)
 		for _, s := range specs {
@@ -803,8 +861,37 @@ func summaryDistinctAssets(platforms []platformDef, q map[string]string) (int64,
 				continue
 			}
 			any = true
+
+			found := make([]string, 0, len(rows))
 			for _, r := range rows {
-				ids[strFromAny(r["v"])] = struct{}{}
+				found = append(found, strFromAny(r["v"]))
+			}
+
+			/* Narrowed per SPEC, not over the union: only the all-genre table's
+			   ids are held to the genre. Applying it to everything would be the
+			   same answer today — a Sports* table holds sports titles — and would
+			   silently delete a title the day one of them carried something this
+			   master lookup did not return.
+
+			   keepSportsAssets rather than a set lookup written here, so this
+			   narrows by exactly the rule the Asset slicer and the Assets panel
+			   narrow by: the same keying, and the same refusal to drop a table's
+			   whole list, which it reads as the two sides disagreeing about how
+			   an asset is identified rather than as a window with no sport in
+			   it. */
+			if s.SportsAssetsOnly {
+				if sports, ok := genreScope(); ok {
+					kept, dropped := keepSportsAssets(sports, found)
+					if dropped > 0 {
+						logAssetNarrowing("Titles in scope on "+s.Label,
+							strings.TrimSpace(q["clientId"]), dropped, len(kept))
+					}
+					found = kept
+				}
+			}
+
+			for _, id := range found {
+				ids[id] = struct{}{}
 				if len(ids) > summaryAssetCap {
 					log.Printf("[summary] distinct asset union passed %d — falling back to the summed count", summaryAssetCap)
 					return 0, false

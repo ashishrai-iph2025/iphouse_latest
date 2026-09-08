@@ -25,16 +25,6 @@ func TestDatasetKeyOKRejectsAnythingThatCouldSteerThePath(t *testing.T) {
 	}
 }
 
-func TestDefaultOverviewDatasetIsTheOneTheEndpointServes(t *testing.T) {
-	// The registry entry whose measures the landing page reads.
-	if defaultOverviewDataset != "urls" {
-		t.Fatalf("default dataset = %q, want %q", defaultOverviewDataset, "urls")
-	}
-	if !datasetKeyOK.MatchString(defaultOverviewDataset) {
-		t.Fatal("the default must itself pass the key check")
-	}
-}
-
 /*
 The overview is NOT under /v1/sports, and this is the test that says so.
 
@@ -51,7 +41,9 @@ func TestOverviewPathIsNotUnderSports(t *testing.T) {
 	if overviewPath != "/v1/overview/" {
 		t.Fatalf("overview path = %q, want %q", overviewPath, "/v1/overview/")
 	}
-	if got := overviewPath + defaultOverviewDataset; got != "/v1/overview/urls" {
+	/* Built with a dataset rather than with THE dataset: which table the page
+	   reads is pinned next door, and what this test is about is the prefix. */
+	if got := overviewPath + "urls"; got != "/v1/overview/urls" {
 		t.Fatalf("built path = %q, want %q", got, "/v1/overview/urls")
 	}
 }
@@ -59,64 +51,60 @@ func TestOverviewPathIsNotUnderSports(t *testing.T) {
 /*
 ── Which table a client's week is read from ──────────────────────────────────
 
-	The default dataset reads the sports URL table. That is the right source for
-	a sports client and EMPTY for everyone else, so a VOD client opened /welcome
-	and was told "Nothing new was found this week" for a week in which plenty had
-	been found: the page was reading the one table their reports do not use.
+	ONE dataset, for everybody.
 
-	So an unqualified overview picks its dataset from what the login can actually
-	open — sports for a sports client, the unified dashboard for the rest.
+	It used to be two: a login holding any sports report read the sports URL
+	table, everyone else read the unified dashboard. The intent was right and the
+	mechanism was not — the report allow-list is PER LOGIN and a client's data is
+	not, so two people at one company got different answers about the same week.
+	On staging, the Netflix login holding only the sports report keys was told
+	"Nothing new was found this week" while every other Netflix login saw the
+	real figures.
 
-	Both keys have to survive the path check that guards this endpoint, because
-	the dataset is concatenated into a URL. A fallback that the guard rejects
+	So this pins the single source, and pins that the choice is no longer made
+	from the session: a landing figure must not depend on who is looking at it.
+
+	The key still has to survive the path check that guards this endpoint,
+	because the dataset is concatenated into a URL. A default the guard rejects
 	would turn a working page into a 422, which is a worse failure than the empty
 	one it replaced.
 */
-func TestFallbackOverviewDatasetIsTheUnifiedDashboard(t *testing.T) {
-	if fallbackOverviewDataset != "unified" {
-		t.Fatalf("fallback dataset = %q, want %q — dashboards.Unified_BI_Dashboard "+
+func TestOverviewReadsTheUnifiedDashboardForEveryone(t *testing.T) {
+	if defaultOverviewDataset != "unified" {
+		t.Fatalf("overview dataset = %q, want %q — dashboards.Unified_BI_Dashboard "+
 			"is the table that carries every platform in one row set",
-			fallbackOverviewDataset, "unified")
+			defaultOverviewDataset, "unified")
 	}
-	if !datasetKeyOK.MatchString(fallbackOverviewDataset) {
-		t.Fatal("the fallback must itself pass the key check, or choosing it " +
-			"would 422 the request")
-	}
-	if fallbackOverviewDataset == defaultOverviewDataset {
-		t.Fatal("the fallback is the same key as the default, so a client with no " +
-			"sports report is still reading the sports table")
+	if !datasetKeyOK.MatchString(defaultOverviewDataset) {
+		t.Fatal("the default must itself pass the key check, or every overview " +
+			"would 422")
 	}
 }
 
 /*
-hasSportsReport must ask the SAME two questions of a platform that
-ReportsSections asks — enabled, and inside the login's allow-list — or the page
-reads one table while the navigation offers reports from another.
+The dataset must not be chosen from the SESSION.
 
-Read from source: the decision needs a platform registry and a grant table, so
-there is no way to exercise it here without a database. What can be checked is
-that it has not drifted from the test it is meant to mirror.
+Read from source because the alternative needs a platform registry and a grant
+table, and there is no way to exercise that here without a database. What can be
+checked is that the branch has not come back: any of these names inside the
+handler means the landing figure depends on who is signed in again.
 */
-func TestHasSportsReportMirrorsTheSectionsFilter(t *testing.T) {
+func TestOverviewDatasetIsNotChosenPerLogin(t *testing.T) {
 	src := readOverviewSource(t)
-	start := strings.Index(src, "func hasSportsReport(")
+	start := strings.Index(src, "func ReportsOverview(")
 	if start < 0 {
-		t.Fatal("could not find hasSportsReport")
+		t.Fatal("could not find ReportsOverview")
 	}
 	body := src[start:]
-	if end := strings.Index(body[20:], "\nfunc "); end >= 0 {
-		body = body[:20+end]
-	}
-	for _, want := range []string{
-		"reportsAllowedForClaims", // the same allow-list as the nav
-		"p.Enabled",               // a disabled platform is nobody's report
-		"summaryKey",              // the summary is not a platform of its own
-		"isSportsPlatform",        // and the actual question
+	for _, banned := range []string{
+		"hasSportsReport",
+		"reportsAllowedForClaims",
+		"isSportsPlatform",
 	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("hasSportsReport no longer references %s — it must decide the "+
-				"same way ReportsSections does, or /welcome reads a table the "+
-				"reader has no report for", want)
+		if strings.Contains(body, banned) {
+			t.Errorf("ReportsOverview references %s — the landing figures would "+
+				"again depend on the login's report grants rather than on the "+
+				"client's data", banned)
 		}
 	}
 }

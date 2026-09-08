@@ -163,6 +163,122 @@ type realtimeResponse struct {
 // tiles under it start out saying the same thing.
 const realtimeFallbackDays = 30
 
+/*
+── The rolling window the sports card asks for ───────────────────────────────
+
+	The card used to wait for a narrowing filter before it appeared at all,
+	because unfiltered it counted the client's WHOLE configured season — the
+	most expensive query in the product, run to answer a question nobody had
+	asked yet. It is on screen from the moment a sports report loads now, and
+	what makes that affordable is this: it asks for the last DAY, not the last
+	season, and may be widened to a week and no further.
+
+	IT IS N REPORT DAYS, NOT N×3600 SECONDS, and that is a deliberate change.
+
+	It was a pair of INSTANTS: "the last 24 hours" meant the last 24 hours, so at
+	four in the afternoon it ran from yesterday teatime. Defensible on its own
+	terms and wrong beside this particular report, because the two are read
+	together and the report's ladder is calendar days — its 7D preset is
+	3–9 September, seven IST days ending today. A reader who sets both to seven
+	days is asking one question, and an instant window answers a different one:
+	it reaches into the eighth day back and stops short of today's last hours.
+	Measured for DAZN on 9 September 2026 that was twelve Twitter posts — small,
+	unexplainable from the screen, and enough to make a reader distrust both
+	numbers.
+
+	So `lastHours` is read as a number of REPORT DAYS: 168 is the last seven IST
+	calendar days including today, which is exactly the range the 7D preset puts
+	in the slicer. The card stays live — it still re-counts on its own cadence
+	and today's day is still filling up — but its edges land on the report's
+	midnights, so the only thing that can separate the two figures is how fresh
+	the warehouse is.
+
+	What that costs: "24h" now means TODAY rather than the trailing day, so a
+	reading taken just after IST midnight covers minutes rather than a day. The
+	report's 1D preset has always behaved that way, and matching it is the point.
+
+	The ceiling is a WEEK, and it is enforced here rather than trusted from the
+	card. A week of one client's captures was measured at 1.4s against
+	production where the season was 14.5s, and that ratio is the whole reason
+	the card can be on screen unfiltered; a query string asking for a year would
+	quietly put the old cost back.
+*/
+const (
+	realtimeLiveWindowMinHours = 1
+	realtimeLiveWindowMaxHours = 24 * 7
+)
+
+// The layout the counts service reads as a literal instant — see apiWindow.
+// The same spelling realtimeScope carries for the card's caption, so the two
+// are one value rather than two that can drift.
+const realtimeStampLayout = "2006-01-02 15:04:05"
+
+/*
+rollingHoursFromRequest reads the card's window off the query string.
+
+Zero where none was asked for, which leaves every existing caller — the War
+Room, the open-web removal swap, anything calling the endpoint by hand — on the
+window rules they always had.
+
+Clamped rather than refused. A value out of range is a stale tab or a hand-typed
+URL, and answering the nearest window it could have meant is better than an error
+on a card whose job is to keep showing numbers.
+*/
+func rollingHoursFromRequest(r *http.Request) int {
+	raw := strings.TrimSpace(r.URL.Query().Get("lastHours"))
+	if raw == "" {
+		return 0
+	}
+	n, err := parseIntSafe(raw)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	if n < realtimeLiveWindowMinHours {
+		return realtimeLiveWindowMinHours
+	}
+	if n > realtimeLiveWindowMaxHours {
+		return realtimeLiveWindowMaxHours
+	}
+	return n
+}
+
+/*
+rollingScope is the last `hours` as REPORT DAYS, ending today.
+
+`hours` is rounded UP to whole days — 168 is seven, 25 is two — and the window is
+that many IST calendar days ending with today, inclusive at both ends. It is the
+same arithmetic the reports page's own N-day presets do, which is the entire
+point: 7d on this card and 7D in the slicer have to select the same rows or the
+two figures beside each other cannot be compared. See the block above.
+
+ROUNDED UP rather than down, because down sends 1 to zero days and a window of
+nothing. Anything under a day is one day — today — which is the shortest window
+a calendar-day report can express.
+
+IST, not UTC, because the day boundary being matched is the report's. Taking the
+date off a UTC clock would name yesterday for the five and a half hours after IST
+midnight, and the card would silently drop today's rows during exactly the hours
+someone is most likely to be watching it live.
+
+`now` is no longer truncated to the memo's hold. It does not need to be: the
+window only changes at IST midnight, so every poll all day builds the identical
+scope and shares one memo key. The card stays live through the memo's TTL, which
+is a time check on the entry and not on the key — see cachedRealtimeCount.
+*/
+func rollingScope(hours int, now time.Time) realtimeScope {
+	days := (hours + 23) / 24
+	if days < 1 {
+		days = 1
+	}
+	today := now.UTC().Add(reportTZShift)
+	from := today.AddDate(0, 0, -(days - 1))
+	return realtimeScope{
+		since: from.Format(ymdLayout) + " 00:00:00",
+		until: today.Format(ymdLayout) + " 23:59:59",
+		hours: hours,
+	}
+}
+
 // realtimeScope is the date range a count covers, and where that range came
 // from. `period` is true where it is the client's configured sports season
 // rather than anything the caller asked for — the card captions itself from it,
@@ -174,6 +290,16 @@ const realtimeFallbackDays = 30
 type realtimeScope struct {
 	since, until string
 	period       bool
+	/* The rolling window this scope IS, in hours, where it is one — see
+	   rollingScope. Zero for every other scope.
+
+	   It no longer changes how the window is SENT — a rolling window is a run of
+	   report days now, and goes on the wire as bare dates like every other scope.
+	   It is carried because the card captions itself from it, and because the
+	   caption is a claim about what was ASKED for: recovering "7 days" by
+	   subtracting two dates would work today and would quietly start rounding the
+	   moment the ceiling or the step list changes. */
+	hours int
 }
 
 /*
@@ -202,6 +328,10 @@ Empty in, empty out: `until` is legitimately absent — see scopeFromRequest —
 a blank must not become a date.
 */
 func (sc realtimeScope) apiWindow() (since, until string) {
+	/* EVERY scope, rolling included. A rolling window used to be exempt because
+	   it was a pair of instants with no report day to line up with; it is a run
+	   of report days now — see rollingScope — so it reconciles the same way the
+	   others do, and one rule covers all of them. */
 	return dateOnly(sc.since), dateOnly(sc.until)
 }
 
@@ -216,13 +346,26 @@ is stated only there: the client's own row if it has one, the default if not.
 `ok` is false where no period is usable at all, and the caller then falls back to
 the request's window like any other view.
 
-Deliberately NOT the report's date range. The card and the tiles below it were
-reading the same dates and still disagreeing, because they read different layers
-of the warehouse — the tiles the curated dashboards.* tables, the card the raw
-mediascan.* ones, which de-duplicate URLs the tiles count per day. Matching the
-dates never made those two figures comparable and only made the card re-count
-every time the slicer moved. So it answers a question the date slicer does not
-ask: how much is out there for this client's season, all of it.
+Deliberately NOT the report's date range — but READ THE HISTORY, because the
+reason recorded here for years was wrong.
+
+The card used to be clamped into the slicer's dates, was found to disagree with
+the tiles anyway, and was decoupled on the reasoning that the two read different
+layers of the warehouse and could never be comparable: the tiles the curated
+dashboards.* tables, the card the raw mediascan.* ones, "which de-duplicate URLs
+the tiles count per day". That was not a property of the layers. It was one
+expression — openWebCountExpr in the counts service — folding the calendar day
+into a DISTINCT key on a grain dashboards.SportsURLRawData does not have. The two
+layers agree row for row; only that key disagreed. It has been removed, and
+card and report now reconcile exactly over the same window.
+
+So the decoupling stands on its remaining, real justification and on nothing
+else: COST. Following the slicer means re-counting the raw tables on every move
+of it, and a season-wide count is 14.5s against production where a week is 1.4s.
+The card answers a question the slicer does not ask — how much is out there for
+this client's season, all of it — and a reader who wants the slicer's dates has
+the window control on the card, which IS calendar-day aligned to the report now
+(see rollingScope).
 */
 func sportsPeriodScope(p sportsPeriodConfig) (from, to string, ok bool) {
 	if !p.active() {
@@ -258,10 +401,21 @@ func sportsPeriodScope(p sportsPeriodConfig) (from, to string, ok bool) {
 	return p.Start, to, true
 }
 
+/*
+reportTZShift turns a UTC instant into the report's calendar.
+
++05:30, and named once because two things now depend on it agreeing with the
+counts service's own reportTZOffset: which date "today" is (istToday, below) and
+where a rolling window's day boundaries fall (rollingScope). Written out twice it
+is two constants that can drift, and the symptom of drift is a card that reads a
+day off the report for five and a half hours out of every twenty-four.
+*/
+const reportTZShift = 330 * time.Minute
+
 // istToday is the current date on the report's calendar. ISO, so it compares as
 // a string against the period bounds the way everything else here does.
 func istToday() string {
-	return time.Now().UTC().Add(330 * time.Minute).Format(ymdLayout)
+	return time.Now().UTC().Add(reportTZShift).Format(ymdLayout)
 }
 
 /*
@@ -327,6 +481,20 @@ func dimsFromRequest(r *http.Request) realtimeDims {
 func scopeFromRequest(r *http.Request, view, clientID string) realtimeScope {
 	from := strings.TrimSpace(r.URL.Query().Get("from"))
 	to := strings.TrimSpace(r.URL.Query().Get("to"))
+
+	/* A named rolling window beats everything, INCLUDING the season.
+
+	   It is the sports card's own control — the one on the card, not in the
+	   filter rail — so it is the one thing on the page a reader can point at and
+	   say what window they want. Letting the configured period override it would
+	   make that control the only slicer in the product that does nothing.
+
+	   Checked before the period rather than after, because the period branch
+	   rewrites `from`/`to` and there would be nothing left to tell the two apart
+	   by the time it had. */
+	if h := rollingHoursFromRequest(r); h > 0 {
+		return rollingScope(h, time.Now())
+	}
 
 	/* The season, whole, whatever the page asked for. A client with a period of
 	   its own gets that one; everyone else gets the default. Where neither is
@@ -445,6 +613,21 @@ func Realtime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	scrubRealtimeSchema(body.Platforms)
+
+	/* What this reading knew about, kept for the configuration screen. BEFORE
+	   the rollup, or the catalogue would lose the very platforms an admin has
+	   already folded and they could never be unfolded. */
+	rememberRealtimePlatforms(body.Platforms)
+
+	/* Then the fold, and only then the sort.
+
+	   Sorting first and folding after would leave the rollup sitting in the slot
+	   of whichever member happened to be busiest rather than in its own place by
+	   size — a row summing four platforms drawn among rows a tenth of it. */
+	body.Platforms = applyRealtimeRollup(body.Platforms,
+		realtimeRollupFor(view, r.URL.Query().Get("platformKey"), clientID))
+
 	/* Sorted busiest first, and the empties kept.
 
 	   A platform reading zero is information — it is being watched and nothing
@@ -452,7 +635,6 @@ func Realtime(w http.ResponseWriter, r *http.Request) {
 	   discoveries move between platforms. The page decides what to show; this
 	   decides the order. */
 	sortRealtime(body.Platforms)
-	scrubRealtimeSchema(body.Platforms)
 
 	out := map[string]any{
 		"ok": true, "view": view, "clientId": clientID,
@@ -466,6 +648,15 @@ func Realtime(w http.ResponseWriter, r *http.Request) {
 		   configured season — the card says so, because "in this range" over a
 		   figure the range slicer cannot move is a caption that lies. */
 		"scope": scopeName(scope),
+		/* The rolling window as it was actually COUNTED, in hours. Zero on
+		   every other scope, and the card then describes the dates instead.
+
+		   Echoed rather than left to the card's own state, for the same reason
+		   the dimension filters below are: the week-long ceiling is enforced
+		   here, so a card asking for a month is answered for a week — and it
+		   has to caption itself with the week it got, not the month it asked
+		   for. */
+		"windowHours": scope.hours,
 
 		/* The dimension filters, echoed. The card names what it was narrowed to,
 		   and it must name that from the ANSWER rather than from what it asked
@@ -507,8 +698,16 @@ func Realtime(w http.ResponseWriter, r *http.Request) {
 }
 
 // scopeName is what the payload calls the window, for the card's caption.
+//
+// "rolling" is its own answer rather than a kind of "request". The card writes
+// "in the last 24 hours" from it, and that sentence is only true of a window
+// that ends NOW — a range somebody typed does not, and captioning one as the
+// other would date a figure from August to this afternoon.
 func scopeName(sc realtimeScope) string {
-	if sc.period {
+	switch {
+	case sc.hours > 0:
+		return "rolling"
+	case sc.period:
 		return "period"
 	}
 	return "request"
@@ -841,11 +1040,20 @@ func realtimeMemoAge(e *realtimeEntry) time.Duration {
 // given. Returning only the body is what let the handler date every answer to
 // the moment it was served.
 func cachedRealtimeCount(ctx context.Context, view, clientID string, assetIDs []string, scope realtimeScope, dims realtimeDims) (realtimeResponse, time.Time, error) {
-	// The window is part of the key: two readers on different date ranges are
-	// asking different questions, and sharing one answer between them would
-	// hand one of them the other's numbers.
+	/* The window is part of the key: two readers on different date ranges are
+	   asking different questions, and sharing one answer between them would hand
+	   one of them the other's numbers.
+
+	   So are the DIMENSION filters, and they were not. dims.key() was written for
+	   this line and never reached it, so a reader on Franchise = Serie A and a
+	   reader on Franchise = LaLiga — same client, same assets, same window —
+	   collided on one key, and whichever asked first decided what both were
+	   shown. Nothing looked wrong: the loser was handed a plausible number for a
+	   league they had not picked. It matters more than it did, because the card
+	   is on screen unfiltered now and the filters arrive one at a time after it —
+	   so the unfiltered reading is always the one in the memo first. */
 	key := view + "\x00" + clientID + "\x00" + strings.Join(assetIDs, ",") +
-		"\x00" + scope.since + "\x00" + scope.until
+		"\x00" + scope.since + "\x00" + scope.until + "\x00" + dims.key()
 
 	realtimeMemoMu.Lock()
 	if e, ok := realtimeMemo[key]; ok {

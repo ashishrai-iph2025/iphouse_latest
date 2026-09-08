@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 /*
@@ -193,14 +195,16 @@ func TestRealtimePayloadKeepsACountedZeroAndOmitsAnAbsentOne(t *testing.T) {
 ── The sports card counts a SEASON, not the slicer's dates ──────────────────
 
 The card used to be clamped INTO the report's date range, on the reasoning that
-a live figure above dated tiles must cover the same days. It does not work: the
-two read different layers of the warehouse — the tiles the curated
-dashboards.* tables, the card the raw mediascan.* ones, which de-duplicate URLs
-the tiles count once per day — so matching the dates never made the figures
-comparable and only made the card re-count on every move of the slicer.
+a live figure above dated tiles must cover the same days. It was decoupled when
+the two disagreed anyway, and the reason written down — that the layers they read
+can never be comparable — was wrong: one expression in the counts service was
+de-duplicating Open Web URLs per day on a grain the warehouse table does not
+have. That is fixed, and the layers reconcile exactly.
 
-So the window is the client's configured period — up to TODAY, since a season is
-a configured boundary and not a data one and DAZN's runs to December. These pin
+The window is still the client's configured period, now for the reason that
+actually holds: following the slicer re-counts the raw tables on every move of
+it, and a season is 14.5s against production. Up to TODAY, since a season is a
+configured boundary and not a data one and DAZN's runs to December. These pin
 that, because the symptom of losing it is not an error: it is a smaller number,
 on the card a reader trusts most precisely because it says "live".
 
@@ -312,5 +316,180 @@ func TestAMissingWindowFallsBackToABoundedOne(t *testing.T) {
 	}
 	if sc.period {
 		t.Error("a fallback window was labelled as period-scoped")
+	}
+}
+
+/*
+The card's own window beats the configured season.
+
+The sports card used to wait for a narrowing filter before it appeared, because
+unfiltered it counted the whole season. It is on screen from the moment a sports
+report loads now, and this is what pays for that: it asks for the last day, and
+`lastHours` has to win over the period or the control on the card would be the
+one slicer in the product that does nothing.
+*/
+func TestARollingWindowBeatsTheConfiguredSeason(t *testing.T) {
+	r := httptest.NewRequest("GET", "/api/realtime/sports?lastHours=24", nil)
+	sc := scopeFromRequest(r, "sports", "any-client")
+
+	if sc.hours != 24 {
+		t.Fatalf("the window was not carried through: %d hours", sc.hours)
+	}
+	if sc.period {
+		t.Error("a window the card asked for was labelled as the configured season")
+	}
+	if got := scopeName(sc); got != "rolling" {
+		t.Errorf("scope name %q — the card writes \"in the last 24 hours\" off this", got)
+	}
+
+	/* And it is ONE REPORT DAY — today, whole — not the trailing twenty-four
+	   hours. Parsed rather than eyeballed, because the two print almost alike and
+	   only one of them selects the rows the report's 1D preset selects. */
+	since, err := time.Parse(realtimeStampLayout, sc.since)
+	if err != nil {
+		t.Fatalf("since is not a timestamp: %q (%v)", sc.since, err)
+	}
+	until, err := time.Parse(realtimeStampLayout, sc.until)
+	if err != nil {
+		t.Fatalf("until is not a timestamp: %q (%v)", sc.until, err)
+	}
+	if since.Format(ymdLayout) != until.Format(ymdLayout) {
+		t.Errorf("lastHours=24 spans %s..%s — that is two calendar days, and the "+
+			"report's 1D preset is one", sc.since, sc.until)
+	}
+	if since.Format("15:04:05") != "00:00:00" || until.Format("15:04:05") != "23:59:59" {
+		t.Errorf("the window is %s..%s, want a whole report day", sc.since, sc.until)
+	}
+}
+
+/*
+A rolling window is the report's own N-day range, to the row.
+
+THE BUG THIS EXISTS FOR. The card's window was a pair of instants — "the last 168
+hours" — while the report's 7D preset is seven IST calendar days. Read together
+on 9 September 2026 they differed by twelve Twitter posts: the card reached into
+2 September and stopped short of the last hours of the 9th. Nothing on screen
+explained it, and a reader who cannot explain a small difference stops trusting
+the large numbers next to it.
+
+So `lastHours` is a number of report DAYS now, and this pins the mapping the team
+reconciled against: at 02:00 IST on 9 September, 168 hours is 3 – 9 September —
+the exact range in the slicer beside it.
+*/
+func TestARollingWindowIsTheReportsOwnDayRange(t *testing.T) {
+	// 2026-09-08 20:32 UTC is 2026-09-09 02:02 IST — after IST midnight, which is
+	// where a UTC-dated window would name the wrong day.
+	now := time.Date(2026, 9, 8, 20, 32, 0, 0, time.UTC)
+
+	for _, c := range []struct {
+		hours    int
+		from, to string
+	}{
+		{24, "2026-09-09", "2026-09-09"},
+		{48, "2026-09-08", "2026-09-09"},
+		{168, "2026-09-03", "2026-09-09"},
+		// Rounded UP: anything part-way into a day is that whole day.
+		{25, "2026-09-08", "2026-09-09"},
+		{1, "2026-09-09", "2026-09-09"},
+	} {
+		since, until := rollingScope(c.hours, now).apiWindow()
+		if since != c.from || until != c.to {
+			t.Errorf("lastHours=%d asked for %s..%s, want %s..%s",
+				c.hours, since, until, c.from, c.to)
+		}
+	}
+}
+
+/*
+The window holds still for a whole report day, and steps at IST midnight.
+
+It used to be quantised to the memo's TTL, because the memo is keyed on the
+window and a boundary carrying seconds filed every poll under a key of its own.
+Calendar days make that free: every poll between two IST midnights builds the
+identical scope, so the single-flight always hits.
+
+What keeps the card LIVE is therefore not the key moving — it is the memo's own
+time check on the entry (see cachedRealtimeCount), which expires every TTL and
+re-counts against a day that is still filling up.
+*/
+func TestARollingWindowStepsAtISTMidnightAndNotBefore(t *testing.T) {
+	// 18:29 UTC is 23:59 IST — the last minute of the report's 7th.
+	lastMinute := time.Date(2026, 9, 7, 18, 29, 0, 0, time.UTC)
+
+	a := rollingScope(24, lastMinute.Add(-8*time.Hour))
+	b := rollingScope(24, lastMinute)
+	if a != b {
+		t.Errorf("the window moved inside one report day:\n  %+v\n  %+v", a, b)
+	}
+	if got, _ := b.apiWindow(); got != "2026-09-07" {
+		t.Errorf("the last minute of the IST 7th asked for %q", got)
+	}
+
+	// One minute later is IST midnight, and the window must have stepped.
+	c := rollingScope(24, lastMinute.Add(time.Minute))
+	if c == a {
+		t.Error("the window did not step at IST midnight — a live card would show " +
+			"yesterday all day")
+	}
+	if got, _ := c.apiWindow(); got != "2026-09-08" {
+		t.Errorf("the first minute of the IST 8th asked for %q", got)
+	}
+}
+
+/*
+A week and no further.
+
+The ceiling is what keeps the card cheap enough to show unfiltered: a week of
+one client's captures measured at 1.4s against production where the season was
+14.5s. Clamped rather than refused, because an out-of-range value is a stale tab
+or a hand-typed URL and the nearest window it could have meant beats an error on
+a card whose job is to keep showing numbers.
+*/
+func TestTheRollingWindowIsClampedToAWeek(t *testing.T) {
+	for _, c := range []struct{ asked, want int }{
+		{24, 24},
+		{24 * 7, 24 * 7},
+		{24 * 30, 24 * 7}, // a month: back to the season-sized cost this avoids
+		{0, 0},            // not asked for at all — every other caller's window stands
+		{-5, 0},
+	} {
+		r := httptest.NewRequest("GET", fmt.Sprintf("/api/realtime/sports?lastHours=%d", c.asked), nil)
+		if got := rollingHoursFromRequest(r); got != c.want {
+			t.Errorf("lastHours=%d gave %d, want %d", c.asked, got, c.want)
+		}
+	}
+
+	// Absent, and the season logic is untouched — this must not have become the
+	// window every sports card gets.
+	r := httptest.NewRequest("GET", "/api/realtime/sports", nil)
+	if got := rollingHoursFromRequest(r); got != 0 {
+		t.Errorf("a request naming no window got %d hours", got)
+	}
+}
+
+/*
+The dimension filters are part of the memo key.
+
+dims.key() was written for that key and never reached it, so two readers on the
+same client, assets and window but different franchises collided and whichever
+asked first decided what both were shown. The loser saw a plausible number for a
+league they had not picked, which is the worst shape of wrong a cache can be.
+
+It matters more now than it did: the card is on screen unfiltered from the
+moment a sports report loads, so the UNFILTERED reading is always the one in the
+memo first, and every filter a reader then picks would have been served it.
+*/
+func TestTheMemoKeyDistinguishesDimensionFilters(t *testing.T) {
+	if k := (realtimeDims{}).key(); k != "" {
+		t.Errorf("an unfiltered count keys as %q — it must key exactly as it did "+
+			"before dimensions existed", k)
+	}
+	a := realtimeDims{Franchise: "Serie A"}
+	b := realtimeDims{Franchise: "LaLiga"}
+	if a.key() == b.key() {
+		t.Fatalf("two franchises share the key %q", a.key())
+	}
+	if (realtimeDims{MatchDay: "Matchday 4"}).key() == (realtimeDims{}).key() {
+		t.Error("a match day keys the same as no filter at all")
 	}
 }

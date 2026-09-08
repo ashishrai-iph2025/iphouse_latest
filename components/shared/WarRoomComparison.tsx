@@ -540,7 +540,7 @@ function HeadToHeadTable({ results }: { results: AssetResult[] }) {
     { label: 'Links removed',         get: r => r.report.summary.removed },
     { label: 'Links pending',         get: r => r.report.funnel.pending },
     { label: 'Removal rate',          get: r => pct(r.report.summary.removed, r.report.summary.identified), fmt: n => `${n}%` },
-    { label: 'Views on infringing content', get: r => r.report.summary.views, fmt: compact },
+    { label: 'Views on identified content', get: r => r.report.summary.views, fmt: compact },
     { label: 'Engagement (likes + comments)', get: r => r.report.summary.engagement, fmt: compact },
     { label: 'Channels / profiles flagged',   get: r => r.report.removal.channelsTotal },
     { label: 'Channels / profiles removed',   get: r => r.report.removal.channelsRemoved },
@@ -617,7 +617,7 @@ function PlatformComparisonChart({ results }: { results: AssetResult[] }) {
   return (
     <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-5">
       <h3 className="font-bold text-sm mb-1" style={{ color: NAVY_TEXT }}>Identification by Platform</h3>
-      <p className="text-[11px] text-gray-400 mb-4">Infringing link identifications per platform, per asset.</p>
+      <p className="text-[11px] text-gray-400 mb-4">Link identifications per platform, per asset.</p>
       {data.length === 0 ? (
         <p className="text-sm text-gray-400 py-10 text-center">No platform data in this range.</p>
       ) : (

@@ -86,5 +86,25 @@ func schemaSteps() []schema.Step {
 		{Version: 116, Name: "War Room per-client settings", Run: admin.EnsureWarRoomSettingsTable},
 		{Version: 117, Name: "download request watch and claims", Run: handlers.EnsureDownloadWatchSchema},
 		{Version: 118, Name: "URL upload claim ledger", Run: handlers.EnsureUploadClaimSchema},
+
+		/* Access before requests: a request row is only ever written by an
+		   account the access table has already admitted, and a reader arriving
+		   at the register touches both. */
+		{Version: 119, Name: "asset register access grants", Run: handlers.EnsureAssetAccessSchema},
+		{Version: 120, Name: "asset protection requests", Run: handlers.EnsureAssetRequestSchema},
+
+		/* ── The one step here that moves DATA rather than shape ─────────────
+
+		   The programme calendar used to be gated on the Reports grant and now
+		   has its own module. Deployed alone that takes the calendar away from
+		   every client holding Reports at once — a regression every customer
+		   sees on the same morning and no admin was told about — so the new
+		   grant is given to everyone the old gate already admitted.
+
+		   It is HERE rather than beside EnsureCalendarModule in main precisely
+		   because a step runs once and is recorded. Re-asserted on every boot it
+		   would undo an admin's decision: revoke the calendar from a client and
+		   the next restart hands it back. Once is what makes it a migration. */
+		{Version: 121, Name: "grant the Calendar module to logins that hold Reports", Run: handlers.BackfillCalendarGrants},
 	}
 }

@@ -260,7 +260,7 @@ func TestActionTrendsAreReplacedByDayPanels(t *testing.T) {
 	roles := []string{"linking", "host"}
 	actions := map[string]string{"linking": "delistingBatches", "host": "notices"}
 
-	for _, p := range defaultPanels("open-web-sports", nil, roles, nil, actions, map[string]bool{"linking": true}, false) {
+	for _, p := range defaultPanels("open-web-sports", nil, roles, nil, actions, map[string]bool{"linking": true}, false, false) {
 		if p.Kind == panelTrend && p.Metric != "" {
 			t.Errorf("an action trend (%q) is back in the layout — that card drew "+
 				"zero every day and was replaced by the day-wise panels", p.Key)
@@ -268,7 +268,7 @@ func TestActionTrendsAreReplacedByDayPanels(t *testing.T) {
 	}
 	// The volume trends themselves are untouched.
 	got := map[string]bool{}
-	for _, p := range defaultPanels("open-web-sports", nil, roles, nil, actions, map[string]bool{"linking": true}, false) {
+	for _, p := range defaultPanels("open-web-sports", nil, roles, nil, actions, map[string]bool{"linking": true}, false, false) {
 		if p.Kind == panelTrend {
 			got[p.Key] = true
 		}
@@ -390,7 +390,7 @@ func TestATrendCardIsNamedTheSameOnBothScreens(t *testing.T) {
 	// to prefer and falls back to computing a name of its own.
 	byKey := map[string]panelDef{}
 	for _, p := range defaultPanels("open-web-sports", nil, []string{"linking", "host"}, nil,
-		map[string]string{}, delisting, false) {
+		map[string]string{}, delisting, false, false) {
 		byKey[p.Key] = p
 	}
 	if got := byKey["trend:linking"].Label; got != "Linking Identification & De-Indexing" {

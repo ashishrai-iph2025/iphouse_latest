@@ -24,10 +24,16 @@
      legible in both themes. */
   --wr-navy-text:   #14254A;
   --wr-orange-text: #b5651a;
+
+  /* The UNFILLED part of a range track. The filled part is painted inline by
+     the component that knows the value, so this is the only half that can carry
+     a theme. */
+  --rt-track: #e5e7eb;
 }
 .dark {
   --wr-navy-text:   #e2e8f0;
   --wr-orange-text: #fb923c;
+  --rt-track: rgba(255,255,255,0.16);
 }
 
 /* ── Accent color applied to key elements ───── */
@@ -111,6 +117,26 @@ input[type="search"]::-webkit-search-decoration {
   border: 4px solid rgba(0,0,0,0.06);
   border-top-color: #0078D4;
   animation: spin 0.9s linear infinite;
+}
+
+/* ── A read in flight ──────────────────────────
+   A short bar travelling the top edge of a card while it re-reads. Used by the
+   live counts card, where a filter change swaps every number on screen and the
+   old ones look like an answer until they do.
+
+   Indeterminate on purpose: the count reports no progress, so a bar that filled
+   would be inventing one. */
+@keyframes sweep {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(400%); }
+}
+.sweep { animation: sweep 1.15s cubic-bezier(0.65, 0, 0.35, 1) infinite; }
+
+/* Movement is the whole of this indicator, so for a reader who has asked for
+   less of it the bar becomes a still one rather than nothing — the card must
+   still say it is working. */
+@media (prefers-reduced-motion: reduce) {
+  .sweep { animation: none; width: 100%; }
 }
 
 /* ── Fade-in ───────────────────────────────── */
@@ -427,7 +453,8 @@ input[type="search"]::-webkit-search-decoration {
    The FILLED part of the track is painted with a gradient the component
    computes per value (inline `background`), so the track shows how far along
    the range a setting sits without a second element to keep in sync. */
-.policy-range {
+.policy-range,
+.rt-range {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
@@ -436,7 +463,12 @@ input[type="search"]::-webkit-search-decoration {
   outline: none;
   cursor: pointer;
 }
-.policy-range::-webkit-slider-thumb {
+/* The live counts card's window. Smaller than a policy slider because it sits
+   in a 256px column under a 3xl figure — at the policy size the control was the
+   heaviest thing in the column and outweighed the number it qualifies. */
+.rt-range { height: 5px; }
+.policy-range::-webkit-slider-thumb,
+.rt-range::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 18px;
@@ -448,11 +480,19 @@ input[type="search"]::-webkit-search-decoration {
   cursor: grab;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
-.policy-range::-webkit-slider-thumb:hover   { transform: scale(1.15); }
-.policy-range::-webkit-slider-thumb:active  { cursor: grabbing; transform: scale(1.05); }
-.policy-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--accent-ring); }
+.rt-range::-webkit-slider-thumb {
+  width: 14px; height: 14px; border-width: 2.5px;
+  box-shadow: 0 1px 4px rgba(20,37,74,0.28);
+}
+.policy-range::-webkit-slider-thumb:hover,
+.rt-range::-webkit-slider-thumb:hover   { transform: scale(1.15); }
+.policy-range::-webkit-slider-thumb:active,
+.rt-range::-webkit-slider-thumb:active  { cursor: grabbing; transform: scale(1.05); }
+.policy-range:focus-visible::-webkit-slider-thumb,
+.rt-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--accent-ring); }
 
-.policy-range::-moz-range-thumb {
+.policy-range::-moz-range-thumb,
+.rt-range::-moz-range-thumb {
   width: 18px;
   height: 18px;
   border-radius: 50%;
@@ -461,12 +501,19 @@ input[type="search"]::-webkit-search-decoration {
   box-shadow: 0 2px 8px rgba(20,37,74,0.25);
   cursor: grab;
 }
-.policy-range::-moz-range-track { background: transparent; }
+.rt-range::-moz-range-thumb {
+  width: 14px; height: 14px; border-width: 2.5px;
+  box-shadow: 0 1px 4px rgba(20,37,74,0.28);
+}
+.policy-range::-moz-range-track,
+.rt-range::-moz-range-track { background: transparent; }
 
 /* A slider parked at 0 means the rule is OFF. Greyed so that reads at a glance
    rather than only from the "Off" label beside it. */
 .policy-range[data-off="true"]::-webkit-slider-thumb { border-color: #cbd5e1; }
 .policy-range[data-off="true"]::-moz-range-thumb     { border-color: #cbd5e1; }
 
-.dark .policy-range::-webkit-slider-thumb { background: #1a2d55; }
-.dark .policy-range::-moz-range-thumb     { background: #1a2d55; }
+.dark .policy-range::-webkit-slider-thumb,
+.dark .rt-range::-webkit-slider-thumb { background: #1a2d55; }
+.dark .policy-range::-moz-range-thumb,
+.dark .rt-range::-moz-range-thumb     { background: #1a2d55; }

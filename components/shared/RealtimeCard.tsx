@@ -33,9 +33,10 @@
  *     reason. Blanking them would lose information the reader still wants.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import InfoDot from '@/components/shared/InfoDot'
+import SearchableSelect from '@/components/ui/SearchableSelect'
 
 export interface RealtimePlatform {
   key: string
@@ -74,12 +75,61 @@ interface Payload {
   matchDay?: string
   /** Where that window came from. 'period' is the client's configured sports
       season, which no slicer on the page can move — the caption says so rather
-      than calling it "this range". Absent on sources that do not report it. */
-  scope?: 'period' | 'request' | string
+      than calling it "this range". 'rolling' is the window the card's own
+      control asked for, ending now. Absent on sources that do not report it. */
+  scope?: 'period' | 'request' | 'rolling' | string
+  /** How many hours a rolling window covers, as the server ACTUALLY counted it.
+      The week-long ceiling is enforced there, so a card asking for more is
+      answered for a week and has to caption itself with the week it got. Zero
+      or absent on every other scope. */
+  windowHours?: number
   /** How many platforms failed on this reading. The rest are still shown. */
   partial?: number
   asOf: string
   error?: string
+}
+
+/*
+windowDates turns a rolling window in hours into the date pair MarkScan needs.
+
+Rounded UP to whole days, and inclusive of today: MarkScan filters on dates, so
+24 hours is today, 72 is today and the two before it. Rounding up rather than
+down because a window that asked for three days and was given two would under-
+report, and a live card that under-reports is worse than one that covers a few
+hours more than it says.
+
+Null for hours <= 0, which is the "no window offered" case every caller had
+before this existed — the dates then come from the page, exactly as they did.
+*/
+function windowDates(hours: number): { start: string; end: string } | null {
+  if (hours <= 0) return null
+  const days = Math.max(1, Math.ceil(hours / 24))
+  const end = new Date()
+  const start = new Date(end)
+  start.setUTCDate(start.getUTCDate() - (days - 1))
+  const iso = (d: Date) => d.toISOString().slice(0, 10)
+  return { start: iso(start), end: iso(end) }
+}
+
+/**
+ * A rolling window in words: "24 hours", "3 days", "7 days".
+ *
+ * Hours below a day and days above it, because that is how the two are asked
+ * for. "0.5 days" and "168 hours" are both technically right and neither is a
+ * label anybody would pick off a control.
+ */
+function windowWords(hours: number): string {
+  if (hours <= 0) return ''
+  /* A day inclusive is spoken in HOURS. "the last 1 day" is the phrase nobody
+     says — a live card covering a day means "the last 24 hours", and the plural
+     is what makes it read as a duration rather than as a count of calendar
+     days. Above that, days: "the last 168 hours" is the same span in a unit
+     nobody would pick off a control. */
+  if (hours <= 24) return `${hours} hour${hours === 1 ? '' : 's'}`
+  // A whole number of days says days; anything else keeps its hours rather than
+  // rounding 36 into "2 days" and overstating the window by half.
+  if (hours % 24 !== 0) return `${hours} hours`
+  return `${hours / 24} days`
 }
 
 /*
@@ -116,6 +166,7 @@ function scopeBits(p: {
   startDate?: string
   endDate?: string
   scope?: string
+  windowHours?: number
 }): string[] {
   const bits: string[] = []
 
@@ -149,7 +200,14 @@ function scopeBits(p: {
     bits.push(/match\s*day/i.test(p.matchDay) ? p.matchDay : `Match day ${p.matchDay}`)
   }
 
-  if (p.startDate || p.endDate) {
+  /* A rolling window is named by its LENGTH, not by its ends. "6 Sep 2026 –
+     7 Sep 2026" is what the timestamps say and it is the wrong sentence: the
+     reader chose "last 24 hours" off a control on this card, and a caption
+     spelling that as two dates reads as a fixed range they can no longer see
+     the width of. Checked before the dates for that reason. */
+  if (p.windowHours && p.windowHours > 0) {
+    bits.push(`last ${windowWords(p.windowHours)}`)
+  } else if (p.startDate || p.endDate) {
     const a = dayWords(p.startDate)
     const b = dayWords(p.endDate)
     bits.push(a && b ? (a === b ? a : `${a} – ${b}`) : a || b)
@@ -159,7 +217,12 @@ function scopeBits(p: {
   return bits.filter(Boolean)
 }
 
-function rangeWords(p: { startDate?: string; endDate?: string; scope?: string }) {
+function rangeWords(p: { startDate?: string; endDate?: string; scope?: string; windowHours?: number }) {
+  /* "in the last 24 hours", which is the whole of what the headline means now.
+     It comes first because a rolling scope also carries dates — they are its
+     two ends — and "in this range" over a figure that moves every thirty
+     seconds is the caption this card exists to avoid. */
+  if (p.windowHours && p.windowHours > 0) return `in the last ${windowWords(p.windowHours)}`
   if (p.scope === 'period') return 'this season'
   return p.startDate || p.endDate ? 'in this range' : 'all time'
 }
@@ -244,10 +307,20 @@ function scopeNote(p: Payload, refreshMs: number): string {
     ? `${dayWords(p.startDate)} and ${dayWords(p.endDate)}`
     : ''
 
-  /* WHAT and WHEN. The sports card names its season and says outright that the
-     date slicer does not reach it — a control that appears to act on a figure
-     it cannot touch is worth one sentence to close off. */
-  if (p.scope === 'period') {
+  /* WHAT and WHEN.
+
+     The rolling window comes first, because it is what the sports card takes by
+     default now and the only window on the page the reader picked themselves.
+     It says outright that this is NOT the date range on the right, for the same
+     reason the season branch does: a control that appears to act on a figure it
+     cannot touch is worth one sentence to close off. */
+  if (p.windowHours && p.windowHours > 0) {
+    paras.push(
+      `Everything found for this client in the last ${windowWords(p.windowHours)}, counted up to ` +
+      `the stamp above. A live window that moves with the clock — not the date range on the ` +
+      `right, which does not reach this figure. The buttons under the number widen it, ` +
+      `to a week at most.`)
+  } else if (p.scope === 'period') {
     paras.push(
       `Everything found for this client between ${span} — the reporting season set in ` +
       `Report Configuration → Sports period. The date range on the right does not move this ` +
@@ -264,10 +337,11 @@ function scopeNote(p: Payload, refreshMs: number): string {
     paras.push(`Narrowed to ${p.assets} asset${p.assets === 1 ? '' : 's'}.`)
   }
 
-  /* And the dimension filters, NAMED. The card exists because one of them was
-     chosen, so what it was narrowed to is the first thing to state — and it is
-     the only way a reader can tell a count that honoured the filter from one
-     that quietly ignored it. */
+  /* And the dimension filters, NAMED. The card starts unfiltered and these
+     arrive as the reader works the rail beside it, so what it was narrowed to
+     is the thing most likely to have changed since they last looked — and it is
+     the only way to tell a count that honoured the filter from one that quietly
+     ignored it. */
   const narrowed = [
     p.franchise && `franchise ${p.franchise}`,
     p.matchDay && `match day ${p.matchDay}`,
@@ -384,6 +458,329 @@ function useCountUp(value: number, ms = 600) {
   return shown
 }
 
+/** A window in the fewest characters that still say it: "24h", "3d", "7d".
+ *
+ *  A day and under in hours, above it in days — the same split windowWords
+ *  uses, so a stop on the track and the sentence under the figure can never
+ *  describe two different windows. */
+function shortWindow(h: number): string {
+  return h <= 24 ? `${h}h` : `${Math.round(h / 24)}d`
+}
+
+/**
+ * The window control: how far back the live figure reaches.
+ *
+ * A SLIDER, and a slider over the index rather than over the hours.
+ *
+ * The options are 24, 72 and 168 hours. Ranged over the hours themselves, 24h
+ * and 3d would sit within a thumb's width of one another and two thirds of the
+ * track would be the empty run up to 7d — the control would draw three equal
+ * choices as a lopsided scale and invite the reader to look for values between
+ * them that do not exist. Over the index the three stops are evenly spaced,
+ * which is what they are.
+ *
+ * What the slider buys over the segmented buttons it replaces is the reading:
+ * these are three points on ONE axis, ordered, and a row of buttons says only
+ * that they are alternatives. The current window is named in a pill beside the
+ * label — the value has to stay legible without measuring the thumb against the
+ * track — and the stops are named under it, so the whole range is readable at
+ * rest and each name is still a click of its own.
+ */
+function WindowPicker({
+  options, value, onChange, className = '',
+}: {
+  options: number[]
+  value: number
+  onChange: (h: number) => void
+  className?: string
+}) {
+  const i = Math.max(0, options.indexOf(value))
+  const last = options.length - 1
+  const pct = last > 0 ? (i / last) * 100 : 0
+
+  return (
+    <div className={className}>
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <span className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-white/40">
+          Window
+        </span>
+        {/* The value, said rather than measured. A thumb two thirds along a
+            track is a position, not a number, and this card is read for
+            numbers. */}
+        <span className="px-1.5 py-0.5 rounded-md text-[11px] font-bold tabular-nums
+          bg-gray-100 text-[#14254A] dark:bg-white/10 dark:text-white">
+          {shortWindow(options[i])}
+        </span>
+      </div>
+
+      {/* The filled part of the track is painted as a hard-stop gradient the
+          component computes per value, so there is no second element to keep in
+          sync with the thumb. Same technique as the policy sliders; see
+          .rt-range in globals.css. */}
+      <input type="range" min={0} max={last} step={1} value={i}
+        onChange={e => onChange(options[Number(e.target.value)] ?? options[0])}
+        className="rt-range"
+        aria-label="How far back the live count reaches"
+        aria-valuetext={windowWords(options[i])}
+        title={`Count the last ${windowWords(options[i])}`}
+        style={{
+          background: `linear-gradient(to right, var(--brand-blue) 0%, var(--brand-blue) ${pct}%,
+            var(--rt-track) ${pct}%, var(--rt-track) 100%)`,
+        }} />
+
+      {/* The stops, named and clickable. A slider whose values are a closed set
+          should not need dragging to reach one of them, and the names are what
+          make the track legible without moving the thumb at all.
+
+          Each one is placed AT its stop rather than the row being spread with
+          justify-between. Spread, the labels sit at even intervals while the
+          thumb sits at even intervals of a track inset by its own radius, and
+          the two only agree at the ends — with three stops that was a pixel or
+          two in the middle and invisible, with seven it is a row of names that
+          plainly do not line up with the thing they label.
+
+          `calc(7px + (100% - 14px) * frac)` is the thumb's own centre line: it
+          travels from one radius in to one radius short of the end, not from 0
+          to 100%. And `translateX(-frac%)` is what keeps the first name flush
+          left, the last flush right and every one between centred, so none of
+          them overhangs the track. */}
+      <div className="relative h-3 mt-1">
+        {options.map((h, n) => {
+          const frac = last > 0 ? n / last : 0
+          return (
+            <button key={h} type="button" onClick={() => onChange(h)}
+              title={`Count the last ${windowWords(h)}`}
+              style={{
+                left: `calc(7px + (100% - 14px) * ${frac})`,
+                transform: `translateX(-${frac * 100}%)`,
+              }}
+              className={`absolute top-0 whitespace-nowrap text-[9.5px] font-semibold
+                tabular-nums transition-colors ${
+                n === i
+                  ? 'text-[#14254A] dark:text-white'
+                  : 'text-gray-400 hover:text-[#14254A] dark:text-white/35 dark:hover:text-white'
+              }`}>
+              {shortWindow(h)}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/** One option in a card slicer. Ids where the report carries ids, names where
+    it carries names — exactly the shape the reports page's own `asOpts` makes,
+    so the card and the rail cannot disagree about what a value is. */
+export interface RealtimeOption { key: string; label: string }
+
+/** The three the live tables can actually be narrowed by. Mirrors
+    REALTIME_COUNT_FILTERS on the reports page and realtimeDims in
+    go-server/handlers/realtime.go. */
+export interface RealtimeDimOptions {
+  franchiseName?: RealtimeOption[]
+  matchDay?: RealtimeOption[]
+  assetId?: RealtimeOption[]
+}
+
+/**
+ * The card's own three slicers.
+ *
+ * The RAIL'S OWN control — SearchableSelect, in its compact trigger.
+ *
+ * These were native <select>s, on the argument that the rail already offers the
+ * same three values in a richer widget a foot to the right and a second copy of
+ * it here would be the elaborate version of something the reader can already do
+ * properly. That argument was about the TRIGGER, and it does not survive what a
+ * native select actually opens: a list drawn by the operating system, in the
+ * OS's font at the OS's size with the OS's blue highlight, which on Windows
+ * looks like nothing else in this product. It also cannot be wider than the
+ * control, and the control is 190px in a 256px column — so the Asset list, the
+ * one that most needs reading, was the one truncated hardest. And it cannot be
+ * searched, over a catalogue that runs to four figures.
+ *
+ * The shared control answers all three: the list is portalled so it escapes the
+ * column and opens upward near the foot of the window, it is wider than its
+ * trigger, and it grows a search box past seven options. The compact trigger is
+ * the same one the rail carries a dozen of, so the card and the rail no longer
+ * look like two applications.
+ *
+ * Empty value means "every one", which is what the endpoint reads an absent
+ * filter as — so the clear row is spelled "All" rather than left blank.
+ */
+function DimPicker({
+  label, value, options, overridden, onChange,
+}: {
+  label: string
+  value: string
+  options: RealtimeOption[]
+  /* Whether this one has been moved AWAY from the report's own selection.
+     Marked, because a card quietly counting a different fixture from the panels
+     under it is the one failure these controls introduce. */
+  overridden: boolean
+  onChange: (v: string) => void
+}) {
+  /* The report can hold a value this list does not carry. The rail rescopes its
+     options as the client, the window and the other slicers move, so for a
+     render or two a selection outlives the option that produced it — and a
+     trigger whose value matches no option falls back to the placeholder. "All"
+     over a count that is very much narrowed is the worst way for a filter
+     control to be wrong, so the current value is carried as its own option.
+
+     KEY AND LABEL ONLY — the count the rail's lists carry is deliberately
+     dropped here.
+
+     On the rail that number is the right one: it is rows in the report's
+     tables, over the report's date range, and it is exactly what picking the
+     option will do to the report underneath. On this card it is a number about
+     something else entirely. The card counts live discovery rows, de-duplicated
+     per URL, over its own rolling window — so "1,308" beside a fixture and "0"
+     in the figure above it are both correct and look like a contradiction, and
+     the reader has nothing on screen to reconcile them with. A count that
+     answers a different question than the number it sits next to is worse than
+     no count. */
+  const opts = useMemo(
+    () => {
+      const bare = options.map(o => ({ key: o.key, label: o.label }))
+      return !value || bare.some(o => o.key === value)
+        ? bare
+        : [{ key: value, label: value }, ...bare]
+    },
+    [options, value])
+
+  return (
+    /* A GRID with BOTH tracks fixed, because these now sit in a row along the
+       foot of the card rather than stacked down a column.
+
+       The label track was fixed already: three labels of different lengths in a
+       flex row each started the control at a different x, which is what made a
+       stack of them look broken. The control track has to be fixed too now —
+       stacked it took the column's width from `1fr`, but a flex item sizes to
+       its content and the trigger inside is `width: 100%` of nothing, so an
+       auto track collapses it to the chevron.
+
+       170px, which is where a fixture name stops being two words and an
+       ellipsis. The whole pair is 240px, so three fit across any card wider
+       than a phone and wrap cleanly below that.
+
+       A <div> rather than a <label>: the control is a button now, and wrapping
+       a button in a label neither names it nor focuses it. The name goes to the
+       trigger directly. */
+    <div className="grid grid-cols-[64px_170px] items-center gap-1.5 min-w-0 max-w-full">
+      <span className={`text-[10px] uppercase tracking-wide truncate ${
+        overridden ? 'text-[#FC934C]' : 'text-gray-400 dark:text-white/40'}`}>
+        {label}
+      </span>
+      <SearchableSelect options={opts} value={value} onChange={onChange}
+        placeholder="All" emptyLabel="All" compact marked={overridden}
+        ariaLabel={overridden
+          ? `${label} — set on this card, so the live count no longer matches the report below`
+          : `${label} — following the report`} />
+    </div>
+  )
+}
+
+/** One line in the strip along the bottom of the card.
+ *
+ *  `applied` is whether the live count could honour it. `onCard` is whether it
+ *  came from the card's own pickers rather than the report's rail — the two
+ *  are drawn differently because a filter the card cannot count and one the
+ *  reader cleared here are not the same admission. */
+export interface ScopeItem {
+  key: string
+  label: string
+  value: string
+  applied: boolean
+  onCard?: boolean
+  /** What the report below is narrowed to, where the card has been moved off
+      it. Named in the tooltip, so a reader can see the two have parted. */
+  reportValue?: string
+}
+
+/**
+ * The filter rail's current selection, along the bottom of the card.
+ *
+ * The card counts by three filters at most — asset, franchise, match day — and
+ * the rail beside it carries a dozen. That gap is invisible on the numbers: an
+ * unfiltered live total under a rail set to Spain and Spanish looks like a
+ * Spanish figure and is out by an order of magnitude, with nothing on screen
+ * admitting it.
+ *
+ * So every active filter is named, and the ones the count could not honour are
+ * marked and said out loud underneath. Two lists in one strip rather than two
+ * strips: what a reader is checking is "does this number answer the same
+ * question as the report below", and that is one answer.
+ */
+function ScopeStrip({ items }: { items: ScopeItem[] }) {
+  /* Two different reasons a filter is not on the count, and they want different
+     sentences. One the card CANNOT honour — the live tables carry three
+     dimensions and the rail carries a dozen. One the reader cleared themselves,
+     on a picker a few lines above, which is not a limitation and must not be
+     apologised for as one. */
+  const cantCount = items.filter(i => !i.applied && !i.onCard)
+  const clearedHere = items.filter(i => !i.applied && i.onCard)
+  return (
+    <div className="px-5 py-2.5 border-t border-gray-100 dark:border-white/10
+      flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      <span className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-white/40 flex-shrink-0">
+        {items.length === 0 ? 'No filters' : 'Filters'}
+      </span>
+
+      {items.length === 0 ? (
+        /* The resting state says what it IS, not that something is missing.
+           "No filters" alone reads as a control that failed to load; this is the
+           whole client, which is a perfectly good thing for a live card to be
+           counting and the state it opens in. */
+        <span className="text-[11px] text-gray-400 dark:text-white/40">
+          counting every asset for this client — narrow it on the pickers above, or in the rail
+        </span>
+      ) : items.map(i => (
+        /* Struck through and dimmed where the live count could not honour it.
+           Absent instead, the reader would have no way to tell a filter the card
+           ignored from one they had not set. */
+        <span key={i.key}
+          title={i.applied
+            ? (i.onCard
+                ? `${i.label}: ${i.value} — set on this card${
+                    i.reportValue ? `, while the report below is on ${i.reportValue}` : ''}`
+                : `${i.label}: ${i.value} — the live count is narrowed to this`)
+            : (i.onCard
+                ? `${i.label}: ${i.value} — cleared on this card, so the live count no longer honours it; the report below still does`
+                : `${i.label}: ${i.value} — the report below is narrowed to this; the live count is not`)}
+          className={`inline-flex items-baseline gap-1 max-w-full text-[11px] ${
+            i.applied ? '' : 'opacity-60'}`}>
+          {/* Orange where the reader set it here — the same mark the picker
+              itself carries, so one glance ties the strip to the control. */}
+          <span className={`flex-shrink-0 ${i.onCard && i.applied
+            ? 'text-[#FC934C]' : 'text-gray-400 dark:text-white/40'}`}>{i.label}</span>
+          <span className={`truncate font-medium ${i.applied
+            ? 'text-[#14254A] dark:text-white'
+            : 'text-gray-500 dark:text-white/50 line-through decoration-gray-300 dark:decoration-white/30'}`}>
+            {i.value}
+          </span>
+        </span>
+      ))}
+
+      {cantCount.length > 0 && (
+        <span className="text-[10px] text-amber-700 dark:text-amber-400 basis-full">
+          {cantCount.map(i => i.label).join(', ')} {cantCount.length === 1 ? 'narrows' : 'narrow'} the
+          report below but not this count — the live tables carry asset, franchise and match day only.
+        </span>
+      )}
+
+      {clearedHere.length > 0 && (
+        /* Grey, not amber. Nothing went wrong: the reader widened the card on
+           purpose, and the only thing worth saying is that the report below did
+           not widen with it. */
+        <span className="text-[10px] text-gray-500 dark:text-white/50 basis-full">
+          {clearedHere.map(i => i.label).join(', ')} {clearedHere.length === 1 ? 'was' : 'were'} cleared
+          on this card — the report below is still narrowed by {clearedHere.length === 1 ? 'it' : 'them'}.
+        </span>
+      )}
+    </div>
+  )
+}
+
 /** Whether a value has just gone up, held briefly so a cell can flash. */
 function useBumped(value: number, ms = 1200) {
   const [bumped, setBumped] = useState(false)
@@ -411,9 +808,17 @@ export default function RealtimeCard({
   endDate,
   franchise,
   matchDay,
+  windowOptions,
+  waitingFor,
+  scopeFilters,
+  dimOptions,
+  onDimsChange,
+  platformKey,
   className = '',
   pinned,
   onTogglePin,
+  title = 'Realtime',
+  desc,
 }: {
   view: 'war-room' | 'sports'
   /* WHICH SYSTEM COUNTS.
@@ -450,14 +855,110 @@ export default function RealtimeCard({
   /* The narrowing filters the report page has applied, where they are ones this
      count can honour.
 
-     The card only appears at all once one of Match Day / Asset / Franchise is
-     chosen — see showRealtime on the reports page — so these are not optional
-     decoration, they are the reason it is on screen. Sending only the asset was
-     the bug: picking Serie A narrowed every panel below to twenty-two thousand
-     rows and left the card reporting a hundred and three thousand for the whole
-     season, two figures about the same subject a hand's width apart. */
+     The card is on screen from the moment a sports report loads and these
+     arrive afterwards, one at a time, as the reader works the filter rail — so
+     the count has to follow them or it is a live figure about a different
+     subject than everything under it. Sending only the asset was the bug:
+     picking Serie A narrowed every panel below to twenty-two thousand rows and
+     left the card reporting a hundred and three thousand for the whole season,
+     two figures about the same subject a hand's width apart. */
   franchise?: string
   matchDay?: string
+  /* ── The window control, and what it may offer ───────────────────────────
+
+     Rolling windows in HOURS, offered as buttons under the figure; the first is
+     the one the card opens on. Absent and there is no control and no window
+     asked for, which is how every consumer that had this card before keeps the
+     window its own endpoint chose — the War Room's report range, the sports
+     season.
+
+     The sports card passes [24, 72, 168]. It used to wait for a narrowing
+     filter before it appeared at all, because unfiltered it counted the whole
+     configured season and that is the most expensive query in the product. A
+     day is not, so the card can be on screen from the first paint and the
+     reader can widen it as far as a week — the ceiling is the SERVER's and is
+     enforced there, this list only decides what is offered. */
+  windowOptions?: number[]
+  /*
+    WHY THE CARD IS NOT COUNTING YET, or empty when it is.
+
+    Set, the card draws its full frame with this line in place of the numbers
+    and makes NO request. Unset, it counts.
+
+    It exists because the alternative was hiding the card until its scope was
+    known, and that is what put the live counts behind a filter: no client
+    chosen on the reports page, no asset chosen in War Room, and the strip was
+    simply absent — a reader had no way to know it existed, and the page jumped
+    when it appeared. The frame is now there from the first paint and says what
+    it is waiting for.
+
+    A REASON, not a boolean, because the two callers are waiting on different
+    things and "not available" would be the least useful way to say either.
+
+    And it suppresses the FETCH, which is the load-bearing half. Rendering the
+    frame while still calling the endpoint would trade a missing card for an
+    error one: /api/warroom/realtime answers 422 "Pick at least one asset", and
+    the reader would be shown a failure caused by the page, not by anything they
+    did.
+  */
+  waitingFor?: string
+  /* What the filter rail currently holds, for the strip along the bottom.
+
+     The card counts by three of these at most — asset, franchise, match day —
+     and the rail carries a dozen. Both are listed, and each says which it is:
+     an unfiltered live total under a rail set to Spain and Spanish would
+     otherwise look like a Spanish figure, and be out by an order of magnitude
+     with nothing on screen admitting it.
+
+     `applied` is the whole of that distinction and it is the caller's to state,
+     because it is the caller that decides what gets sent. */
+  scopeFilters?: ScopeItem[]
+  /* ── The card's own three slicers ────────────────────────────────────────
+
+     The option lists for Franchise, Match Day and Asset, as the rail already
+     holds them. Passed in rather than fetched here because the rail's lists are
+     SCOPED — narrowed by the client, the window and each other — and a card
+     fetching its own would offer values the report has already ruled out.
+
+     Absent and the card draws no slicers at all, which is how the War Room and
+     every other consumer keeps the card it had.
+
+     They arrive scoped to the REPORT, which is right while the card is
+     following it and wrong the moment it is not — see onDimsChange.
+
+     The controls are the card's, and so is what they select: they narrow the
+     LIVE figure only and never touch the report below. They start on whatever
+     the rail holds, so the card and the panels agree on load; from the first
+     one a reader moves, that dimension is the card's own until they put it
+     back. See `ov` in the body. */
+  dimOptions?: RealtimeDimOptions
+  /* ── What this card is counting, back up to whoever supplies the lists ────
+
+     The option lists come in scoped to the report's own filters. That is right
+     until the reader moves one of these three HERE, and then the lists are
+     describing a scope the count no longer has: with the franchise moved on the
+     card and the asset list still the rail's, every fixture in the competition
+     the reader just filtered away is still on offer. Picking one asks the
+     warehouse for a fixture that cannot be in that franchise — Serie A: Parma
+     vs Monza under Belgian Pro League — which is an empty intersection, so the
+     card reads 0 while the list it was picked from was still advertising rows
+     against it.
+
+     Reported so the supplier can re-list them under what is ACTUALLY being
+     counted. Must be a stable callback: it fires whenever the effective three
+     change, and a fresh identity each render would make that every render.
+
+     Absent and nothing happens — the lists stay the report's, which is the card
+     every consumer had before this. */
+  onDimsChange?: (dims: { franchiseName: string; matchDay: string; assetId: string }) => void
+  /* WHICH REPORT the card is sitting on, as the section rail keys it.
+
+     Sent so the server can read this section's own layout — the live card's
+     platform list is configured per report and per client on the same Report
+     Configuration row as its width and its title, and without this the server
+     has no way to know which of a client's reports is asking. Absent and
+     nothing is folded, which is the card every consumer had before. */
+  platformKey?: string
   className?: string
   /* PINNING — the card holding its place while the report scrolls under it.
      Live counts are the reason to leave this screen open, and unpinned they are
@@ -469,13 +970,114 @@ export default function RealtimeCard({
      all, which is how every other consumer keeps the card it already had. */
   pinned?: boolean
   onTogglePin?: () => void
+  /* WHAT THIS CARD IS CALLED, and what a reader is told about it before they
+     read the number — both set per platform and per client in Report
+     Configuration → Page Layout, where the strip is a panel like every chart
+     under it. See panelRealtime in go-server/handlers/reportlayout.go.
+
+     `desc` is ADDED to the card's own note, not swapped in for it. That note is
+     rebuilt from every reading — the season it covered, what it was narrowed to,
+     which platform failed to answer and so why the total is a floor — and none
+     of that is knowable to whoever wrote a description months ago. Replacing it
+     would trade a live caveat for fixed prose, which is the one exchange a card
+     like this must never make. So the admin's paragraph goes FIRST, where it is
+     read first, and the live note follows it. */
+  title?: string
+  desc?: string
 }) {
   const [data, setData]   = useState<Payload | null>(null)
   const [err, setErr]     = useState('')
   const [live, setLive]   = useState(true)
 
+  /* Whether a reading the READER asked for is in flight.
+
+     The card re-read in silence. Move a slicer and the previous numbers sat
+     there — correct-looking, correctly captioned, still answering the question
+     before last — until the new ones swapped in under a total that animates
+     between the two anyway. With three pickers on the card that is not a
+     nicety: the one thing somebody needs the instant they change a filter is to
+     know the figure in front of them is not yet the answer.
+
+     Only for reads somebody asked for. The thirty-second heartbeat passes
+     `quiet` — a spinner that reappears on its own twice a minute is noise, and
+     it also makes the one that matters indistinguishable from it. */
+  const [busy, setBusy] = useState(false)
+
+  /* The rolling window this card is asking for, in hours. Zero — and no control
+     drawn — where the caller offered no options, which leaves the window
+     entirely to the endpoint, exactly as it was for every consumer before this
+     existed.
+
+     The CARD's state, not the page's. It is a property of how somebody is
+     reading this one strip, like the pause button and the pin beside it. In the
+     page's filter state it would be a report setting, which is a different
+     thing — one that would want saving with the layout and carrying in a URL,
+     and that would put the live card's window in the same box as the slicers it
+     deliberately does not obey. */
+  const [hours, setHours] = useState(windowOptions?.[0] ?? 0)
+
+  /* ── What the card's own slicers have been moved to ──────────────────────
+
+     Overrides, NOT values. A key that is absent means "follow the report", and
+     a key that is present means the reader set this one on the card — including
+     when they set it back to All, which is a deliberate choice and not the same
+     as never having touched it.
+
+     That distinction is the whole design. Holding the three as plain values
+     seeded from the props would freeze them at whatever the rail held on the
+     render the card mounted: pick a franchise in the rail afterwards and the
+     card would sit there counting the old one, with two controls on screen
+     disagreeing and no way to tell which had won. Held as overrides, an
+     untouched dimension tracks the rail for as long as it is untouched, and a
+     touched one stays where it was put until "match the report" clears it. */
+  const [ov, setOv] = useState<Partial<Record<'franchiseName' | 'matchDay' | 'assetId', string>>>({})
+  const setDim = (k: 'franchiseName' | 'matchDay' | 'assetId', v: string) =>
+    setOv(o => ({ ...o, [k]: v }))
+  const overridden = Object.keys(ov).length > 0
+
+  /* The three as the count will actually use them: the card's own where it has
+     one, the report's otherwise. */
+  const effFranchise = ov.franchiseName ?? franchise ?? ''
+  const effMatchDay = ov.matchDay ?? matchDay ?? ''
+
+  /* The asset is two values — an id to filter by and a name to caption with —
+     so the override has to produce both or the card would count one fixture and
+     name another. Resolved out of the same option list the picker is drawn
+     from, which is the rail's, so the name on the card is the name in the rail.
+
+     `undefined` in `ov` is the untouched case and falls back to the props,
+     which is exactly what the page has always passed. */
+  const effAssetIds = ov.assetId === undefined
+    ? (assetIds ?? [])
+    : (ov.assetId ? [ov.assetId] : [])
+  const effAssetNames = ov.assetId === undefined
+    ? (assetNames ?? [])
+    : (dimOptions?.assetId?.find(o => o.key === ov.assetId)?.label
+        ? [dimOptions.assetId.find(o => o.key === ov.assetId)!.label]
+        : [])
+
+  // The rail filters to one asset at a time; the card's picker likewise.
+  const effAssetId = effAssetIds[0] ?? ''
+
+  /* The three, back to whoever supplies the option lists — see onDimsChange.
+     The EFFECTIVE ones, which is the whole point: the lists have to describe
+     the scope the count has, not the one the report has. */
+  useEffect(() => {
+    onDimsChange?.({ franchiseName: effFranchise, matchDay: effMatchDay, assetId: effAssetId })
+  }, [effFranchise, effMatchDay, effAssetId, onDimsChange])
+
   // Held across refreshes so a failed one can leave the last good numbers up.
   const lastGood = useRef<Payload | null>(null)
+
+  /* Which read is the current one.
+
+     Two can be in flight at once — a slicer moved while the previous answer was
+     still coming, or the heartbeat firing into a read somebody asked for — and
+     nothing stopped the SLOWER of them landing last. Move from a big franchise
+     to a small one quickly and the card settled on the big one's count, under
+     the small one's name, and stayed there until the next refresh happened to
+     put it right. Numbered, so only the newest answer may write. */
+  const run = useRef(0)
 
   /* The asset scope as ONE string.
 
@@ -483,20 +1085,52 @@ export default function RealtimeCard({
      render — as an effect dependency that is an endless refetch loop, one
      request per render. Joined, the effect re-runs only when the selection
      actually changes. */
-  const assetKey = [...(assetIds ?? []), ...(assetNames ?? [])].join(' ')
+  /* The EFFECTIVE assets, so a fixture picked on the card re-reads exactly as
+     one picked in the rail does. */
+  const assetKey = [...effAssetIds, ...effAssetNames].join(' ')
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (quiet = false) => {
+    // Nothing to count yet — see waitingFor. Returning here is what keeps the
+    // frame on screen without an error in it.
+    if (waitingFor) return
+    const seq = ++run.current
+    // Before the await, so the very first paint after a picker moves already
+    // says so — not the one after the request has been built.
+    if (!quiet) setBusy(true)
     try {
       const qs = new URLSearchParams()
       // Repeated rather than comma-joined: an asset name may contain a comma,
       // and the server splits on one.
-      for (const a of assetNames ?? []) qs.append('assetName', a)
+      for (const a of effAssetNames) qs.append('assetName', a)
 
       let path: string
       if (source === 'markscan') {
         path = '/api/warroom/realtime'
-        if (startDate) qs.set('startDate', startDate)
-        if (endDate) qs.set('endDate', endDate)
+        /*
+          The card's own window, expressed as DATES.
+
+          The warehouse endpoint takes lastHours; MarkScan's does not — it filters
+          on a start and end date, so a rolling window has to be turned into one.
+          That makes the granularity a whole DAY: "24 hours" is today's date
+          window, not the trailing 24 hours to the minute. The caption on the card
+          says which window it is showing, which is what stops the difference
+          being invisible.
+
+          Worth stating plainly: with its own window the card no longer matches
+          the platform strip below it, which covers the report's range. That was
+          deliberate in the other direction once — the card exists partly so the
+          two agree — but a live card whose default is a 30-day report window is
+          not a live card. It says "in the last 24 hours" beside the number, and
+          the reader can widen it to the report's range.
+        */
+        const w = windowDates(hours)
+        if (w) {
+          qs.set('startDate', w.start)
+          qs.set('endDate', w.end)
+        } else {
+          if (startDate) qs.set('startDate', startDate)
+          if (endDate) qs.set('endDate', endDate)
+        }
         // Staff viewing a client's War Room: the same field the report sends,
         // so both resolve the same MarkScan token.
         if (userId) qs.set('clientUserId', String(userId))
@@ -504,7 +1138,7 @@ export default function RealtimeCard({
         path = `/api/realtime/${view}`
         if (clientId) qs.set('clientId', clientId)
         if (userId) qs.set('userId', String(userId))
-        for (const a of assetIds ?? []) qs.append('assetId', a)
+        for (const a of effAssetIds) qs.append('assetId', a)
         /* The window the report is showing. Without it the service was asked
            for every row it holds and answered 504 — see the note on
            scopeFromRequest. */
@@ -512,18 +1146,45 @@ export default function RealtimeCard({
         if (endDate) qs.set('to', endDate)
         // Under the same names the report's own slicers use, so one vocabulary
         // covers the panels and the card.
-        if (franchise) qs.set('franchiseName', franchise)
-        if (matchDay) qs.set('matchDay', matchDay)
+        if (effFranchise) qs.set('franchiseName', effFranchise)
+        if (effMatchDay) qs.set('matchDay', effMatchDay)
+        /* And the rolling window, which REPLACES the dates above rather than
+           narrowing them — see scopeFromRequest in realtime.go. Sent only where
+           the caller offered the control, so nothing that did not opt in has
+           its window moved underneath it. */
+        if (hours > 0) qs.set('lastHours', String(hours))
+        // Which report this is, so the server reads this section's own platform
+        // configuration — see realtimeRollupFor.
+        if (platformKey) qs.set('platformKey', platformKey)
       }
 
       const r = await fetch(`${path}?${qs}`, { credentials: 'include' })
       const j = await r.json()
+      // Superseded while this was in the air. Dropped rather than drawn: it is
+      // an answer to a question nobody is asking any more.
+      if (seq !== run.current) return
       if (!j.ok && !j.success) throw new Error(j.error || 'Could not read the live counts')
       setData(j); lastGood.current = j; setErr('')
     } catch (e: any) {
+      // Same rule for the failure. A superseded read that failed must not put
+      // an error over numbers the read after it is about to replace anyway.
+      if (seq !== run.current) return
       setErr(e?.message || 'Network error')
+    } finally {
+      /* Cleared by whichever read is the LATEST when it finishes — not only by
+         the one that raised it. A heartbeat that supersedes a reader's read
+         would otherwise leave the indicator up with nothing left to clear it.
+
+         In `finally`, because a read that failed still finished, and a card
+         left marked busy would hide the error behind a signal that never
+         stops. */
+      if (seq === run.current) setBusy(false)
     }
-  }, [view, source, clientId, userId, assetKey, startDate, endDate, franchise, matchDay])
+    /* The EFFECTIVE dimensions, not the props. A slicer moved on the card has
+       to re-read, and one moved in the rail has to re-read too — unless the
+       card has taken that dimension over, which is what `ov` decides. Listing
+       the props here would leave the card's own controls inert. */
+  }, [view, source, clientId, userId, assetKey, startDate, endDate, effFranchise, effMatchDay, hours, platformKey, waitingFor])
 
   useEffect(() => { load() }, [load])
 
@@ -531,16 +1192,19 @@ export default function RealtimeCard({
      overnight would otherwise run twelve hundred counts against the warehouse
      that nobody was ever going to read. */
   useEffect(() => {
-    if (!live) return
+    // Not while waiting: a timer firing a call that returns immediately is
+    // harmless, but it also never stops, and the card would keep a thirty-second
+    // heartbeat going for a scope that does not exist.
+    if (!live || waitingFor) return
     let timer: ReturnType<typeof setInterval> | null = null
-    const start = () => { timer ??= setInterval(load, REFRESH_MS[source] ?? 60_000) }
+    const start = () => { timer ??= setInterval(() => load(true), REFRESH_MS[source] ?? 60_000) }
     const stop  = () => { if (timer) { clearInterval(timer); timer = null } }
-    const onVis = () => (document.visibilityState === 'visible' ? (load(), start()) : stop())
+    const onVis = () => (document.visibilityState === 'visible' ? (load(true), start()) : stop())
 
     if (document.visibilityState === 'visible') start()
     document.addEventListener('visibilitychange', onVis)
     return () => { stop(); document.removeEventListener('visibilitychange', onVis) }
-  }, [live, load, source])
+  }, [live, load, source, waitingFor])
 
   const shown = data ?? lastGood.current
   const stale = !!err && !!shown
@@ -559,22 +1223,54 @@ export default function RealtimeCard({
      raw "context deadline exceeded" was true and unreadable; this says what to
      expect. Once any reading has landed the normal stale path takes over and
      the last good numbers stay on screen. */
+  /*
+    Waiting for a scope. FIRST of the early returns, because it is the only one
+    that is not a failure — the card has not been asked to count anything yet,
+    so an error or a skeleton would both be describing something that has not
+    happened.
+
+    The window control still draws. It is the reader's, not the report's, and
+    setting it before the scope arrives is a perfectly ordinary thing to do.
+  */
+  if (waitingFor) {
+    return (
+      <div className={`min-w-0 bg-white dark:bg-[#1a2d55] rounded-2xl shadow-card border border-gray-100 dark:border-white/10 p-5 ${className}`}>
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="font-bold text-[#14254A] dark:text-white">{title}</h3>
+          <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5
+            rounded bg-gray-100 dark:bg-white/10 text-gray-400 dark:text-white/40">Live</span>
+        </div>
+        <p className="text-xs text-gray-500 dark:text-white/50 mt-1.5">{waitingFor}</p>
+        {windowOptions && windowOptions.length > 1 && (
+          <WindowPicker options={windowOptions} value={hours} onChange={setHours} className="mt-3" />
+        )}
+      </div>
+    )
+  }
+
   const counting = !shown && /deadline|timeout|timed out/i.test(err)
   if (counting) {
     return (
       <div className={`min-w-0 bg-white dark:bg-[#1a2d55] rounded-2xl shadow-card border border-gray-100 dark:border-white/10 p-5 ${className}`}>
-        <h3 className="font-bold text-[#14254A] dark:text-white">Realtime</h3>
+        <h3 className="font-bold text-[#14254A] dark:text-white">{title}</h3>
         <p className="text-xs text-gray-500 dark:text-white/50 mt-1">
-          Still counting — this client&rsquo;s all-time total takes a while the first time.
+          Still counting — the first reading for this client takes a while.
           It will appear here and then refresh on its own.
         </p>
+        {/* The control stays reachable while it counts. A window that timed out
+            is the ONE moment a reader most wants a narrower one, and hiding the
+            buttons behind the reading leaves them waiting on the very query
+            they would have cancelled. */}
+        {windowOptions && windowOptions.length > 1 && (
+          <WindowPicker options={windowOptions} value={hours} onChange={setHours} className="mt-3" />
+        )}
       </div>
     )
   }
   if (!shown && err) {
     return (
       <div className={`bg-white dark:bg-[#1a2d55] rounded-2xl shadow-card border border-gray-100 dark:border-white/10 p-6 ${className}`}>
-        <h3 className="font-bold text-[#14254A] dark:text-white">Realtime</h3>
+        <h3 className="font-bold text-[#14254A] dark:text-white">{title}</h3>
         <p className="text-xs text-red-600 mt-2">{err}</p>
       </div>
     )
@@ -582,7 +1278,7 @@ export default function RealtimeCard({
   if (!shown) {
     return (
       <div className={`bg-white dark:bg-[#1a2d55] rounded-2xl shadow-card border border-gray-100 dark:border-white/10 p-6 ${className}`}>
-        <h3 className="font-bold text-[#14254A] dark:text-white">Realtime</h3>
+        <h3 className="font-bold text-[#14254A] dark:text-white">{title}</h3>
         {/* Sized like the loaded strip, so the page does not jump when the
             first reading lands. */}
         <div className="mt-3 flex flex-col lg:flex-row gap-6 animate-pulse">
@@ -656,8 +1352,122 @@ export default function RealtimeCard({
     ? Math.round(((shown.totalRemoved ?? 0) / shown.total) * 100)
     : null
 
+  /* ── What the strip along the bottom says the count was narrowed by ────────
+
+     The rail's chips with the card's own three folded in.
+
+     Passed straight through, the strip described the REPORT while the pickers a
+     few lines above it described the COUNT — pick a franchise on the card and
+     the line underneath still read "No filters · counting every asset for this
+     client — pick one in the rail", directly below the control that had just
+     been used and about a number that was no longer the whole client's.
+
+     So for the three dimensions the card can take over, what is named here is
+     what was actually counted: marked as set on the card, and carrying the
+     report's own value in the tooltip where the two have parted. A dimension
+     the reader CLEARED here keeps the rail's chip, struck through — from the
+     number's point of view that is exactly what a filter the count does not
+     honour looks like. */
+  const scopeItems: ScopeItem[] | undefined = scopeFilters && (() => {
+    const owned = {
+      franchiseName: effFranchise,
+      matchDay: effMatchDay,
+      assetId: effAssetId,
+    }
+    const fallbackLabel: Record<keyof typeof owned, string> = {
+      franchiseName: 'Franchise', matchDay: 'Match Day', assetId: 'Asset',
+    }
+    /* The asset is an id, so it is captioned by the NAME the picker resolved —
+       never the GUID. The other two are already names. */
+    const display = (k: keyof typeof owned, v: string) =>
+      (k === 'assetId' ? effAssetNames[0] : undefined)
+        ?? dimOptions?.[k]?.find(o => o.key === v)?.label
+        ?? v
+
+    const mine: ScopeItem[] = []
+    for (const k of ['franchiseName', 'matchDay', 'assetId'] as const) {
+      const rail = scopeFilters.find(i => i.key === k)
+      const v = owned[k]
+      if (v) {
+        const value = display(k, v)
+        mine.push({
+          key: k,
+          label: rail?.label ?? fallbackLabel[k],
+          value,
+          applied: true,
+          onCard: ov[k] !== undefined,
+          reportValue: rail && rail.value !== value ? rail.value : undefined,
+        })
+      } else if (rail) {
+        mine.push({ ...rail, applied: false, onCard: ov[k] !== undefined })
+      }
+    }
+    // The three first, then everything the rail carries that the card cannot
+    // count — the order the reader reads them in is applied, then not.
+    return [...mine, ...scopeFilters.filter(i => !(i.key in owned))]
+  })()
+
+  /* The slicers the caller actually has options for. A control with nothing in
+     it but "All" cannot be used, and three of them would be a bar across the
+     foot of the card that does nothing. Built as a list so the bar can ask
+     whether there are any before it draws a border. */
+  const pickers = dimOptions ? [
+    dimOptions.franchiseName?.length ? (
+      <DimPicker key="franchiseName" label="Franchise" value={effFranchise}
+        options={dimOptions.franchiseName}
+        overridden={ov.franchiseName !== undefined}
+        onChange={v => setDim('franchiseName', v)} />
+    ) : null,
+    dimOptions.matchDay?.length ? (
+      <DimPicker key="matchDay" label="Match Day" value={effMatchDay}
+        options={dimOptions.matchDay}
+        overridden={ov.matchDay !== undefined}
+        onChange={v => setDim('matchDay', v)} />
+    ) : null,
+    dimOptions.assetId?.length ? (
+      <DimPicker key="assetId" label="Asset" value={effAssetId}
+        options={dimOptions.assetId}
+        overridden={ov.assetId !== undefined}
+        onChange={v => setDim('assetId', v)} />
+    ) : null,
+  ].filter(Boolean) : []
+
+  /* What the strip under the bar still has to say.
+
+     With the three controls now sitting at the foot of the card showing their
+     own values, a chip repeating "Franchise: Serie A" a few pixels under the
+     dropdown that reads "Serie A" is the same fact printed twice. So where
+     there are controls, the strip drops what they ALREADY SAY and keeps only
+     what they cannot: a filter the live tables carry no column for, and one
+     the reader cleared here while the report below is still narrowed by it.
+     Nothing left to say and there is no strip at all.
+
+     Where there are NO controls — the War Room passes no options — it keeps
+     the whole list, because then the strip is the only thing on the card that
+     names the scope. */
+  const stripItems = scopeItems && (pickers.length > 0
+    ? scopeItems.filter(i => !i.applied)
+    : scopeItems)
+
   return (
-    <div className={`bg-white dark:bg-[#1a2d55] rounded-2xl shadow-card border border-gray-100 dark:border-white/10 ${className}`}>
+    <div aria-busy={busy}
+      className={`relative bg-white dark:bg-[#1a2d55] rounded-2xl shadow-card border border-gray-100 dark:border-white/10 ${className}`}>
+      {/* ── The read in flight ──────────────────────────────────────────────
+
+          A sweep along the top edge of the WHOLE card, not a spinner in the
+          corner of the column that changed. Both columns are re-read by one
+          request and both are about to move, so marking one of them would be
+          saying the other had settled.
+
+          Indeterminate on purpose. The count reports no progress, and a bar
+          that fills would be inventing one. */}
+      {busy && (
+        <div className="absolute inset-x-0 top-0 h-0.5 z-10 overflow-hidden rounded-t-2xl
+          bg-[#FC934C]/20 pointer-events-none">
+          <div className="h-full w-1/3 rounded-full bg-[#FC934C] sweep" />
+        </div>
+      )}
+
       {/* ── The strip ────────────────────────────────────────────────────────
           Horizontal, not a column. As a narrow card this was three inches wide
           and thirteen rows tall next to an empty half-screen — it pushed the
@@ -674,17 +1484,36 @@ export default function RealtimeCard({
                 three ways this figure differs from the tiles below it are not
                 guessable from anything on screen — see scopeNote. */}
             <h3 className="font-bold text-[#14254A] dark:text-white leading-tight flex items-center gap-1.5">
-              Realtime
-              <InfoDot text={scopeNote(shown, REFRESH_MS[source] ?? 60_000)} />
+              {title}
+              {/* The admin's note first, the card's own note under it —
+                  see `desc` above for why this is an addition and not a
+                  substitution. */}
+              <InfoDot text={[desc, scopeNote(shown, REFRESH_MS[source] ?? 60_000)]
+                .filter(Boolean).join('\n\n')} />
             </h3>
             <span className="flex items-center gap-1.5 flex-shrink-0">
-              <RelativeTime iso={shown.asOf} stale={stale} />
+              {/* While a read the reader asked for is in flight, how old the
+                  reading on screen is happens to be the one fact that misleads:
+                  "just now" over numbers that answer the PREVIOUS filter is the
+                  sentence that made the swap invisible. */}
+              {busy
+                ? <span className="inline-flex items-center gap-1 flex-shrink-0 text-[10px]
+                    font-semibold uppercase tracking-wide text-[#FC934C]">
+                    <span className="w-2.5 h-2.5 rounded-full border-[1.5px] border-current
+                      border-r-transparent animate-spin" />
+                    Updating
+                  </span>
+                : <RelativeTime iso={shown.asOf} stale={stale} />}
               {onTogglePin && (
                 /* Filled and brand-coloured when pinned, hollow and grey when
                    not — the state has to be readable from the icon itself,
                    since the card looks the same either way until the page is
                    scrolled. */
                 <button type="button" onClick={onTogglePin}
+                  /* Dropped from a printed page — see lib/printReport. Where
+                     the card sits while the report scrolls is a fact about the
+                     screen and about nothing else. */
+                  data-print-hide=""
                   aria-pressed={!!pinned}
                   title={pinned
                     ? 'Unpin — let the card scroll away with the report'
@@ -705,7 +1534,12 @@ export default function RealtimeCard({
             </span>
           </div>
 
-          <p className={`mt-2 text-3xl font-bold tabular-nums tracking-tight leading-none transition-colors duration-500 ${
+          {/* Dimmed while it is being replaced. The total counts UP to its new
+              value, so without this the digits move for a second with nothing
+              on screen saying why — indistinguishable from the live drift the
+              card does on its own. */}
+          <p className={`mt-2 text-3xl font-bold tabular-nums tracking-tight leading-none
+            transition-[color,opacity] duration-500 ${busy ? 'opacity-40' : ''} ${
             totalBumped ? 'text-[#FC934C]' : 'text-[#14254A] dark:text-white'}`}>
             {nf.format(total)}
           </p>
@@ -730,11 +1564,15 @@ export default function RealtimeCard({
           </p>
 
           {hasRemovals && (
-            /* UNDER the identified total, not beside it.
+            /* UNDER the identified total, not beside it, and DIRECTLY under it.
 
                Side by side they read as two independent figures a reader has to
                relate themselves. Stacked, with the share bar between them, the
-               smaller number reads as what it is: a part of the one above it.
+               smaller number reads as what it is: a part of the one above it —
+               which is only true while nothing sits between them. The window
+               and the three slicers used to, so the pair the card exists to
+               show was split by half a column of controls; they are grouped
+               below now, and this is back against the figure it belongs to.
 
                Orange is removed and navy is identified throughout this product —
                the same two roles the report's own charts use — so the bar needs
@@ -767,6 +1605,22 @@ export default function RealtimeCard({
             </div>
           )}
 
+          {/* ── The window ─────────────────────────────────────────────────
+
+              The one control that stays in the column, because it belongs to
+              the figure directly above it: it decides the span that figure
+              counts, and the caption under the number names it in words. The
+              three slicers went to the foot of the card — see the bar below,
+              and the note on it for why.
+
+              Behind a rule, so the column still reads as figures first and
+              controls second rather than as one undifferentiated stack. */}
+          {windowOptions && windowOptions.length > 1 && (
+            <div className="mt-3 pt-3 border-t border-gray-100 dark:border-white/10">
+              <WindowPicker options={windowOptions} value={hours} onChange={setHours} />
+            </div>
+          )}
+
           <button
             type="button"
             onClick={() => setLive(v => !v)}
@@ -783,9 +1637,13 @@ export default function RealtimeCard({
                 <span className="absolute inline-flex w-full h-full rounded-full bg-[#FC934C] opacity-75 animate-ping" />
               )}
               <span className={`relative inline-flex w-1.5 h-1.5 rounded-full ${
-                stale ? 'bg-amber-500' : live ? 'bg-[#FC934C]' : 'bg-gray-300'}`} />
+                busy ? 'bg-[#FC934C]' : stale ? 'bg-amber-500' : live ? 'bg-[#FC934C]' : 'bg-gray-300'}`} />
             </span>
-            {stale ? 'Reconnecting' : live ? 'Updating live' : 'Paused'}
+            {/* "Updating live" is about the heartbeat and stays true while a
+                read is in flight — but it is not what is happening RIGHT NOW,
+                and the foot of the column is where a reader looks to find out.
+                It goes back to its own words the moment the reading lands. */}
+            {busy ? 'Updating…' : stale ? 'Reconnecting' : live ? 'Updating live' : 'Paused'}
           </button>
 
           {stale && (
@@ -803,7 +1661,8 @@ export default function RealtimeCard({
           )}
         </div>
 
-        <div className={`flex-1 min-w-0 px-5 py-4 ${stale ? 'opacity-60' : ''}`}>
+        <div className={`flex-1 min-w-0 px-5 py-4 transition-opacity duration-300 ${
+          stale ? 'opacity-60' : busy ? 'opacity-40' : ''}`}>
           {platforms.length === 0 ? (
             /* Nothing to draw, for one of two very different reasons. "Nothing
                found yet" is a report about the window; "no platforms are
@@ -913,10 +1772,13 @@ export default function RealtimeCard({
               `title`. Quiet, bottom right, and complete on hover. */}
           {(() => {
             const bits = scopeBits({
-              assetNames,
+              /* The EFFECTIVE three. The caption names what was counted, and
+                 once a slicer has been moved on the card the props are what the
+                 report below is showing rather than what this figure is. */
+              assetNames: effAssetNames,
               assets: shown.assets,
-              franchise,
-              matchDay,
+              franchise: effFranchise || undefined,
+              matchDay: effMatchDay || undefined,
               /* The reading's OWN dates, not the props'. On a sports report the
                  card is scoped to the configured season and the props carry the
                  picker's range, so printing the props would caption the figure
@@ -924,6 +1786,10 @@ export default function RealtimeCard({
               startDate: shown.startDate,
               endDate: shown.endDate,
               scope: shown.scope,
+              // Same rule, same reason: the window the reading COVERS, not the
+              // one the buttons are currently set to. A click re-reads, and for
+              // that half-second the two disagree.
+              windowHours: shown.windowHours,
             })
             if (bits.length === 0) return null
             const full = bits.join(' · ')
@@ -939,6 +1805,55 @@ export default function RealtimeCard({
           })()}
         </div>
       </div>
+
+      {/* ── What the filter rail holds, along the bottom ─────────────────────
+          Under BOTH columns rather than in either, because it qualifies both:
+          the headline total and every platform bar beside it were counted under
+          exactly these filters. In the left column it would read as a footnote
+          to the number; in the right, as one to the grid.
+
+          Only where the caller passes the list. Every consumer that had this
+          card before passes nothing and keeps the card it had. */}
+      {/* ── The card's own three slicers, across the foot ────────────────────
+
+          Under BOTH columns, not inside the left one.
+
+          They were stacked down the headline column, which is 256px wide and
+          already carrying a 3xl figure, its caption, the removed half, its
+          share bar and the window. Three labelled dropdowns under all of that
+          made the column half again as tall as the platform grid beside it, so
+          the card grew a foot of empty space to the right of the numbers and
+          the strip stopped being a strip.
+
+          Along the bottom they run left to right in the width the card actually
+          has, they read as one filter bar rather than as three more rows of a
+          column, and each control gets 160px instead of 120 — which is the
+          difference between reading a fixture name and reading the first two
+          words of one.
+
+          Below the platform grid rather than above it because they qualify
+          BOTH halves: the headline total and every bar beside it were counted
+          under exactly these. */}
+      {pickers.length > 0 && (
+        <div className="px-5 py-3 border-t border-gray-100 dark:border-white/10
+          flex flex-wrap items-center gap-x-6 gap-y-2.5">
+          {pickers}
+          {/* Offered only once something has been moved, and it is the ONE way
+              back. Without it a reader who has narrowed the card by hand has no
+              way to tell it to follow the report again short of guessing which
+              values the rail holds — and the card would quietly keep answering
+              about a different fixture for the rest of the session. */}
+          {overridden && (
+            <button type="button" onClick={() => setOv({})}
+              title="Drop the filters set here and follow the report's own again"
+              className="text-[10px] font-semibold text-[#FC934C] hover:underline">
+              match the report
+            </button>
+          )}
+        </div>
+      )}
+
+      {stripItems && stripItems.length > 0 && <ScopeStrip items={stripItems} />}
     </div>
   )
 }

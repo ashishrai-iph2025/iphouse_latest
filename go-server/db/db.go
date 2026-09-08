@@ -365,6 +365,19 @@ func Migrate() {
 		"{{user_name}},{{platform}},{{asset_name}},{{start_date}},{{end_date}},{{date_range}},{{date}}",
 		10)
 
+	/* The asset-protection pair. Seeded for the reason above and one more: this
+	   feature has no other output. A protection request changes nothing in
+	   mediascan — the emails ARE the process — so an admin who cannot edit their
+	   wording cannot change how the request reads to the client receiving it. */
+	seedEmailEventType("asset_protection_client", "Asset Protection Request (client)",
+		"Sent to the client account contact when one of their users asks for a title's protection to be started or stopped.",
+		"{{client_name}},{{name}},{{asset_name}},{{action}},{{request_action}},{{note}},{{requested_by}},{{date}}",
+		11)
+	seedEmailEventType("asset_protection_user", "Asset Protection Request (requester)",
+		"The receipt sent to the person who raised an asset protection request.",
+		"{{user_name}},{{name}},{{asset_name}},{{action}},{{request_action}},{{note}},{{date}}",
+		12)
+
 	// Admin-configurable dropdown sub-items for a nav module. Each row is a child
 	// link under a parent module (keyed by the parent's pageName). The href must
 	// be an existing client route — validated server-side on write.

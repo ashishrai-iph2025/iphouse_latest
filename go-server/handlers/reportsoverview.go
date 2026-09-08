@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	ipauth "github.com/ip-house/iphouse-api/auth"
 	"github.com/ip-house/iphouse-api/reportsapi"
 )
 
@@ -54,70 +53,42 @@ a caller-supplied string being concatenated into a URL, so unvalidated it is a
 way to address any route on the analytics service; matched against the catalog it
 can only ever be a dataset the service already publishes.
 */
-/* The dataset the landing page is drawn from.
-
-   `urls` because that is the registry entry whose measures the page actually
-   reads: identified, removed, googleDelisted, bingDelisted, delisted,
-   delistingBatches, domains, assets. /v1/overview will answer for any dataset
-   in the registry, so the wrong key here does not fail — it returns a payload
-   whose measures the page finds nothing under and draws as em-dashes. */
-const defaultOverviewDataset = "urls"
-
 /*
-fallbackOverviewDataset is what a client with NO SPORTS REPORT is shown.
+The dataset the landing page is drawn from.
 
-The default above reads the sports URL table, which is the right source for a
-sports client and empty for everyone else — so a VOD client opened /welcome and
-was told "Nothing new was found this week" for a week in which plenty had been
-found. The page was reading the one table their reports do not use.
-
-`unified` is dashboards.Unified_BI_Dashboard: every platform in one row set —
-search engines, Open Web, YouTube, Telegram and social. It declares identified,
-removed, domains and assets, which are four of the five tiles this page draws,
-and the endpoint derives removalRatePct from the first two.
+`unified` is dashboards.Unified_BI_Dashboard: every platform in one row set. It
+declares identified, removed, domains and assets — four of the five tiles this
+page draws — and the endpoint derives removalRatePct from the first two.
 
 It does NOT declare `delisted`, and that is deliberate upstream rather than a
 gap: the unified table records Google and Bing separately, and a URL dropped by
 both engines is one delisted URL, so the pair cannot be added. The page already
-draws that card only when the figure is present, so it is absent here instead of
+draws that card only when the figure is present, so it is absent rather than
 wrong.
+
+── Why there is no longer a second dataset, chosen per login ────────────────
+
+	There were two. A login holding any SPORTS report read `urls`, the sports URL
+	table; everybody else read `unified`. The intent was that a sports client
+	should see sports figures, and the mechanism was the login's report
+	allow-list.
+
+	An allow-list is PER LOGIN, and the client's data is not. So the landing page
+	answered differently for two people at the same company: on staging,
+	`prerna.kumari@ip-house.com` at Netflix Inc holds only the five sports report
+	keys, so that login's landing page read the sports table — empty for a VOD
+	catalogue — and reported "Nothing new was found this week", while every other
+	Netflix login read `unified` and saw the real figures for the same week.
+
+	A page cannot say two things about one company's week and be right. The
+	source is now the client's REPORTS, for everyone, which is what the figure
+	claims to be: "here is what happened this week", not "here is what happened
+	this week in the tables your account happens to be allowed to open".
+
+	An explicit `?dataset=` still wins, so a caller that genuinely wants the
+	sports table can still ask for it by name.
 */
-const fallbackOverviewDataset = "unified"
-
-/*
-hasSportsReport reports whether this login can open a sports report at all.
-
-The same two questions ReportsSections asks of every platform — is it enabled,
-and is it inside this login's allow-list — so the answer cannot disagree with
-what the reader actually has in their navigation. A client whose Report
-Configuration grants them Open Web Sports gets the sports overview; one granted
-only the VOD platforms does not.
-
-The allow-list is the LOGIN's, and on this page that is the client's: /welcome is
-a client route, and an admin viewing a client portal is doing so through an
-impersonated session whose claims are that client's. There is no staff-picks-a-
-client case here for it to get wrong.
-
-Assignment, not data. A client who holds a sports report and had a quiet week
-still sees the sports figures — an empty week in their own report is a true
-answer, and probing for rows to decide which table to read would make the page's
-source depend on how the week went.
-*/
-func hasSportsReport(claims *ipauth.Claims) bool {
-	allowed := reportsAllowedForClaims(claims)
-	for _, p := range loadPlatforms() {
-		if !p.Enabled || p.Key == summaryKey {
-			continue
-		}
-		if allowed != nil && !allowed[p.Key] {
-			continue
-		}
-		if isSportsPlatform(p) {
-			return true
-		}
-	}
-	return false
-}
+const defaultOverviewDataset = "unified"
 
 /*
 Where the endpoint lives. A constant so the one fact this file is most likely
@@ -168,14 +139,7 @@ func ReportsOverview(w http.ResponseWriter, r *http.Request) {
 	*/
 	ds := strings.TrimSpace(r.URL.Query().Get("dataset"))
 	if ds == "" {
-		/* The sports table for a sports client, the unified one for everybody
-		   else — see fallbackOverviewDataset. An explicit ?dataset= still wins,
-		   so this only decides what an unqualified request means. */
-		if hasSportsReport(claims) {
-			ds = defaultOverviewDataset
-		} else {
-			ds = fallbackOverviewDataset
-		}
+		ds = defaultOverviewDataset
 	}
 	/* Shape-checked, not membership-checked.
 

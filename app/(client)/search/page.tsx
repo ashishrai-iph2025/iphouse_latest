@@ -21,7 +21,9 @@ const INTERNET_FIELDS: [string, string[]][] = [
   ['Infringement Type', ['infringementType',     'InfringementType']],
   ['Quality of Print',  ['qualityOfPrint',       'QualityOfPrint']],
   ['Country',           ['country',              'Country']],
-  ['Upload Date',       ['urlUploadDate',        'URLUploadDate']],
+  /* URLUploadDate is the date the CRAWLER found this URL, not a date the
+     infringer uploaded anything — see the note above EXTRA_LABELS. */
+  ['Identification Date', ['urlUploadDate',      'URLUploadDate']],
   ['Removal Status',    ['removalStatus',        'RemovalStatus']],
   ['Removal Time',      ['removalTime',          'removed_at']],
   ['De-Indexed Status', ['delistingremovalstatus']],
@@ -50,7 +52,18 @@ const SOCIAL_FIELDS: [string, string[]][] = [
   ['Infringement Type', ['infringementType','InfringementType']],
   ['Quality of Print',  ['qualityOfPrint',  'QualityOfPrint']],
   ['Removal Status',    ['removalStatus',   'RemovalStatus']],
-  ['Upload Date',       ['uploadDate',      'UploadDate',      'urlUploadDate']],
+  /* TWO fields, two names. This row read
+         ['Upload Date', ['uploadDate', 'UploadDate', 'urlUploadDate']]
+     which put ONE label on two different dates — so a record carrying both drew
+     two cards side by side, each headed "Upload date", with different times in
+     them and nothing to say which was which. That is the pair in the screenshot
+     this was reported from.
+
+     `uploadDate` is the platform's own posting date. `urlUploadDate` is when we
+     identified it. Naming them apart is the fix; naming them the same was the
+     bug. */
+  ['Upload Date',         ['uploadDate',      'UploadDate']],
+  ['Identification Date', ['urlUploadDate',   'URLUploadDate']],
 ]
 
 function pick(obj: any, keys: string[]): string {
@@ -76,8 +89,19 @@ function pick(obj: any, keys: string[]): string {
    here named are grouped with the rest rather than dumped underneath them. */
 
 /** Run-on and abbreviated keys whose humanised form would be unreadable. */
+/*
+Names for keys the tables above do not carry, and overrides for the ones whose
+raw name misleads.
+
+URLUploadDate is the latter. Humanised it reads "URL Upload Date", which sounds
+like the moment the infringer posted the URL — it is the moment WE recorded it.
+Every platform in this module reports it, so the override lives here as well as
+in the two tables above: a key that reaches `humanise` without passing through a
+table would otherwise still say "upload".
+*/
 const EXTRA_LABELS: Record<string, string> = {
   id:                     'Record ID',
+  urluploaddate:          'Identification Date',
   delistingremovalstatus: 'De-Indexed Status',
   dmcaremovalstatus:      'DMCA Status',
   subscrbers:             'Subscriber Count',
@@ -86,6 +110,41 @@ const EXTRA_LABELS: Record<string, string> = {
   language1:              'Language',
   tat:                    'TAT (Days)',
 }
+
+/*
+── Fields this screen does not show ─────────────────────────────────────────
+
+Pipeline state, not facts about the infringement. Each of these answers a
+question about how OUR system handled the row — whether it was enforced, why it
+was not, whether it matched a whitelist, whether it was flagged as a mismatch —
+and a reader looking up a URL can act on none of it.
+
+`currentStatusName` goes with them, and it is the one worth a sentence: it is a
+workflow state ("Facebook Removal"), which sits on this screen next to
+`removalStatus` ("DEAD") saying almost-but-not-quite the same thing in our
+vocabulary rather than the reader's. Two status fields disagreeing in wording is
+worse than one.
+
+MATCHED ON THE KEY, loosely, because the same field arrives spelled differently
+per platform — IsInvalid, isInvalid and IsInvalidURL are all the same flag from
+three endpoints. Case-insensitive and prefix-tolerant for that reason.
+
+This is ADDITIVE to the shared isHiddenField rule, never a replacement — see
+RecordDetail's `hideField`. Nothing here can un-hide an operator name.
+*/
+const SEARCH_HIDDEN = [
+  /^is_?enforced$/i,
+  /^reason_?not_?enforced$/i,
+  /^is_?client_?shared$/i,
+  /^is_?invalid(url)?$/i,
+  /^is_?mismatch(ed)?$/i,
+  /^is_?roe_?not_?matched$/i,
+  /^(is_?)?white_?list_?matched$/i,
+  /^current_?status_?name$/i,
+]
+
+/** Whether THIS screen drops a field the shared rule would have kept. */
+const isSearchHidden = (key: string) => SEARCH_HIDDEN.some(re => re.test(key))
 
 /** Tokens that are abbreviations, not words, once a key is split up. */
 const ACRONYMS: Record<string, string> = {
@@ -279,7 +338,8 @@ export default function SearchPage() {
   /* Counted the same way RecordDetail draws them, so the header's number is the
      number of cards below it rather than a count of raw JSON keys. */
   const fieldCount = result
-    ? Object.keys(result).filter(k => !isHiddenField(k) && !isEclipsed(k, result)).length
+    ? Object.keys(result).filter(k =>
+        !isHiddenField(k) && !isSearchHidden(k) && !isEclipsed(k, result)).length
     : 0
   const foundPlatform = result ? platformLabel(pick(result, ['platform', 'Platform']) || matched) : ''
 
@@ -461,6 +521,7 @@ export default function SearchPage() {
               </div>
 
               <RecordDetail row={result} openWeb={openWeb} labelFor={labelFor}
+                hideField={isSearchHidden}
                 onPreview={setPreview} />
             </>
           )}

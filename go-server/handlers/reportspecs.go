@@ -94,6 +94,20 @@ type reportSpec struct {
 	AssetNameCol     string // ditto for assets
 	JoinClientMaster bool   // resolve client names via mediascan.ClientMaster
 	JoinAssetMaster  bool   // resolve asset names via mediascan.Asset
+
+	/* This report is about SPORT and its table is not.
+
+	   True for a sports platform reading an all-genre source — Mobile Apps is
+	   the one, and the only one, because every other sports report reads a
+	   Sports* table that is already narrowed by whatever fills it. Where it is
+	   set, the titles this report may name come from the genre on the title
+	   master rather than from the table, which has no genre to be asked about.
+	   See reportassetgenre.go.
+
+	   Derived, never configured — inferSpec reads it off the platform's own name
+	   and the table's, the same two tests isSportsPlatform makes. */
+	SportsAssetsOnly bool
+
 	// Measures. Raw-row tables count rows; the Agg_Daily_* tables carry
 	// pre-summed counts, so the expressions differ per report.
 	IdentExpr   string

@@ -22,19 +22,24 @@ export default function DashboardPage() {
      of them — Reports wins where it is granted. See UserNav, which is where the
      rule is decided and which this reads through allowedModuleNames.
 
-     A REPORTS login lands on /welcome: the week in summary and the programme
-     calendar, with the full report one click away. A DASHBOARD login is
-     untouched and still falls through to DashboardClient at the foot of this
+     A login holding the LANDING PAGE lands on it: the week in summary and the
+     programme calendar, with the full report one click away. A DASHBOARD login
+     is untouched and still falls through to DashboardClient at the foot of this
      file — the two grants keep their own landing pages.
+
+     It used to be the Reports grant that sent people here, from when /welcome
+     was not something an admin could grant separately. It is now, so sending a
+     Reports login to a page it may not hold would be a redirect straight into
+     the guard's refusal notice. The page decides, and the page is "welcome".
 
      The redirect matters because EVERY login lands here: sign-in, client
      selection, e-mail verification and the War Room's own fallback all send
      people to /dashboard. Suppressing it in the nav alone would leave a
      Reports login sitting on a page its nav no longer offers.
 
-     /welcome is deliberately not a nav item, so the menu offers no way back to
-     it — but the logo links to /dashboard, which lands here and redirects
-     again, which makes the logo the way home. */
+     /welcome has a nav tab of its own now (lib/navItems.tsx), so the menu
+     leads back to it directly; the logo still links to /dashboard, which lands
+     here and redirects again, so that route home is unchanged. */
   const { allowedModules, allowedModuleNames } = useModuleAccess()
   const { data: session } = useSession()
   const [modules,     setModules]     = useState<Module[]>([])
@@ -55,7 +60,9 @@ export default function DashboardPage() {
   // Fail closed while the grants are unknown (null = fetch in flight), so a
   // Reports login never sees the dashboard flash before being moved on.
   if (allowedModuleNames === null) return null
-  if (allowedModuleNames.some(n => n.toUpperCase() === 'REPORTS')) {
+  /* Matched on pageName, not on the module's name: the name is an admin's label
+     and changes, the key is what the nav, the guard and the page all join on. */
+  if ((allowedModules ?? []).some(m => m.pageName === 'welcome')) {
     return <Navigate to="/welcome" replace />
   }
 

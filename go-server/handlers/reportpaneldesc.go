@@ -204,6 +204,21 @@ func defaultPanelDesc(p panelDef) string {
 		return "The share of each period's identified URLs that came down. " +
 			"On its own card rather than a second line on the trend: two scales in one " +
 			"plot invite a correlation that is really just where the axes were pinned."
+	case panelRealtime:
+		/* Deliberately about WHAT THE CARD IS rather than what one reading of it
+		   holds. The card's own note — scopeNote in RealtimeCard.tsx — already
+		   says the season it covered, what it was narrowed to, and whether a
+		   platform failed to answer, and all three change between readings, so
+		   nothing this file could write would stay true. That note is kept
+		   whatever an admin writes here: theirs is shown above it, not instead
+		   of it, because losing "2 platforms could not be counted on this
+		   reading" to a rename would be losing the one line that says the total
+		   is a floor. */
+		return "A live count, read straight from the enforcement side and refreshed on its own " +
+			"while the page is open — not a figure from the prepared tables the rest of this " +
+			"report is drawn from, so the two are not expected to tie out. It covers the " +
+			"client's configured season, narrowed to whichever of match day, asset or " +
+			"franchise put it on screen; the date range does not move it."
 	}
 	// Trends carry theirs from defaultPanels, and a heading has its own subtitle.
 	return ""

@@ -72,6 +72,12 @@ const TYPE_META: Record<string, { icon: ReactNode; bg: string; fg: string; label
     bg: 'bg-teal-50 dark:bg-teal-500/10', fg: 'text-teal-600 dark:text-teal-300',
     icon: <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 3v12m0 0-4-4m4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" /></svg>,
   },
+  asset_protection: {
+    label: 'Asset Protection',
+    chip: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
+    bg: 'bg-amber-50 dark:bg-amber-500/10', fg: 'text-amber-600 dark:text-amber-300',
+    icon: <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>,
+  },
 }
 const FALLBACK_META = {
   label: 'Activity',

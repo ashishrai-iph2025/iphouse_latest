@@ -97,6 +97,14 @@ const ICONS: Record<string, Paths> = {
     <path d="M12 15.1v2" />
   </>,
 
+  /* Asset Register Access — a clipboard with ruled lines: the title LIST,
+     as against the folder-under-lock above, which is per-asset permission. */
+  'asset-register': <>
+    <path d="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1z" />
+    <path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2" />
+    <path d="M8.5 11h7M8.5 14.5h7M8.5 18h4" />
+  </>,
+
   /* War Room Assets — a crosshair on target */
   'war-room-assets': <>
     <circle cx="12" cy="12" r="8.5" />

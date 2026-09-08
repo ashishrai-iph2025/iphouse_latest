@@ -75,6 +75,29 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   {
+    /* The landing page, and the fixture calendar that is the reason to open it.
+
+       Keyed on the PAGE, like every other item here — the module is called
+       Calendar because that is the word on the page, and `navLabel` takes the
+       live module name from module_permission anyway, so renaming it in
+       /admin/modules relabels this tab without touching the key.
+
+       It was deliberately not a nav item once, on the reasoning that the logo
+       already leads back to /dashboard and /dashboard redirects here. That held
+       only while every Reports login landed here regardless. It is a grant of
+       its own now, so it needs a tab: a page an admin can give and take away
+       with no way to reach it is one an admin cannot verify they have given. */
+    label:    'Calendar',
+    href:     '/welcome',
+    pageName: 'welcome',
+    icon: (
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <rect x="3" y="5" width="18" height="16" rx="2"/>
+        <path strokeLinecap="round" d="M8 3v4M16 3v4M3 10h18"/>
+      </svg>
+    ),
+  },
+  {
     label:    'Dashboard',
     href:     '/dashboard',
     pageName: 'dashboard',
@@ -241,11 +264,17 @@ Impersonation swaps the session to the client's own userId, so the token is now
 resolved from THAT client's stored credentials; an admin with a working token of
 their own loses it the moment they step into a client portal.
 
+THE LANDING PAGE DOES NOT EITHER, for the same reason. Both halves of it read
+reports_api — ReportsOverview for the week's figures, ReportsAssets for the
+calendar — and neither calls ResolveAPIToken. Gating it on a Markscan token
+would put "unavailable" over a page whose two endpoints were both up, and it is
+the page a client lands on, so that is the first thing they would see.
+
 Add a page here only after checking its handlers for ResolveAPIToken. A page
 that does need the token and is listed here would load and then show empty data,
 which is a worse failure than being told it is unavailable.
 */
-export const API_INDEPENDENT_PAGES = ['data-sharing', 'Reports']
+export const API_INDEPENDENT_PAGES = ['data-sharing', 'Reports', 'welcome']
 
 export function isApiIndependentItem(item: NavItem): boolean {
   return API_INDEPENDENT_PAGES.includes(item.pageName)

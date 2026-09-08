@@ -60,6 +60,21 @@ interface Props {
    *  reading a number off it gets 0 — which is a real type — so the reader would
    *  have picked "nothing" and been given "Email OTP" without being told. */
   clearable?:   boolean
+  /** Marked as SET HERE rather than inherited from somewhere else.
+   *
+   *  A resting border in brand orange. The live counts card carries its own
+   *  copies of three slicers the report already has, and a copy that has been
+   *  moved off the report's value has to be readable as such while it is shut —
+   *  a card quietly counting a different fixture from the panels under it is
+   *  the one failure those controls introduce. Off everywhere else, so nothing
+   *  that did not ask for it changes. */
+  marked?:      boolean
+  /** An accessible name for the trigger.
+   *
+   *  Every other caller sits this under a <label>, which names it. The live
+   *  card lays the label and the control out as two columns of a grid, so
+   *  nothing ties them together for a screen reader without this. */
+  ariaLabel?:   string
 }
 
 /** Room a dropdown wants below the trigger before it decides to open upwards. */
@@ -80,7 +95,7 @@ interface Pos {
 
 export default function SearchableSelect({
   options, value, onChange, placeholder = 'Select…', emptyLabel = '— All —', disabled = false, dark: darkProp,
-  compact = false, clearable = true,
+  compact = false, clearable = true, marked = false, ariaLabel,
 }: Props) {
   const [open,   setOpen]   = useState(false)
   const [query,  setQuery]  = useState('')
@@ -380,6 +395,7 @@ export default function SearchableSelect({
         role="combobox"
         aria-expanded={open}
         aria-haspopup="listbox"
+        aria-label={ariaLabel}
         title={selected ? selected.label : undefined}
         style={dark ? {
           width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -389,8 +405,11 @@ export default function SearchableSelect({
           height: compact ? 32 : 44, cursor: disabled ? 'not-allowed' : 'pointer',
           opacity: disabled ? 0.5 : 1, transition: 'all 0.15s',
           background: 'rgba(255,255,255,0.065)',
-          border: open ? '1px solid rgba(249,115,22,0.5)' : '1px solid rgba(255,255,255,0.09)',
-          boxShadow: open ? '0 0 0 3px rgba(249,115,22,0.1)' : 'none',
+          border: `1px solid ${open || marked ? 'rgba(249,115,22,0.5)' : 'rgba(255,255,255,0.09)'}`,
+          /* Open outranks marked. Both are orange, so the ring is what keeps
+             "this list is open" distinct from "this one was set by hand". */
+          boxShadow: open ? '0 0 0 3px rgba(249,115,22,0.1)'
+            : marked ? '0 0 0 2px rgba(249,115,22,0.07)' : 'none',
         } : {
           width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           borderRadius: compact ? '0.625rem' : '0.75rem',
@@ -406,8 +425,9 @@ export default function SearchableSelect({
              the one colour on the form that belongs to no part of this product
              — and it sat next to inputs that focus orange, so an open dropdown
              looked like a different application's control. */
-          border: open ? '1px solid #FC934C' : '1px solid #e5e7eb',
-          boxShadow: open ? '0 0 0 3px rgba(252,147,76,0.2)' : 'none',
+          border: `1px solid ${open || marked ? '#FC934C' : '#e5e7eb'}`,
+          boxShadow: open ? '0 0 0 3px rgba(252,147,76,0.2)'
+            : marked ? '0 0 0 2px rgba(252,147,76,0.13)' : 'none',
         }}
       >
         <span style={{

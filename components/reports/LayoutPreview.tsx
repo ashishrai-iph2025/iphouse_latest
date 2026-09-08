@@ -35,7 +35,7 @@ export type PreviewSpan = 'full' | 'half' | 'third' | 'quarter'
  *  convert and neither can pass the wrong thing. */
 export interface PreviewPanel {
   key: string
-  kind: 'tile' | 'heading' | 'trend' | 'rate' | 'dim' | 'filter'
+  kind: 'tile' | 'heading' | 'trend' | 'rate' | 'dim' | 'filter' | 'realtime'
   name: string
   /** The reader's own label for it, where one has been set. */
   title?: string
@@ -158,7 +158,14 @@ export default function LayoutPreview({
                       ? 'bg-[#14254A]/[0.04] border-dashed border-[#14254A]/20 text-[#14254A]/60 dark:bg-white/[0.04] dark:border-white/20 dark:text-white/50'
                       : p.kind === 'tile'
                         ? 'bg-[#14254A]/[0.07] border-[#14254A]/20 text-[#14254A] dark:bg-white/10 dark:border-white/20 dark:text-white/80'
-                        : 'bg-[#FC934C]/10 border-[#FC934C]/30 text-[#c2691f] dark:text-[#FDBE94]'}
+                        /* The live strip in its own colour, because it is the
+                           one block here that is not drawn from the report's
+                           result set — it counts from the enforcement side on
+                           its own refresh, and a wireframe that painted it as
+                           another chart would say otherwise. */
+                        : p.kind === 'realtime'
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-200'
+                          : 'bg-[#FC934C]/10 border-[#FC934C]/30 text-[#c2691f] dark:text-[#FDBE94]'}
                     ${drag?.dragKey === p.key ? 'opacity-35' : ''}
                     ${drag && drag.overKey === p.key && drag.dragKey && drag.dragKey !== p.key
                       ? 'ring-2 ring-[#FC934C] ring-offset-1 dark:ring-offset-[#1a2d55]' : ''}`}

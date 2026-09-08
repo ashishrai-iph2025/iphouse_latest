@@ -22,6 +22,9 @@ import {
 } from 'recharts'
 import { createPortal } from 'react-dom'
 import InfoDot from '@/components/shared/InfoDot'
+import { downloadWorkbook, type Sheet } from '@/lib/xlsx'
+import { downloadChartPng } from '@/lib/chartImage'
+import { printReport, PRINT_HIDE_ATTR } from '@/lib/printReport'
 import Portal from '@/components/ui/Portal'
 import { Link } from 'react-router-dom'
 import SearchableSelect from '@/components/ui/SearchableSelect'
@@ -173,6 +176,24 @@ function splitLabel(label: string): [string, string?] {
   return m ? [m[1], m[2]] : [String(label)]
 }
 
+/**
+ * Whether a section is a SPORTS report, read off its own name.
+ *
+ * Lifted out of the component so the two things that ask it — the window a
+ * report opens on, and whether the live counts card belongs above it — ask it
+ * the same way. They were one expression inside one memo, which is fine until a
+ * second caller needs the answer and writes its own slightly different test.
+ *
+ * The qualifier, not a list of keys: "Open Web — Sports" is a sports report and
+ * "Open Web" is not, and which platforms exist is configuration an admin edits
+ * on Report Configuration. A hardcoded list would go quietly wrong the day
+ * somebody adds one.
+ */
+function isSportsLabel(label: string | undefined): boolean {
+  const [, qualifier] = splitLabel(String(label ?? ''))
+  return (qualifier ?? '').trim().toLowerCase() === 'sports'
+}
+
 /* ── Formatting ───────────────────────────────────────────────────────────── */
 function fmt(v: number, dec = 1): string {
   if (!v && v !== 0) return '–'
@@ -236,6 +257,49 @@ function axisNum(v: number): string {
   if (a >= 1_000_000) return unit(v / 1_000_000, 'M')
   if (a >= 1_000)     return unit(v / 1_000, 'K')
   return String(v)
+}
+
+/*
+textPx is the rendered width of a chart label, in pixels.
+
+Exists because two charts here decide LAYOUT from label width — whether two
+value labels in a pair would overlap — and a per-character estimate is not
+accurate enough to answer that. Digits, "." and "K" differ enough in this face
+that an average is wrong by 20% on a three-digit number, which is the difference
+between a readable pair and an overlapping one.
+
+One canvas, created once and reused, with a cache: the same handful of formatted
+values recur on every render and across every panel. The font is read off the
+document so it follows whatever the page is actually set in rather than naming a
+family here that a theme change would leave behind.
+
+Returns a conservative fallback where there is no canvas — a headless render, or
+a browser that refuses the context — so a chart still decides something sensible
+rather than throwing inside a render.
+*/
+const textPxCache = new Map<string, number>()
+let textPxCtx: CanvasRenderingContext2D | null | undefined
+function textPx(s: string, weight = 700, size = 10): number {
+  const key = `${weight}/${size}/${s}`
+  const hit = textPxCache.get(key)
+  if (hit !== undefined) return hit
+  if (textPxCtx === undefined) {
+    try {
+      textPxCtx = document.createElement('canvas').getContext('2d')
+    } catch { textPxCtx = null }
+  }
+  let px: number
+  if (textPxCtx) {
+    const fam = getComputedStyle(document.body).fontFamily || 'sans-serif'
+    textPxCtx.font = `${weight} ${size}px ${fam}`
+    px = Math.ceil(textPxCtx.measureText(s).width)
+  } else {
+    // 0.72em per character is wider than any glyph this formatter produces, so
+    // a fallback errs toward hiding a label rather than overlapping one.
+    px = Math.ceil(s.length * size * 0.72)
+  }
+  textPxCache.set(key, px)
+  return px
 }
 
 /** "2026-08-11" → "11 Aug"; "2026-08" → "Aug '26". Axis ticks only. */
@@ -306,7 +370,12 @@ const SPAN_CLASS: Record<string, string> = {
  */
 interface SectionPanel {
   key: string
-  kind: 'tile' | 'heading' | 'trend' | 'rate' | 'dim'
+  /** `realtime` is the live counts strip — RealtimeCard. It is a panel like the
+      rest now, so Report Configuration can move it, resize it, switch it off,
+      rename it and give it a note; where it SITS still decides one thing no
+      other panel's position does, which is whether the reader can pin it. See
+      rtLeads below. */
+  kind: 'tile' | 'heading' | 'trend' | 'rate' | 'dim' | 'realtime'
   label?: string
   sub?: string     // heading only
   viz?: string     // breakdown only
@@ -369,6 +438,11 @@ itself rather than on days that predate its own data.
 */
 const DEFAULT_DAYS = 7
 
+/* And what every OTHER report opens on. A month reads as a month on a page
+   about volume over time, and none of the non-sports reports is scoped to a
+   fixture the way a sports one is. */
+const GENERIC_DAYS = 30
+
 /**
  * The range a reader has chosen, carried into another section — unless that
  * section cannot show it.
@@ -386,15 +460,42 @@ const DEFAULT_DAYS = 7
  * it travels. Same test the client-change effect applies, for the same reason.
  */
 function carriedRange(
-  period: { start: string; end: string } | undefined,
+  target: Section | undefined,
   from: string,
   to: string,
+  picked: boolean,
 ): { from: string; to: string } {
-  if (!period) return { from, to }
-  const inside =
-    from >= period.start && from <= period.end &&
-    to >= period.start && to <= period.end
-  return inside ? { from, to } : periodDefaultRange(period)
+  /* An untouched window is not a choice to carry. It is whatever the page
+     opened with, and where the section being entered has a default of its own —
+     seven days on a sports report — that default is the better answer than a
+     number nobody picked. This is what stopped a sports report opening on a
+     month: the generic thirty days sat inside the season, so the test below
+     said "inside, keep it" and the seven-day rule never ran. */
+  if (!picked) return sectionDefaultRange(target)
+  if (!target?.period) return { from, to }
+  const { start, end } = target.period
+  const inside = from >= start && from <= end && to >= start && to <= end
+  return inside ? { from, to } : sectionDefaultRange(target)
+}
+
+/**
+ * The window a section OPENS on, before the reader has chosen anything.
+ *
+ * Three answers, narrowest first:
+ *
+ *   · a governed sports report opens on its period's last week — see
+ *     periodDefaultRange, which counts back from the season's END rather than
+ *     from today;
+ *   · an ungoverned sports report opens on the last seven days. Same rule, no
+ *     period to clip it to: a sports platform whose client has no configured
+ *     season still reads a fixture at a time, and a month of it is a slow query
+ *     over a question nobody asked;
+ *   · everything else opens on the last thirty days, which is what every report
+ *     on this page did before sports had a rule of its own.
+ */
+function sectionDefaultRange(s: Section | undefined | null): { from: string; to: string } {
+  if (s?.period) return periodDefaultRange(s.period)
+  return { from: rangeFrom(isSportsLabel(s?.label) ? DEFAULT_DAYS : GENERIC_DAYS), to: today() }
 }
 
 function periodDefaultRange(period: { start: string; end: string }): { from: string; to: string } {
@@ -533,6 +634,91 @@ const SUMMARY = 'summary'
  */
 const PANEL_ONLY_FILTERS = new Set(['tatBucket', 'keyword', 'channelUrl'])
 
+/**
+ * The slicers the LIVE card's count is actually narrowed by.
+ *
+ * Three of a dozen. The card reads the raw mediascan capture tables, which
+ * carry the asset and the two attributes hung off its title master; country,
+ * language, quality and the rest exist only in the curated tables the report
+ * below is built from.
+ *
+ * Named here rather than left implicit because the card now appears unfiltered
+ * and states this to the reader — see realtimeScopeFilters, and realtimeDims in
+ * go-server/handlers/realtime.go, which is the server's half of the same list.
+ * A filter added to one and not the other is a card silently ignoring a slicer
+ * the reader can see it beside.
+ */
+const REALTIME_COUNT_FILTERS = new Set(['assetId', 'franchiseName', 'matchDay'])
+
+/**
+ * The windows the live card offers, in hours: a day, then a day at a time to a
+ * week.
+ *
+ * A DAY first, because that is what "live" means on this page — and because it
+ * is what lets the card be drawn before the reader has filtered anything, which
+ * a season-wide count could not be. A WEEK last, because that is the ceiling
+ * the server enforces (realtimeLiveWindowMaxHours); an eighth day here would be
+ * a control that quietly answered for seven.
+ *
+ * Every day in between rather than a chosen few. It was 24h / 3d / 7d, which
+ * was three named spans a reader had to pick BETWEEN — and the two gaps in it
+ * were the ones people actually ask about, since a fixture is not three days
+ * old or seven but however many days ago it was played. As a slider the cost of
+ * carrying all seven is nothing: the control is the same width and the stops
+ * are evenly spaced either way, where as buttons seven of them would have been
+ * a second row across a 256px column.
+ *
+ * Every value passes the server unchanged — rollingHoursFromRequest clamps to
+ * 1…168 and does not whitelist — so nothing here needs the service to agree
+ * with it beyond staying under the week.
+ *
+ * Module scope, so the array is one identity for the life of the page rather
+ * than a new one per render. WHICH of them is selected is the card's own state,
+ * because it is a property of how one person is reading one strip and not a
+ * setting on the report — see the note on `hours` in RealtimeCard.
+ */
+const REALTIME_WINDOWS = [24, 48, 72, 96, 120, 144, 168]
+
+/** Printed small along the bottom of every exported chart. A picture in a
+    deck should say what produced it without anybody having to remember. */
+const EXPORT_FOOTER = 'IP House · MarkScan reports'
+
+/*
+── Rows that name nothing ───────────────────────────────────────────────────
+
+A breakdown row whose label is "Unknown" or "(none)" is not a finding, it is the
+absence of one: the pipeline could not attribute those rows to a website, a
+broadcaster or a country, and they were grouped under a placeholder. On a chart
+that placeholder behaves like a category and usually the biggest one — 17.1K
+"Unknown" against 2.2K for the largest real source — so it sets the axis, and
+every genuine bar beside it is squashed into the first tenth of the panel.
+
+HIDDEN FROM THE PANEL ONLY. Nothing here touches a KPI, a total or a removal
+rate: those are computed server-side from the whole result set and still count
+every row, attributed or not. This is a drawing rule, which is also why it is
+applied where the rows reach the panel rather than anywhere upstream of it.
+
+Two consequences worth knowing rather than discovering:
+
+  · a "Top 10" panel can now draw nine. The server already cut the list to the
+    top N before sending it, so dropping one here leaves a gap that cannot be
+    back-filled without asking for more rows.
+  · the panel's TABLE and its download drop them too, because they are built
+    from the same rows. A chart and its own table disagreeing about what is in
+    it is worse than either answer alone.
+
+"No Logo" is deliberately NOT here. It reads like a placeholder and is not one:
+on Source of Piracy it means the stream carried no broadcaster mark, which is a
+real property of the capture and a real thing to enforce against.
+*/
+const PLACEHOLDER_ROW =
+  /^(unknown|none|n\/?a|na|null|nil|undefined|unspecified|blank|empty|not\s*(available|specified|set|found)|-{1,2}|—|–|\(\s*(none|blank|empty|unknown|null)\s*\))$/i
+
+const isPlaceholderRow = (r: any) => {
+  const label = String(r?.label ?? '').trim()
+  return label === '' || PLACEHOLDER_ROW.test(label)
+}
+
 /** Which slicer a breakdown panel cross-filters, when the section has one.
     Mirrors DIMFilterParam in go-server/handlers/reportplatforms.go. */
 const DIM_FILTER: Record<string, string> = {
@@ -637,13 +823,99 @@ const rangeFrom = (days: number) => ymdLocal(new Date(Date.now() - (days - 1) * 
 // Only the slicers every section shares. Section-specific ones are added as
 // they are set and dropped when the section changes. Built per mount rather
 // than once at import, for the reason given on `today`.
-const emptyFilters = (): Filters => ({ clientId: '', from: rangeFrom(30), to: today() })
+const emptyFilters = (): Filters => ({ clientId: '', from: rangeFrom(GENERIC_DAYS), to: today() })
 
 /* ── Chart chrome ─────────────────────────────────────────────────────────── */
 
 /** Legend: always present for two or more series, so identity never rests on
     colour-matching alone. Circle keys, muted text — the mark carries the hue,
     the label stays in ink. */
+/* ── The tables the panels draw, as DATA ──────────────────────────────────────
+
+   One builder per panel shape, returning head and rows rather than JSX.
+
+   They exist because each table is now needed twice: as the twin behind a
+   card's TABLE toggle, and as a sheet in the workbook the report exports. Built
+   separately, those two drift inside a release — a column added to one and not
+   the other, or a figure rounded one way on screen and another in Excel — and
+   the export's whole claim is that it is the numbers that were on the page.
+
+   `pickValues` rides along for the on-screen twin, where clicking a row filters
+   by it. A sheet ignores it. */
+export interface PanelTable {
+  head: string[]
+  rows: (string | number)[][]
+  /** The value each row filters BY, one per row, in row order. See DataTable. */
+  pickValues?: string[]
+}
+
+/** Date or Month, depending on what the trend is grained by. */
+const grainHead = (grain: string) => (grain === 'month' ? 'Month' : 'Date')
+
+function trendTableData(rows: any[], first: string, second: string, grain: string): PanelTable {
+  return {
+    head: [grainHead(grain), first, second, 'Rate'],
+    /* Numbers as NUMBERS. On screen the difference is invisible; in the
+       workbook it is whether the column can be summed, sorted or charted, and
+       a count that arrives as text is a count somebody has to clean before
+       they can use it. The rate stays a string because it is a formatted
+       percentage and Excel would read "76" as seventy-six. */
+    rows: rows.map(t => [shortDate(t.label), Number(t.urls) || 0, Number(t.removed) || 0, `${t.rate}%`]),
+    /* The raw label, not the printed one: the column reads "11 Aug" and the
+       range needs "2026-08-11". */
+    pickValues: rows.map(t => String(t.label ?? '')),
+  }
+}
+
+function rateTableData(rows: any[], grain: string): PanelTable {
+  return {
+    head: [grainHead(grain), 'Removal rate'],
+    rows: rows.map(t => [shortDate(t.label), `${t.rate}%`]),
+    pickValues: rows.map(t => String(t.label ?? '')),
+  }
+}
+
+/** A breakdown, in whichever of its three shapes the panel is drawing.
+ *
+ *  Keyed off the DIMENSION for the repeat-offender columns, not off `viz`:
+ *  switching that panel to bars does not stop its rows being accounts. */
+function dimTableData(key: string, label: string, viz: string, rows: any[]): PanelTable {
+  const pickValues = rows.map(r => String(r.label ?? ''))
+
+  if (key === 'byRepeatOffender') {
+    return {
+      head: ['Channel / Profile URL', 'Days', 'Identified', 'Removed', 'Rate'],
+      rows: rows.map(r => {
+        const urls = Number(r.urls) || 0
+        const removed = Number(r.removed) || 0
+        return [String(r.label ?? '—'), Number(r.repeats) || 0, urls, removed, `${pct(removed, urls)}%`]
+      }),
+      pickValues,
+    }
+  }
+
+  if (viz === 'value' || viz === 'ordinal') {
+    // Single-series panels have no removal figure to show — a bucket's rows
+    // have all come down by definition.
+    return {
+      head: [label, 'Count'],
+      rows: rows.map(r => [String(r.label ?? '—'), Number(r.urls) || 0]),
+      pickValues,
+    }
+  }
+
+  const total = rows.reduce((a, x) => a + (Number(x.urls) || 0), 0)
+  return {
+    head: ['Name', 'Identified', 'Removed', 'Rate', 'Share'],
+    rows: rows.map(r => {
+      const urls = Number(r.urls) || 0
+      const removed = Number(r.removed) || 0
+      return [String(r.label ?? '—'), urls, removed, `${pct(removed, urls)}%`, `${pct(urls, total)}%`]
+    }),
+    pickValues,
+  }
+}
+
 function Legend({ items }: { items: { label: string; color: string }[] }) {
   return (
     <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-1 pt-2">
@@ -933,19 +1205,210 @@ function VizPicker({ options, value, fallback, saved, onPick, onSetDefault }: {
   )
 }
 
-function Card({ title, info, chartTitle, action, table, className = '', children }: {
+/**
+ * A card's download control.
+ *
+ * Two things a reader wants out of a panel and cannot get from the screen: the
+ * picture, to put in a deck, and the numbers, to work on. Both, behind one
+ * icon, because the card header already carries a title, an ⓘ, a chart-type
+ * picker and a Table toggle, and a sixth and seventh control across it would
+ * cost more width than the panel has.
+ *
+ * The PNG is offered only where there IS a picture. A panel switched to Table
+ * view, or a breakdown whose chart is a ranked list, has no chart to render —
+ * and an option that produces a blank image is worse than one that is absent,
+ * because the reader has to open the file to find out.
+ */
+function CardDownload({ bodyRef, name, table, subtitle, footer }: {
+  bodyRef: React.RefObject<HTMLDivElement>
+  name: string
+  table?: PanelTable
+  subtitle?: string
+  footer?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  const wrap = useRef<HTMLDivElement>(null)
+  const menu = useRef<HTMLDivElement>(null)
+
+  /* Where to draw it, in VIEWPORT coordinates.
+
+     The menu is portalled to <body>, for the reason InfoDot is: every Card on
+     this page is `overflow-hidden`, so a menu positioned inside one is clipped
+     at the card's edge — and on a short panel that means half of it is simply
+     not there. Fixed coordinates, measured off the trigger. */
+  const [at, setAt] = useState<{ right: number; top?: number; bottom?: number } | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    /* Both the trigger AND the menu, because the menu is no longer inside the
+       trigger's subtree — checking only `wrap` would treat a click on
+       "PNG image" as a click away, unmount the menu on mousedown, and the
+       click would never reach the button. */
+    const away = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (!wrap.current?.contains(t) && !menu.current?.contains(t)) setOpen(false)
+    }
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    // Closed rather than repositioned on a scroll. A two-item menu is not worth
+    // a measure-per-frame, and a menu that has drifted off its button is worse
+    // than one that has gone.
+    const gone = () => setOpen(false)
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', esc)
+    window.addEventListener('scroll', gone, true)
+    window.addEventListener('resize', gone)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      document.removeEventListener('keydown', esc)
+      window.removeEventListener('scroll', gone, true)
+      window.removeEventListener('resize', gone)
+    }
+  }, [open])
+
+  const toggle = () => {
+    setErr('')
+    if (open) { setOpen(false); return }
+    const r = wrap.current?.getBoundingClientRect()
+    if (r) {
+      /* Below the button, unless the button is near the foot of the window —
+         a card at the bottom of a long report would otherwise open its menu
+         off the screen. Right-aligned either way, because the trigger is. */
+      const room = window.innerHeight - r.bottom
+      setAt(room > 130
+        ? { right: Math.max(8, window.innerWidth - r.right), top: r.bottom + 6 }
+        : { right: Math.max(8, window.innerWidth - r.right), bottom: window.innerHeight - r.top + 6 })
+    }
+    setOpen(true)
+  }
+
+  const png = async () => {
+    if (!bodyRef.current) return
+    setBusy(true); setErr('')
+    try {
+      await downloadChartPng(bodyRef.current, name, {
+        title: name, subtitle, footer,
+        // Read at export time rather than held in state: the theme is a class
+        // on <html> and nothing here subscribes to it changing.
+        dark: document.documentElement.classList.contains('dark'),
+      })
+      setOpen(false)
+    } catch (e: any) {
+      setErr(e?.message || 'The image could not be produced.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const xlsx = () => {
+    if (!table) return
+    try {
+      downloadWorkbook(name, [{ name, title: name, subtitle, head: table.head, rows: table.rows }])
+      setOpen(false)
+    } catch (e: any) {
+      setErr(e?.message || 'The workbook could not be produced.')
+    }
+  }
+
+  return (
+    <div ref={wrap} className="relative">
+      <button type="button" onClick={toggle} aria-expanded={open} aria-haspopup="menu"
+        title="Download this panel"
+        className={`w-6 h-6 grid place-items-center rounded-md border transition-colors ${
+          open
+            ? 'border-[#FC934C] text-[#FC934C] bg-[#FC934C]/10'
+            : 'border-gray-200 text-gray-400 hover:text-[#14254A] hover:border-gray-300 dark:border-white/15 dark:text-white/50 dark:hover:text-white'
+        }`}>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 3v12" /><path d="M7 11l5 5 5-5" /><path d="M4 20h16" />
+        </svg>
+      </button>
+
+      {open && at && createPortal(
+        <div ref={menu} role="menu"
+          style={{ position: 'fixed', right: at.right, top: at.top, bottom: at.bottom, zIndex: 70 }}
+          className="w-44 rounded-xl border border-gray-100 bg-white
+            shadow-lg2 overflow-hidden dark:border-white/10 dark:bg-[#1a2d55]">
+          {/* Never disabled. What is captured is the panel BODY, whatever it
+              happens to be made of — Recharts, hand-drawn SVG, the grouped bars
+              that are plain HTML, or the table twin if that is what is on
+              screen. There is no panel this cannot photograph, so there is no
+              state in which the option should be greyed out. */}
+          <button type="button" role="menuitem" onClick={png} disabled={busy}
+            title="This panel as a picture, captioned with what it is of"
+            className="w-full text-left px-3 py-2 text-[12px] flex items-center gap-2
+              text-[#14254A] hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed
+              dark:text-white dark:hover:bg-white/5">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <circle cx="8.5" cy="9.5" r="1.5" /><path d="M21 15l-5-5L5 20" />
+            </svg>
+            {busy ? 'Rendering…' : 'PNG image'}
+          </button>
+          <button type="button" role="menuitem" onClick={xlsx} disabled={!table?.rows.length}
+            title={table?.rows.length
+              ? 'This panel\u2019s table, as a spreadsheet'
+              : 'This panel has no rows for the window on screen'}
+            className="w-full text-left px-3 py-2 text-[12px] flex items-center gap-2
+              text-[#14254A] hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed
+              dark:text-white dark:hover:bg-white/5">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M3 9h18M9 3v18" />
+            </svg>
+            Excel (.xlsx)
+          </button>
+          {err && (
+            <p className="px-3 py-2 text-[10.5px] leading-snug text-amber-700 border-t
+              border-gray-100 dark:border-white/10 dark:text-amber-400">
+              {err}
+            </p>
+          )}
+        </div>,
+        document.body,
+      )}
+    </div>
+  )
+}
+
+function Card({ title, info, chartTitle, action, table, exportTable, exportSubtitle,
+  exportFooter, className = '', children }: {
   title?: string; info?: string; chartTitle?: string; action?: React.ReactNode
   table?: React.ReactNode; className?: string; children: React.ReactNode
+  /** The panel's rows, for the download control — the SAME table the toggle
+      above shows, so the file and the screen cannot disagree. A card with
+      none still offers its picture. */
+  exportTable?: PanelTable
+  /** What the panel is OF — the client, the window, the filters. Printed
+      into the image and into the sheet, because a chart in a deck a month
+      later has no page around it to say. */
+  exportSubtitle?: string
+  exportFooter?: string
 }) {
   const [asTable, setAsTable] = useState(false)
+  /* The card's BODY, not the card. What is exported is the chart and the
+     legend under it; the header is this application's chrome — a title, an
+     ⓘ and two controls that do nothing in a picture. */
+  const bodyRef = useRef<HTMLDivElement>(null)
   return (
     <div className={`h-full flex flex-col bg-white dark:bg-[#1a2d55] rounded-2xl shadow-card
       border border-gray-100 dark:border-white/10 overflow-hidden ${className}`}>
       {title && (
         <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100 dark:border-white/10">
-          <h3 className="text-[14px] font-bold text-[#14254A] dark:text-white truncate">{title}</h3>
+          {/* title attribute because the heading TRUNCATES. "Identification &
+            Removal - Top 10 Assets" does not fit a half-width card beside three
+            action buttons, and a truncated heading with no tooltip is a name the
+            reader cannot recover by any means. */}
+        <h3 title={title}
+          className="text-[14px] font-bold text-[#14254A] dark:text-white truncate">{title}</h3>
           <InfoDot text={info} />
-          <span className="ml-auto flex items-center gap-1.5">
+          {/* Three controls that do nothing in a document: whatever the panel
+              offered, the chart/table toggle, and the panel's own download. */}
+          <span {...{ [PRINT_HIDE_ATTR]: '' }} className="ml-auto flex items-center gap-1.5">
             {action}
             {table && (
               <button type="button" onClick={() => setAsTable(v => !v)}
@@ -958,10 +1421,12 @@ function Card({ title, info, chartTitle, action, table, className = '', children
                 Table
               </button>
             )}
+            <CardDownload bodyRef={bodyRef} name={title} table={exportTable}
+              subtitle={exportSubtitle} footer={exportFooter} />
           </span>
         </div>
       )}
-      <div className="flex-1 p-4 pt-3">
+      <div ref={bodyRef} className="flex-1 p-4 pt-3">
         {chartTitle && !asTable && (
           <p className="text-[11.5px] text-gray-400 dark:text-white/40 mb-2">{chartTitle}</p>
         )}
@@ -1255,14 +1720,93 @@ function Spark({ data, dataKey, color }: { data: any[]; dataKey: string; color: 
 }
 
 /**
+ * How wide the chart actually is, measured.
+ *
+ * Not knowable from props: the same panel is full-width on a platform page and
+ * half-width in the summary, and the layout editor can make it either. Same
+ * measurement SeasonColumns makes, and for the same reason — see the note on
+ * `avail` there.
+ *
+ * useLayoutEffect rather than useEffect: the value decides how wide the marks
+ * are drawn, so measuring after paint would show one frame of the wrong chart
+ * and then resize it.
+ */
+function useChartWidth() {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const [width, setWidth] = useState(0)
+  useLayoutEffect(() => {
+    const node = ref.current
+    if (!node) return
+    setWidth(node.clientWidth)
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(e => { const w = e[0]?.contentRect.width; if (w) setWidth(w) })
+    ro.observe(node)
+    return () => ro.disconnect()
+  }, [])
+  return [ref, width] as const
+}
+
+/*
+── HOW WIDE A GROUPED COLUMN IS DRAWN ────────────────────────────────────────
+
+  `maxBarSize` is the wrong tool and this is what it was doing. Recharts caps
+  the MARK but keeps the SLOT: with the cap in force each bar is drawn at 24px
+  centred in the slot it would otherwise have filled (ChartUtils.getBarPosition,
+  the `(originalSize - size) / 2` term). Seven days across a full-width card
+  gives a slot of ~118px a bar, so the two bars of one day were drawn 118px
+  apart — the pair split into two lone marks with a hole between them, and the
+  category gap on top of that. Fourteen isolated bars where there should be
+  seven pairs, which is what "the gaps are too much" is describing.
+
+  Given an explicit barSize recharts takes the other branch and lays the group
+  out contiguously from a centred offset, so a pair is a pair. The size then has
+  to come from somewhere, and the only honest source is the room the card has.
+
+  SHARE, then CEILING — the same ordering SeasonColumns uses. The group takes a
+  fixed share of its slot, so the gap between days is a constant fraction of the
+  band at any width and any point count rather than whatever is left over after
+  a fixed cap. The ceiling is what stops two periods in a full-width card
+  becoming a pair of slabs: past roughly this width extra room stops reading as
+  emphasis and starts reading as a rendering fault.
+*/
+/** How much of a category's slot the group of bars fills. The remaining 38% is
+    the gap between one period and the next — enough to group at a glance, not
+    enough to hunt across. */
+const GROUP_SHARE = 0.62
+/** Wide enough to carry a direct label, narrow enough that three periods do not
+    become slabs. */
+const MAX_COLUMN = 64
+/** Below this a column stops being a mark and becomes a tick. */
+const MIN_COLUMN = 6
+
+/**
+ * The bar width for one grouped-column chart.
+ *
+ * `avail` is the WRAPPER's width, so the axis gutter and the right margin come
+ * off it first — bars sized against the whole card are consistently too wide
+ * for the plot they are drawn in.
+ *
+ * Returns undefined while unmeasured, which leaves recharts to size the bars
+ * itself for that render rather than committing to a number picked from
+ * nothing.
+ */
+function columnWidth(avail: number, categories: number, seriesCount: number, inset: number, gap: number) {
+  const plot = avail - inset
+  if (plot <= 0 || categories <= 0 || seriesCount <= 0) return undefined
+  const slot = plot / categories
+  const group = slot * GROUP_SHARE - gap * (seriesCount - 1)
+  return Math.max(MIN_COLUMN, Math.min(MAX_COLUMN, Math.floor(group / seriesCount)))
+}
+
+/**
  * Trend — identification against removal over time.
  *
  * The form follows the point count, because neither shape works at both ends:
  * a dozen periods or fewer are columns (each period is a discrete thing you
  * compare), more than that is an area (the shape of the run is the story and
- * columns turn into a picket fence). Values are direct-laballed only where they
- * carry weight — the peak of each series on columns, the last point on the
- * area — with the axis and the tooltip carrying the rest.
+ * columns turn into a picket fence). Every COLUMN is direct-labelled, both
+ * series; on the area it is still the last point only, because sixty labels
+ * along a line is a grey smear and there are no discrete marks to hang them on.
  */
 function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode = 'auto',
   single = false, color, onPick }: {
@@ -1288,6 +1832,11 @@ function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode
       from the trend beside it does not wear the same navy. */
   color?: string
 }) {
+  /* Above the early returns, deliberately: React identifies a hook by call
+     order, and one placed after them would change that order on the render a
+     range first becomes plottable. */
+  const [wrapRef, avail] = useChartWidth()
+
   if (data.length === 0) {
     return <div className="text-sm text-gray-400 py-16 text-center">No dated rows in this range.</div>
   }
@@ -1317,21 +1866,31 @@ function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode
     ...(single ? [] : [{ key: 'removed', name: secondName, color: m.removed }]),
   ]
 
-  /* Label only the tallest column of each series. `above` keeps the two apart:
-     identified is always ≥ removed, so its label goes over the cap and removal's
-     sits just under it. */
-  const peakLabel = (key: string, above: boolean) => {
-    const peak = data.reduce((best, r, i) => (r[key] > data[best][key] ? i : best), 0)
-    return (props: any) => {
-      if (props.index !== peak || !props.value) return null
-      return (
-        <text x={props.x + props.width / 2} y={props.y + (above ? -6 : 14)}
-          textAnchor="middle" fontSize={10} fontWeight={700}
-          className="fill-[#14254A] dark:fill-white">
-          {fmt(Number(props.value))}
-        </text>
-      )
-    }
+  /* EVERY column carries its figure, both series.
+
+     It used to be the tallest column of each series and nothing else, on the
+     reasoning that the axis and the tooltip carry the rest. What that actually
+     produced was a chart with two numbers printed out of twenty, and the two
+     that were printed looked as though they had been singled out for a reason
+     rather than for being the biggest. Comparing 17 Aug with 18 Aug meant
+     hovering twice.
+
+     Both labels sit ABOVE their own bar. The old rule tucked removal's under
+     the cap because two labels for one peak would otherwise collide; grouped
+     bars stand side by side, so each label is already clear of the other
+     horizontally and neither has to be hidden inside a mark. */
+  const barLabel = (props: any) => {
+    const v = Number(props.value)
+    // A column with nothing in it has no bar to label — the figure would be a
+    // "0" floating on the axis line, in among the date ticks.
+    if (!isFinite(v) || v === 0) return null
+    return (
+      <text x={props.x + props.width / 2} y={props.y - 5}
+        textAnchor="middle" fontSize={9} fontWeight={700}
+        className="fill-[#14254A] dark:fill-white">
+        {fmt(v)}
+      </text>
+    )
   }
 
   /* The last point of each series, set in the right margin rather than over the
@@ -1360,21 +1919,24 @@ function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode
 
   return (
     <>
-      <div style={{ height: 168, cursor: onPick ? 'pointer' : undefined }}>
+      <div ref={wrapRef} style={{ height: 168, cursor: onPick ? 'pointer' : undefined }}>
         <ResponsiveContainer width="100%" height="100%">
           {(mode === 'column' || (mode === 'auto' && data.length <= 12)) ? (
-            /* Columns: capped at 24px so a sparse range leaves air in the band
-               rather than three slabs, and 2px apart in the surface colour. */
+            /* Columns: sized from the room the card actually has, 2px apart
+               within a period — see columnWidth for why this is a width and not
+               a maxBarSize. The 54 is the axis gutter (46) plus the right
+               margin (8), which is card width the plot never gets. */
             <BarChart data={data} margin={{ top: 18, right: 8, left: 0, bottom: 0 }} barGap={2}
               {...clickable}>
               <CartesianGrid vertical={false} stroke={m.grid} />
               <XAxis dataKey="label" {...axis} tickFormatter={shortDate} />
               <YAxis {...yAxis} />
               <Tooltip cursor={{ fill: m.grid, fillOpacity: 0.5 }} content={<ChartTip />} />
-              {series.map((s, i) => (
+              {series.map(s => (
                 <Bar key={s.key} dataKey={s.key} name={s.name} fill={s.color}
-                  maxBarSize={24} radius={[4, 4, 0, 0]} isAnimationActive={false}>
-                  <LabelList dataKey={s.key} content={peakLabel(s.key, i === 0)} />
+                  barSize={columnWidth(avail, data.length, series.length, 54, 2)}
+                  radius={[4, 4, 0, 0]} isAnimationActive={false}>
+                  <LabelList dataKey={s.key} content={barLabel} />
                 </Bar>
               ))}
             </BarChart>
@@ -1428,6 +1990,9 @@ function RateTrend({ data, m, mode = 'line', onPick }: {
       card, so it is the one a reader is most likely to want to open. */
   onPick?: (label: string) => void
 }) {
+  // Above the early return, for the reason given on the same hook in Trend.
+  const [wrapRef, avail] = useChartWidth()
+
   if (data.length < 2) {
     return <div className="text-sm text-gray-400 py-16 text-center">Not enough periods in this range to plot a rate.</div>
   }
@@ -1438,6 +2003,24 @@ function RateTrend({ data, m, mode = 'line', onPick }: {
       <text x={props.x + 7} y={props.y + 4} textAnchor="start" fontSize={11} fontWeight={700}
         className="fill-[#14254A] dark:fill-white">
         {props.value}%
+      </text>
+    )
+  }
+  /* Every column, on the column shape — which carried no direct labels at all,
+     so a reader who switched to it from the line lost the one figure the line
+     was printing.
+
+     Zero IS drawn here, unlike the volume trend beside it. A removal rate of
+     nothing is a reading rather than an absence: the period had links found and
+     none taken down, and that is the period a reader most wants named. */
+  const colLabel = (props: any) => {
+    const v = Number(props.value)
+    if (!isFinite(v)) return null
+    return (
+      <text x={props.x + props.width / 2} y={props.y - 5}
+        textAnchor="middle" fontSize={9} fontWeight={700}
+        className="fill-[#14254A] dark:fill-white">
+        {v}%
       </text>
     )
   }
@@ -1460,13 +2043,21 @@ function RateTrend({ data, m, mode = 'line', onPick }: {
     : {}
 
   return (
-    <div style={{ height: 200, cursor: onPick ? 'pointer' : undefined }}>
+    <div ref={wrapRef} style={{ height: 200, cursor: onPick ? 'pointer' : undefined }}>
       <ResponsiveContainer width="100%" height="100%">
         {mode === 'column' ? (
           <BarChart data={data} margin={margin} {...clickable}>
             {frame}
+            {/* One series, so the group IS the bar — but the sparse-card
+                problem is the trend's exactly, and a reader switching between
+                the two cards should not find one dense and one strung out. 48
+                is this chart's axis gutter (40) plus its column-mode right
+                margin (8). */}
             <Bar dataKey="rate" name="Removal rate" fill={m.removed}
-              maxBarSize={24} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+              barSize={columnWidth(avail, data.length, 1, 48, 0)}
+              radius={[4, 4, 0, 0]} isAnimationActive={false}>
+              <LabelList dataKey="rate" content={colLabel} />
+            </Bar>
           </BarChart>
         ) : mode === 'area' ? (
           <AreaChart data={data} margin={margin} {...clickable}>
@@ -2160,11 +2751,38 @@ function HBarChart({ rows, m, onPick, activeVal = '', limit = 10 }: {
   if (data.length === 0) return <div className="text-sm text-gray-400 py-3">No data.</div>
 
   const axis = { tickLine: false, axisLine: false, tick: { fill: m.axis, fontSize: 11 } }
-  /* Height follows the row count, and each row has to hold BOTH bars plus the
-     gap that separates it from the next asset — 22px of mark needs more than
-     27px of band, or the space between two categories is the same 2px as the
-     space inside one and the pairs read as a single striped block. */
-  const height = Math.max(180, data.length * 38 + 24)
+  /*
+    ── ROW HEIGHT, AND WHY IT IS 46 ────────────────────────────────────────
+
+    Each row holds BOTH bars, the gap between them, and the gap separating it
+    from the next category. Sized from the LABELS rather than the bars, because
+    the labels are taller than the marks they sit on.
+
+    Recharts centres a value label on its bar, so two labels in a pair sit
+    exactly maxBarSize + barGap apart. At the old barGap of 2 that is 12px, and
+    the label text box is bigger than that: drawing the real rows from a live
+    report at those positions and measuring the boxes gave FIVE overlapping
+    pairs, with the tightest at MINUS two pixels. "739 / 644" was not reading as
+    a smudge, it was genuinely overlapping.
+
+    Measured alternatives, same rows, same font:
+
+        band  gap   overlaps  clearance  bar slack  height
+          38    2       5        -2px       3px      404   ← was
+          46    6       0        +2px       4px      484
+          50    8       0        +4px       5px      524   ← is
+          52   10       0        +6px       4px      544
+
+    50/8 rather than 52/10 because barGap has to stay clearly under the gap
+    BETWEEN categories or the grouping disappears — at band 50 that gap is 17px,
+    so a pair gap of 8 reads as half of it, while 10 is close enough to make the
+    ten rows one striped block.
+
+    The bar slack column matters as much as the clearance: barCategoryGap 34%
+    leaves 66% of the band for bars, and a pair that does not fit is not an
+    error — recharts silently shrinks the bars instead.
+  */
+  const height = Math.max(180, data.length * 50 + 24)
   const hasActive = !!activeVal
 
   /* Ticks are drawn one to a line and truncated, never wrapped.
@@ -2199,8 +2817,20 @@ function HBarChart({ rows, m, onPick, activeVal = '', limit = 10 }: {
         {/* barGap separates the two bars WITHIN an asset; barCategoryGap
             separates one asset from the next. They have to differ or the
             grouping is invisible. */}
-        <BarChart data={data} layout="vertical" barGap={2} barCategoryGap="34%"
-          margin={{ top: 4, right: 52, left: 0, bottom: 0 }}
+        <BarChart data={data} layout="vertical" barGap={8} barCategoryGap="34%"
+          /*
+            right 52: the widest value label this formatter produces is 33px
+            ("123.4K", "999.9K", measured in Poppins 700 10px) plus the 5px the
+            label sits off the bar tip — so 38 is the floor and the rest is slack
+            for a longer format. A label that does not fit is not clipped by
+            recharts, it is drawn over the card's edge.
+
+            left 6: a bar of value ZERO has no width, so its label is drawn at
+            the plot's left edge — hard against the category name beside it.
+            Rows like "owledge  0" and "ninguno  0" are exactly that. Six pixels
+            is what separates the number from the name it is not part of.
+          */
+          margin={{ top: 4, right: 52, left: 6, bottom: 0 }}
 >
           <CartesianGrid horizontal={false} stroke={m.grid} />
           <XAxis type="number" {...axis} tickFormatter={axisNum} />
@@ -2217,6 +2847,12 @@ function HBarChart({ rows, m, onPick, activeVal = '', limit = 10 }: {
           </Bar>
           <Bar dataKey="removed" name="Removed" fill={m.removed} radius={[0, 3, 3, 0]}
             maxBarSize={10} isAnimationActive={false} cursor={onPick ? 'pointer' : 'default'} onClick={pickFrom}>
+            {/* Removal carries its figure too. One labelled series above an
+                unlabelled one reads as the second having no value rather than as
+                a chart that only prints half of what it draws — and removal is
+                the half the page is about. */}
+            <LabelList dataKey="removed" position="right" formatter={(v: any) => axisNum(Number(v))}
+              style={{ fill: m.axis, fontSize: 10, fontWeight: 700 }} />
             {data.map(d => (
               <Cell key={d.value_} opacity={hasActive && activeVal !== d.value_ && activeVal !== d.label ? 0.4 : 1} />
             ))}
@@ -2280,6 +2916,40 @@ function ColumnChart({ rows, m, onPick, activeVal = '', limit = 10 }: {
      category's two bars far enough apart that they read as two categories. */
   const barSize = data.length <= 8 ? 22 : 12
 
+  /*
+    ── WHETHER THE COLUMNS CAN CARRY THEIR VALUES ──────────────────────────
+
+    A label here sits ABOVE its column and is centred on it, so two labels in a
+    pair collide horizontally once their half-widths meet. The available room is
+    barSize + barGap, centre to centre.
+
+    Measured (Poppins 700 10px, the style below) against real report values:
+
+        columns  centre gap   "1.6K/1K"  "12.3K/9.8K"  "123.4K/99.9K"
+          22px      24px          ok          ok        overlaps  6px
+          12px      14px     overlaps 1px  overlaps 10px  overlaps 16px
+
+    So the narrow variant could not carry them at all, and the wide one failed
+    on six-character values — printed anyway, they overlapped into an unreadable
+    smear where the exact figures matter most.
+
+    A 12px column cannot be widened enough to fit two numbers without the gap
+    inside a pair exceeding the gap between pairs, which is the one thing that
+    must not happen — the grouping is the chart. So the labels are drawn only
+    when they FIT, and the values stay reachable through the tooltip and the
+    TABLE toggle on the card, the same relief the truncated axis labels use.
+
+    Widths are MEASURED, not estimated per character. The first version of this
+    used an average of 5.6px per character and got it wrong in the one direction
+    that matters: plain digits are 7px in this face while "." and "K" are much
+    narrower, so "445" came out as 17px against a real 21px — and a pair that
+    overlapped was labelled anyway. An estimate for a rule about overlapping is
+    the wrong tool when the exact answer costs one canvas call.
+  */
+  const columnGap = 6
+  const roomForLabels = data.every(d =>
+    textPx(axisNum(d.urls)) / 2 + textPx(axisNum(d.removed)) / 2 <= barSize + columnGap)
+
   /* The handler sits on the bars, not on the chart. A chart-level onClick reads
      recharts' hover state to say which category was hit, so it misses on a
      touch or a click that arrives without a preceding pointer move — and a
@@ -2294,7 +2964,7 @@ function ColumnChart({ rows, m, onPick, activeVal = '', limit = 10 }: {
     <>
       <div style={{ height: angled ? 262 : 208 }}>
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} barGap={2}
+          <BarChart data={data} barGap={columnGap}
             margin={{ top: 18, right: 8, left: 0, bottom: 4 }}
   >
             <CartesianGrid vertical={false} stroke={m.grid} />
@@ -2307,12 +2977,21 @@ function ColumnChart({ rows, m, onPick, activeVal = '', limit = 10 }: {
             <Tooltip cursor={{ fill: m.grid, fillOpacity: 0.5 }} content={<ChartTip />} />
             <Bar dataKey="urls" name="Identified" fill={m.ident} radius={[4, 4, 0, 0]}
               barSize={barSize} isAnimationActive={false} cursor={onPick ? 'pointer' : 'default'} onClick={pickFrom}>
-              <LabelList dataKey="urls" position="top" formatter={(v: any) => axisNum(Number(v))}
-                style={{ fill: m.axis, fontSize: 10, fontWeight: 700 }} />
+              {roomForLabels && (
+                <LabelList dataKey="urls" position="top" formatter={(v: any) => axisNum(Number(v))}
+                  style={{ fill: m.axis, fontSize: 10, fontWeight: 700 }} />
+              )}
               {data.map(d => <Cell key={d.value_} opacity={dim(d)} />)}
             </Bar>
             <Bar dataKey="removed" name="Removed" fill={m.removed} radius={[4, 4, 0, 0]}
               barSize={barSize} isAnimationActive={false} cursor={onPick ? 'pointer' : 'default'} onClick={pickFrom}>
+              {/* Both columns of a pair or neither — see roomForLabels. One
+                  labelled column beside an unlabelled one reads as the second
+                  having no value, which is the reason HBarChart labels both. */}
+              {roomForLabels && (
+                <LabelList dataKey="removed" position="top" formatter={(v: any) => axisNum(Number(v))}
+                  style={{ fill: m.axis, fontSize: 10, fontWeight: 700 }} />
+              )}
               {data.map(d => <Cell key={d.value_} opacity={dim(d)} />)}
             </Bar>
           </BarChart>
@@ -2335,9 +3014,14 @@ function ColumnChart({ rows, m, onPick, activeVal = '', limit = 10 }: {
  *   them, after which every column is a height with nothing to measure it
  *   against. The axis is drawn in its own column, outside the scroller.
  *
- *   ONE DIRECT LABEL, NOT SEVENTY. A value over every column is chaos and goes
- *   unread. The busiest category is the one figure the card exists to surface;
- *   the axis, the tooltip and the Table view carry the rest.
+ *   EVERY COLUMN CARRIES ITS FIGURE, and the SLOT is what makes that legible.
+ *   This drew one label — the busiest category — on the grounds that seventy
+ *   values is chaos. True of seventy values crammed into a card; not true here,
+ *   because this chart already scrolls rather than compressing. So the floor on
+ *   a category's slot now reserves room for a pair of numbers, and a set too
+ *   wide to fit gets a longer scroller instead of fewer labels. Printing two
+ *   figures out of a hundred and forty is the worse failure: it reads as those
+ *   two having been singled out, and every other column as having no value.
  *
  *   THE TARGET IS THE CATEGORY, NOT THE MARK. At eight pixels a column, a click
  *   that cross-filters the whole page is a test of aim. Each category owns a
@@ -2411,7 +3095,12 @@ function SeasonColumns({ rows, m, onPick, activeVal = '' }: {
      what lets one component draw ten franchises across a full-width card and
      seventy fixtures in a half-width one without either looking stretched. */
   const baseBar = n <= 8 ? 22 : n <= 20 ? 14 : 8
-  const minSlot = Math.max(baseBar * 2 + 12, mayAngle ? 48 : 30)
+  /* Room for a pair of direct labels, which is now the binding constraint on a
+     dense set: at eight pixels a column the marks would fit in 28px and the two
+     figures above them would overlap. `axisNum` compacts to four characters at
+     the worst ("3.5K"), so ~24px each is enough at fontSize 9. */
+  const VALUE_W = 24
+  const minSlot = Math.max(baseBar * 2 + 12, VALUE_W * 2 + 8, mayAngle ? 48 : 30)
 
   /* AND A CEILING, WHICH IS THE OTHER HALF OF THE SAME RULE.
 
@@ -2476,7 +3165,7 @@ function SeasonColumns({ rows, m, onPick, activeVal = '' }: {
   const angled = !oneLine && !wraps
 
   const AXIS_W = 52
-  const TOP = 22                      // room for the one direct label
+  const TOP = 22                      // room for the direct labels
   const PLOT = 190
 
   /* THE BAND IS MEASURED, NOT ASSUMED — and it was assumed.
@@ -2497,7 +3186,6 @@ function SeasonColumns({ rows, m, onPick, activeVal = '' }: {
   const ticks = niceTicks(data.reduce((a, d) => Math.max(a, d.urls, d.removed), 0))
   const max = ticks[ticks.length - 1] || 1
   const y = (v: number) => TOP + PLOT - (v / max) * PLOT
-  const peak = n > 0 ? data.reduce((a, d) => (d.urls > a.urls ? d : a), data[0]) : null
 
   useEffect(sync, [sync, plotW, avail])
 
@@ -2601,12 +3289,21 @@ function SeasonColumns({ rows, m, onPick, activeVal = '' }: {
                     ))}
                   </text>
 
-                  {/* The extreme, and only the extreme. */}
-                  {d === peak && d.urls > 0 && (
-                    <text x={cx} y={y(d.urls) - 8} textAnchor="middle" fontSize={10}
-                      fontWeight={700} fill={m.axis}
+                  {/* Each figure over its own bar. A category with nothing in
+                      it draws no mark, so it gets no label either — the number
+                      would sit on the baseline among the category names. */}
+                  {d.urls > 0 && (
+                    <text x={xI + barW / 2} y={y(d.urls) - 6} textAnchor="middle" fontSize={9}
+                      fontWeight={700} fill={m.axis} opacity={o}
                       style={{ fontVariantNumeric: 'tabular-nums' }}>
                       {axisNum(d.urls)}
+                    </text>
+                  )}
+                  {d.removed > 0 && (
+                    <text x={xR + barW / 2} y={y(d.removed) - 6} textAnchor="middle" fontSize={9}
+                      fontWeight={700} fill={m.axis} opacity={o}
+                      style={{ fontVariantNumeric: 'tabular-nums' }}>
+                      {axisNum(d.removed)}
                     </text>
                   )}
 
@@ -2908,12 +3605,24 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
   const [layoutOpen, setLayoutOpen] = useState(false)
   const [layoutRev,  setLayoutRev]  = useState(0)
   const [filters,  setFilters]  = useState<Filters>(emptyFilters)
+  /* Whether the range on screen is the READER'S, or still the one the page
+     opened with.
+
+     Needed because the two are indistinguishable by value. The generic thirty
+     days lands inside a running season perfectly often, so "is this window
+     inside the period" — the only test there used to be — answered yes for a
+     window nobody had chosen, and a sports report opened on a month.
+
+     A ref rather than state: nothing renders from it, and the sections effect
+     reads it inside a fetch callback, where a captured state value would be the
+     one from when the request went out rather than the one from when it came
+     back. */
+  const rangePicked = useRef(false)
   const [opts,     setOpts]     = useState<Record<string, any>>({})
   const [data,     setData]     = useState<any>(null)
   const [loading,  setLoading]  = useState(false)
   const [err,      setErr]      = useState('')
   const [unavailable, setUnavailable] = useState('')
-  const [lastRun,  setLastRun]  = useState<Date | null>(null)
   // 401/403 is a session problem, not a warehouse problem — kept apart so the
   // page can tell you to sign in again instead of blaming the database config.
   const [authError, setAuthError] = useState('')
@@ -3004,6 +3713,18 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
   /* Declared before the chart-shape callbacks below, which read it to decide
      whether a rolled-back save still has a component to roll back into. */
   const mounted = useRef(true)
+
+  /* The two halves of the PDF export — see lib/printReport.
+
+     `printRoot` is WHAT is printed: the page less its breadcrumb row, with the
+     two rails inside it marked as chrome and dropped from the clone.
+     `printMain` is what the PAGE IS MEASURED FROM, and it is the centre column
+     rather than the root on purpose — the charts are cloned at the width they
+     were drawn at, so the paper has to be cut to that width or every one of
+     them lands in a container it does not fill. */
+  const printRoot = useRef<HTMLDivElement>(null)
+  const printMain = useRef<HTMLElement>(null)
+  const [printError, setPrintError] = useState('')
 
   /* Chart shapes, in two layers, both keyed platform:panel so the same panel can
      be a donut on one report and a table on another.
@@ -3106,11 +3827,9 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
      keys held here. The keys are configuration an admin edits on Report
      Configuration; a hardcoded list would go quietly wrong the day somebody
      added a platform, and the symptom would be a card that is simply absent. */
-  const isSportsSection = useMemo(() => {
-    if (!activeSection) return false
-    const [, qualifier] = splitLabel(activeSection.label)
-    return (qualifier ?? '').trim().toLowerCase() === 'sports'
-  }, [activeSection])
+  const isSportsSection = useMemo(
+    () => !!activeSection && isSportsLabel(activeSection.label),
+    [activeSection])
 
   /*
   Whether the live card is on the page at all.
@@ -3119,25 +3838,88 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
   and the sticky offset the rails are given — a rail held down for a band that is
   not there would leave a gap at the top of the page with nothing in it.
 
-  ── Why it now waits for a narrowing filter ────────────────────────────────
+  ── Why it no longer waits for a narrowing filter ──────────────────
 
-  A client, a sports section, AND one of Match Day / Asset / Franchise.
+  A client, and the panel still on the page. Both are configuration; nothing is
+  asked of the reader any more.
 
-  Unfiltered, the card counted the client's entire configured season on every
-  visit — the most expensive query in the product, run to answer a question
-  nobody had asked yet, above a report the reader had not finished setting up.
-  It is a LIVE figure, and a live figure is worth its cost when it is about
-  something specific: this fixture, this title, this team. "Everything, ever" is
-  not a live number, it is a total, and the report below already carries it.
+  It wanted one of Match Day / Asset / Franchise as well, and the reason was
+  cost rather than taste. Unfiltered, the card counted the client's entire
+  configured season on every visit — the most expensive query in the product,
+  measured at 14.5s against production — run to answer a question nobody had
+  asked yet, above a report the reader had not finished setting up.
 
-  The three that qualify are the ones that name a THING rather than narrow a
-  list. Country or language would leave the card counting most of the season
-  anyway; a match day, an asset or a franchise cuts it to something a reader is
-  actively watching.
+  What fixed that is the WINDOW, not the filters. The card opens on the last 24
+  hours and can be widened to a week and no further (REALTIME_WINDOWS above; the
+  ceiling is the server's and is enforced in scopeFromRequest, not here), and a
+  week of one client's captures measures at 1.4s against the season's 14.5s.
+  There is nothing left to defer the card for — and deferring it was never what
+  a reader wanted. A live card that appears three clicks into setting up a
+  report is one most people never see, on the page where "what is happening
+  right now" is the first question asked.
+
+  The three filters still matter, they just no longer gate it: they are what the
+  count is narrowed BY as the reader picks them, and the strip along the bottom
+  of the card names them — along with the ones the live tables cannot honour,
+  which is the part a reader could not otherwise know.
   */
-  const REALTIME_FILTERS = ['matchDay', 'assetId', 'franchiseName'] as const
-  const realtimeNarrowed = REALTIME_FILTERS.some(k => !!filters[k])
-  const showRealtime = !!filters.clientId && isSportsSection && realtimeNarrowed
+
+  /* ── The card as Report Configuration arranged it ──────────────────────────
+
+     The live strip is a PANEL now — its title, its ⓘ note, its width and
+     whether it is on the page at all come from the layout, alongside every
+     chart below it (Report Configuration → Page Layout, served by
+     go-server/handlers/reportlayout.go). Switched off there, the server simply
+     leaves it out of the list and the card is gone.
+
+     Read off the section rather than out of `panels` further down, because the
+     sticky offset the rails are given is measured up here and cannot wait for
+     it.
+
+     An older server sends no panel list at all. There the card is on every
+     sports report at full width and under its own name, which is exactly what
+     it was before it could be arranged. */
+  const rtPanel: SectionPanel | null = useMemo(() => {
+    const list = activeSection?.panels
+    if (!list?.length) {
+      return isSportsSection ? { key: 'realtime', kind: 'realtime', span: 'full' } : null
+    }
+    return list.find(p => p.kind === 'realtime') ?? null
+  }, [activeSection, isSportsSection])
+
+  /* Whether it LEADS the page, which is the one thing its position decides
+     beyond where it is drawn.
+
+     First, it is the full-width band across both rails — the thing a reader can
+     pin, so live counts hold their place while the report scrolls under them.
+     Moved below any other panel it is an ordinary card inside the centre grid,
+     and the pin goes with the position: a card pinned from the middle of a page
+     has nothing to stick to, and the band it would need is the width of a page
+     it is no longer at the top of. */
+  const rtLeads = (activeSection?.panels?.[0]?.kind ?? 'realtime') === 'realtime'
+
+  /*
+    The card is DRAWN whenever the layout has one, client or no client.
+
+    This used to require filters.clientId, which meant the live counts appeared
+    only once a company had been resolved — a beat after load for a client login,
+    and not until a staff reader had picked one. Either way the reader could not
+    see that the strip existed, and the page reflowed when it arrived.
+
+    Whether it can COUNT is a separate question, and the card answers it itself:
+    rtWaitingFor below hands it a reason instead of a scope, and it draws its
+    frame without calling anything.
+  */
+  const showRealtime = !!rtPanel
+
+  /* Empty once a client is known, which is when the card starts counting.
+     A client login resolves its own company on load, so this is momentary
+     there; for staff it stands until they choose one. */
+  const rtWaitingFor = filters.clientId
+    ? undefined
+    : (scoped
+        ? 'Loading your live figures…'
+        : 'Choose a client to see live figures. The window selected here applies to them.')
 
   /*
   How far down the two rails start sticking.
@@ -3188,7 +3970,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [rtPinned, showRealtime])
+  }, [rtPinned, showRealtime, rtLeads])
   /* What a rail's `top` and max height are written against. Both are `calc`
      against this, so the unpinned case resolves to exactly the values that
      were hard-coded before it existed. */
@@ -3208,6 +3990,26 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     () => (filters.assetId ? [filters.assetId] : []),
     [filters.assetId],
   )
+
+  /* ── What the live card's own three slicers are set to ────────────────────
+
+     The card may be counting something other than the report — that is what its
+     pickers are for — and when it is, the option lists it was handed no longer
+     describe it. See the rtOpts effect below.
+
+     Reported by the card through a STABLE callback, and stored only when a
+     value actually moved: the card fires on every change of its effective
+     three, and a setState that always wrote a new object would re-render the
+     card, which would fire it again. */
+  const [rtDims, setRtDims] = useState({ franchiseName: '', matchDay: '', assetId: '' })
+  /* The lists re-listed under those three. Null while the card is following the
+     report, which is when the rail's own lists already describe it. */
+  const [rtOpts, setRtOpts] = useState<Record<string, any> | null>(null)
+  const onRtDimsChange = useCallback(
+    (d: { franchiseName: string; matchDay: string; assetId: string }) =>
+      setRtDims(p => (p.franchiseName === d.franchiseName && p.matchDay === d.matchDay
+        && p.assetId === d.assetId ? p : d)),
+    [])
 
   /* ── Connection state ─────────────────────────────────────────────────── */
   const loadHealth = useCallback(() => {
@@ -3291,7 +4093,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
            state is the honest first step for them, and it stays.
 
            A client has no such choice: their company is fixed by the mapping,
-           the window already defaults to the last thirty days, and everything
+           the window already has a default of its own, and everything
            needed to draw a report is known before the page renders. Asking them
            to pick a platform was a step that existed only because this screen
            is shared with staff.
@@ -3317,10 +4119,19 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         setFilters(f => {
           const cur = d.sections.find((s: Section) =>
             s.key === (section || (scoped ? d.sections[0]?.key : '')))
-          if (!cur?.period) return f
+          if (!cur) return f
+          /* Untouched, so the section decides — seven days on a sports report,
+             thirty elsewhere, clipped to the season where there is one. The
+             page cannot know which section it is on until this list arrives, so
+             this is the first moment the right default can be applied. */
+          if (!rangePicked.current) {
+            const def = sectionDefaultRange(cur)
+            return def.from === f.from && def.to === f.to ? f : { ...f, ...def }
+          }
+          if (!cur.period) return f
           const { start, end } = cur.period
           if (f.from >= start && f.from <= end && f.to >= start && f.to <= end) return f
-          return { ...f, ...periodDefaultRange(cur.period) }
+          return { ...f, ...sectionDefaultRange(cur) }
         })
       })
       .catch(e => {
@@ -3379,6 +4190,60 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     return () => { active = false; clearTimeout(t) }
   }, [section, activeSection, filters])
 
+  /* ── The same lists again, under the LIVE CARD's own scope ────────────────
+
+     Only while the card has been moved off the report, which is the whole of
+     when this is needed and is why it usually costs nothing: with the card
+     following the rail the two requests would be identical, so `rtOpts` stays
+     null and the card is handed the rail's lists exactly as before.
+
+     Why it is needed at all. The card's three pickers narrow the LIVE figure
+     and deliberately never touch the report — but the values they offer came
+     from a request scoped to the report, so the moment the two part company the
+     list stops describing what the card is counting. Move the card to Belgian
+     Pro League while the rail is unfiltered and the Asset list still offers all
+     34 fixtures, Serie A included; pick one and the count asks the warehouse
+     for a Serie A fixture inside Belgian Pro League, which cannot exist. The
+     card reads 0, correctly, having been picked out of a list that was still
+     advertising rows against it. Re-listed here, that fixture is simply not
+     offered — and the Franchise list, scoped by the card's asset in the same
+     pass, shows the competition that asset IS in.
+
+     Failures are swallowed. These are a second copy of lists the page already
+     has; blanking the report or raising a banner because the card's copy could
+     not be refreshed would turn a cosmetic gap into an outage, and the card
+     falls back to the rail's lists on its own. */
+  const rtDimsMoved = (rtDims.franchiseName || '') !== (filters.franchiseName || '')
+    || (rtDims.matchDay || '') !== (filters.matchDay || '')
+    || (rtDims.assetId || '') !== (filters.assetId || '')
+  useEffect(() => {
+    if (!section || !activeSection || !rtDimsMoved) { setRtOpts(null); return }
+    let active = true
+    const t = setTimeout(() => {
+      const p = new URLSearchParams({ type: section })
+      if (filters.clientId) p.set('clientId', filters.clientId)
+      if (filters.from) p.set('from', filters.from)
+      if (filters.to) p.set('to', filters.to)
+      for (const key of activeSection.filters ?? []) {
+        /* The card's value for the three it owns, the rail's for the rest —
+           the same substitution the count itself makes, off the same list that
+           decides which filters the count can honour at all. */
+        const v = REALTIME_COUNT_FILTERS.has(key)
+          ? (rtDims as Record<string, string>)[key]
+          : filters[key]
+        if (v) p.set(key, v)
+      }
+      fetch(`/api/reports/options?${p}`, { credentials: 'include' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => {
+          if (!mounted.current || !active) return
+          if (d && d.available !== false) setRtOpts(d)
+        })
+        .catch(() => {})
+    }, 350)
+    return () => { active = false; clearTimeout(t) }
+  }, [section, activeSection, filters, rtDims, rtDimsMoved])
+
   /* ── Auto-run on any filter change, debounced ─────────────────────────── */
   useEffect(() => {
     if (!section || !activeSection) { setData(null); return }
@@ -3398,7 +4263,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         if (!active) return
         if (json.available === false) { setUnavailable(json.error || 'Reports database unavailable'); return }
         if (res.status === 401 || res.status === 403) { setAuthError(AUTH_MSG); return }
-        if (json.ok) { setData(json); setLastRun(new Date()); setErr(''); setUnavailable(''); setAuthError('') }
+        if (json.ok) { setData(json); setErr(''); setUnavailable(''); setAuthError('') }
         else setErr(json.error || 'Query failed')
       } catch (e: any) {
         if (active) setErr(e.message)
@@ -3440,6 +4305,10 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
   const pickPeriod = (label: string) => {
     const span = periodSpan(label)
     if (!span) return
+    // Clicking a day IS choosing a range — and so is the click back out of it,
+    // which restores the one they were on. Either way the window stops being
+    // the page's opening default.
+    rangePicked.current = true
     // Clicking the period you are already in is the way out of it — the same
     // toggle every other panel on this page uses for its own values.
     if (drilled && drill!.label === label) {
@@ -3495,7 +4364,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
       return {
         ...kept,
         // The reader's dates survive the move where the target can show them.
-        ...carriedRange(to?.period, f.from, f.to),
+        ...carriedRange(to, f.from, f.to, rangePicked.current),
       }
     })
   }
@@ -3709,6 +4578,58 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     return name ? [name] : []
   }, [filters.assetId, opts.assetId])
 
+  /* ── What the live card's bottom strip says the rail holds ────────────────
+
+     Every active slicer, with each one saying whether the LIVE count could
+     honour it. The two lists are not the same and the gap is invisible on the
+     numbers: the card counts by asset, franchise and match day, the rail
+     carries a dozen, and an unfiltered live total under a rail set to Spain and
+     Spanish looks like a Spanish figure while being out by an order of
+     magnitude. Nothing on the card said so, because until now the card was not
+     on screen unless one of the three it honours had been picked.
+
+     Built from `chips`, not from `filters`, so the strip and the chips above
+     the report cannot end up calling one selection two different things — the
+     display names are resolved once, in one place.
+
+     Deliberately NOT memoised. It is passed for RENDERING only, never as an
+     effect dependency, so a fresh array per render costs a shallow diff and
+     nothing else; memoising it on `chips`, which is itself rebuilt every
+     render, would be the appearance of care and none of it. */
+  const realtimeScopeFilters = chips.map(c => ({
+    key: c.key, label: c.label, value: c.display,
+    applied: REALTIME_COUNT_FILTERS.has(c.key),
+  }))
+
+  /* ── The option lists the live card's own slicers are drawn from ──────────
+
+     The rail's own lists, handed over rather than fetched again. They are
+     SCOPED — narrowed by the client, the window and each other (see the
+     `/api/reports/distinct` effect) — so a card fetching its own would offer
+     franchises this client does not have and fixtures the report has already
+     ruled out, and picking one would produce a live figure of zero under a
+     report that never mentioned it.
+
+     Only the three the live tables can be narrowed by; the same three
+     REALTIME_COUNT_FILTERS names, and for the same reason. A slicer the section
+     does not declare is left undefined and the card draws no control for it —
+     which is what happens on a sports report configured without a Match Day
+     slicer, where offering one here would be the card inventing a filter the
+     rail deliberately does not have. */
+  const realtimeDimOptions = useMemo(() => {
+    /* The card's own lists where it has moved off the report, the rail's
+       otherwise — see the rtOpts effect. */
+    const src = rtOpts ?? opts
+    const forKey = (k: string) =>
+      activeSection?.filters?.includes(k) ? asOpts(src[k]) : undefined
+    return {
+      franchiseName: forKey('franchiseName'),
+      matchDay: forKey('matchDay'),
+      assetId: forKey('assetId'),
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection, rtOpts, opts.franchiseName, opts.matchDay, opts.assetId])
+
   /* The page's shape comes from the server: every visual, in the order and at
      the width this platform is configured for (Report Configuration → Layout,
      served by go-server/handlers/reportlayout.go). The fallback is the panel
@@ -3720,6 +4641,13 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     const metrics = activeSection?.kpiTiles
       ?? ['identified', 'removed', 'removalPct', 'pending', ...(activeSection?.extraKpi ?? [])]
     return [
+      /* The live strip leads the page, which is where it was drawn before it
+         was a panel at all. Mirrors defaultPanels in
+         go-server/handlers/reportlayout.go, which this list is the fallback
+         for. */
+      ...(isSportsSection
+        ? [{ key: 'realtime', kind: 'realtime' as const, label: 'Realtime', span: 'full' as const }]
+        : []),
       ...metrics.map(metric => ({
         key: `kpi:${metric}`, kind: 'tile' as const, metric,
         label: KPI_LABELS[metric] ?? metric, span: 'quarter' as const,
@@ -3737,7 +4665,209 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         sub: 'Views of the same result set — click any row to cross-filter every panel', span: 'full' },
       ...dims.map(d => ({ key: d.key, kind: 'dim' as const, label: d.label, viz: d.viz, span: d.span })),
     ]
-  }, [activeSection, sourceTrends])
+  }, [activeSection, sourceTrends, isSportsSection])
+
+  /* ── The report, as a workbook ─────────────────────────────────────────────
+
+     One sheet per panel, in the order the panels are on the page, behind a
+     cover sheet that says what the numbers are OF.
+
+     Why a workbook rather than a file per chart: a report is a dozen panels
+     that answer one question between them, and a dozen CSVs in a downloads
+     folder is a set somebody has to reassemble. Tabs keep them together, named,
+     in reading order — which is the "structured" part of the ask.
+
+     Why a COVER sheet: a grid of numbers with no window and no filters on it
+     will be read wrong within a month. The scope is on every sheet as a
+     subtitle and set out in full on the first one, so no tab can be forwarded
+     on its own and lose it.
+
+     Built on demand, in the click handler, from exactly the state the panels
+     render from — never held in a ref written during render. A registry filled
+     as cards mount is a second copy of the page's contents that is stale
+     whenever a panel has not re-rendered, and the one thing this file has to
+     guarantee is that the download IS what is on the screen. */
+
+  /** The scope, in one line. Printed under every sheet's title and into every
+      exported image. */
+  const exportScope = useMemo(() => [
+    scope?.clientName && `Client: ${scope.clientName}`,
+    activeSection?.label && `Report: ${activeSection.label}`,
+    filters.from && filters.to && `Window: ${shortDateFull(filters.from)} – ${shortDateFull(filters.to)}`,
+    ...chips.map(c => `${c.label}: ${c.display}`),
+  ].filter(Boolean).join('  ·  '),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [scope?.clientName, activeSection?.label, filters.from, filters.to, chips.map(c => c.key + c.display).join('|')])
+
+  /** The name a panel wears on the page.
+   *
+   *  The same fallbacks renderPanel uses, in one place, so a sheet cannot end
+   *  up under a different name from the card it came from. `label` is the
+   *  server's — set in Report Configuration — and wins wherever it exists. */
+  const panelLabel = useCallback((p: SectionPanel): string => {
+    if (p.label) return p.label
+    switch (p.kind) {
+      case 'trend': {
+        const src = p.role ? sourceTrends.find(x => x.role === p.role) : undefined
+        return src
+          ? `${src.label} Identification & ${src.secondName}`
+          : isSummary ? 'Infringement Identification & Removal' : 'Identification & Removal'
+      }
+      case 'rate': return 'Removal rate'
+      case 'dim': return (activeSection?.dimensions ?? []).find(d => d.key === p.key)?.label ?? p.key
+      default: return p.key
+    }
+  }, [sourceTrends, isSummary, activeSection])
+
+  /** The table a panel is showing, for the panels that have one. Null for a
+      tile, a heading, the live strip, and for a trend whose source returned
+      nothing — none of which is a table, and a sheet for each would be a tab
+      the reader opens to find empty. */
+  const panelTableFor = useCallback((p: SectionPanel): PanelTable | null => {
+    switch (p.kind) {
+      case 'trend': {
+        const src = p.role ? sourceTrends.find(x => x.role === p.role) : undefined
+        if (p.role && !src) return null
+        const rows = src ? src.rows : trend
+        return trendTableData(rows,
+          src ? `${src.label} URLs` : 'Identified',
+          src ? src.secondName : 'Removed', trendGrain)
+      }
+      case 'rate':
+        return rateTableData(trend, trendGrain)
+      case 'dim': {
+        const rows = orderRows(p.key, (data?.breakdowns?.[p.key] || []) as any[])
+        const dim = (activeSection?.dimensions ?? []).find(d => d.key === p.key)
+        return dimTableData(p.key, dim?.label ?? p.label ?? p.key,
+          vizFor(`${section}:${p.key}`, p.viz || dim?.viz || 'bars'), rows)
+      }
+      default:
+        return null
+    }
+  }, [sourceTrends, trend, trendGrain, data, activeSection, section, vizFor])
+
+  const exportReport = useCallback(() => {
+    const stamp = new Date()
+    const sheets: Sheet[] = [{
+      name: 'Report',
+      title: activeSection?.label || 'Report',
+      subtitle: `Taken ${stamp.toLocaleString()}`,
+      head: ['Field', 'Value'],
+      rows: [
+        ['Client', scope?.clientName ?? ''],
+        ['Report', activeSection?.label ?? section],
+        ['From', filters.from ?? ''],
+        ['To', filters.to ?? ''],
+        ['Grain', trendGrain],
+        /* Every slicer that was set, by name. The sheet after this one is a
+           column of counts, and the difference between "all assets" and "one
+           fixture" is invisible in it. */
+        ...chips.map(c => [c.label, c.display] as (string | number)[]),
+        ['Taken', stamp.toLocaleString()],
+      ],
+    }]
+
+    /* The headline figures, as their own sheet. They are panels on the page but
+       not tables — four to ten single numbers — so one sheet holds the lot
+       rather than each getting a tab with one row on it. */
+    const tiles = panels.filter(p => p.kind === 'tile')
+    const tileRows = tiles.map(p => {
+      const metric = p.metric ?? ''
+      const label = p.label ?? KPI_LABELS[metric] ?? metric
+      const t = tileFor(metric, label)
+      // The em dash the tile itself shows, not a zero: a metric this run did
+      // not produce is missing, and 0 is a different claim.
+      //
+      // The tile's FOOT does not come with it. On screen it is a caption under
+      // a figure - "of 12,043 identified", "vs the 30 days before" - written to
+      // be read against the number above it and against the window the page
+      // states. In a column called Note, one cell down from a heading, it read
+      // as a qualification OF the figure, and a sheet somebody sorts or filters
+      // separates the two entirely. The sheet keeps the figure, which is the
+      // thing the workbook is for; the caption belongs to the page.
+      return [label, t ? String(t.value) : '—'] as (string | number)[]
+    })
+    if (tileRows.length) {
+      sheets.push({
+        name: 'Headline figures', title: 'Headline figures', subtitle: exportScope,
+        head: ['Figure', 'Value'], rows: tileRows,
+      })
+    }
+
+    for (const p of panels) {
+      const td = panelTableFor(p)
+      // An empty panel is skipped rather than given a tab with a header and no
+      // rows. The cover names the window; a reader who wants to know why a
+      // chart is missing is asking about the window, not about the file.
+      if (!td || !td.rows.length) continue
+      sheets.push({
+        name: panelLabel(p), title: panelLabel(p), subtitle: exportScope,
+        head: td.head, rows: td.rows,
+      })
+    }
+
+    const who = scope?.clientName ? `${scope.clientName} — ` : ''
+    downloadWorkbook(
+      `${who}${activeSection?.label ?? section} — ${filters.from ?? ''} to ${filters.to ?? ''}`,
+      sheets)
+  }, [panels, panelTableFor, panelLabel, tileFor, activeSection, section, scope,
+      filters.from, filters.to, trendGrain, chips, exportScope])
+
+  /**
+   * The same report, as a document.
+   *
+   * The workbook above takes the NUMBERS away — one sheet per panel, no charts,
+   * nothing about how the page was laid out. This takes the PAGE away: every
+   * panel at the size and in the position it is on screen, which is what gets
+   * pasted into a deck or sent to somebody who is never going to open a
+   * spreadsheet.
+   *
+   * What it drops is the application around it — the breadcrumb, the report
+   * navigation and the filter rail — because none of those is the report and a
+   * pane of controls nobody can click is worse than no pane at all.
+   *
+   * What it KEEPS from the filter rail is the only part that survives leaving
+   * the screen: the selections themselves, printed as a block under the title.
+   * A dashboard with no statement of what it was filtered to is a set of numbers
+   * that cannot be checked, and the reader of the PDF is exactly the person who
+   * was not there when the slicers were set.
+   */
+  const printPdf = useCallback(() => {
+    if (!printRoot.current) return
+    const who = scope?.clientName ? `${scope.clientName} — ` : ''
+    const name = activeSection?.label ?? section
+    const win = filters.from && filters.to
+      ? `${shortDateFull(filters.from)} – ${shortDateFull(filters.to)}`
+      : undefined
+    setPrintError(printReport(printRoot.current, {
+      fileName: `${who}${name} — ${filters.from ?? ''} to ${filters.to ?? ''}`,
+      title: name,
+      client: scope?.clientName,
+      window: win,
+      /* The rail's selections, resolved to their display names by `chips` —
+         the same list the workbook's cover sheet and every exported chart
+         carry, so three exports of one reading cannot describe it three ways. */
+      filters: chips.map(c => ({ label: c.label, value: c.display })),
+      measureFrom: printMain.current,
+    }) ?? '')
+  }, [activeSection, section, scope, filters.from, filters.to, chips])
+
+
+  /* What the GRID draws, which is the panel list less the live strip in the two
+     cases where the strip is not one of its cells:
+
+       · it leads the page, and is therefore the band above both rails — the
+         same element it has always been, so pinning stays a style change on a
+         card that is never torn down;
+       · it is not on screen at all, because no client or no narrowing filter
+         has been chosen yet. The panel is still in the layout; this reading
+         simply has nothing to put in it, and an empty full-width cell in the
+         middle of the report is worse than no cell.
+
+     Anywhere else it is an ordinary panel and renderPanel draws it in place. */
+  const gridPanels = useMemo(
+    () => panels.filter(p => p.kind !== 'realtime' || (showRealtime && !rtLeads)),
+    [panels, showRealtime, rtLeads])
 
   /** Every breakdown panel's table twin has the same five columns. */
   const dimTable = (rows: any[], onPick?: (v: string) => void, activeVal = '') => (
@@ -3762,7 +4892,25 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
    * grid below are the same component and cannot drift apart.
    */
   const renderDim = (dim: SectionDim, spanClass: string) => {
-    const rows = orderRows(dim.key, (data?.breakdowns?.[dim.key] || []) as any[])
+    /*
+      TWO row sets, and the difference between them is the whole of "hide for
+      visibility only".
+
+      `rows` is what is DRAWN — the chart, and the table twin behind the TABLE
+      toggle, which is another way of looking at the same panel. Placeholders are
+      out of it: see isPlaceholderRow.
+
+      `rowsAll` is what is EXPORTED. A download is not a view, it is the data
+      leaving the building, and a row this panel declined to draw is still a row
+      the client's numbers include. Dropping it from the file would make the
+      export disagree with the report's own totals, which is the one thing the
+      instruction was explicit about not doing.
+
+      The whole-report export already reads the unfiltered rows for the same
+      reason — see dimTableData's other caller.
+    */
+    const rowsAll = orderRows(dim.key, (data?.breakdowns?.[dim.key] || []) as any[])
+    const rows = rowsAll.filter(r => !isPlaceholderRow(r))
     const param = DIM_FILTER[dim.key]
     const filterable = !!param && !!activeSection?.filters.includes(param)
     const pick = filterable ? cross(param!) : undefined
@@ -3779,8 +4927,14 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     const options = configured === 'map' ? [MAP_VIZ, ...DIM_VIZ]
       : configured === 'repeat' ? [REPEAT_VIZ, ...DIM_VIZ]
       : DIM_VIZ
+    /* Built once. The toggle below draws it and the download hands it over —
+       and a panel showing its chart as a ranked TABLE still has rows worth
+       exporting, which is why this is not inside the conditional under it. */
+    const td = dimTableData(dim.key, dim.label, viz, rows)
+    const tdExport = dimTableData(dim.key, dim.label, viz, rowsAll)
     return (
       <Card key={dim.key} title={dim.label} info={dim.desc}
+        exportTable={tdExport} exportSubtitle={exportScope} exportFooter={EXPORT_FOOTER}
         action={<VizPicker options={options} value={viz} fallback={configured}
           saved={vizDefault[vizKey]}
           onPick={v => setViz(vizKey, v)}
@@ -3790,29 +4944,13 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
            the section heading above them says it once. The affordance is still
            there — the rows take a pointer cursor and highlight on hover. */
         chartTitle={undefined}
+        /* No twin where the chart already IS the table. The shapes it takes —
+           the repeat panel's day count and full URL, a single-series panel's
+           one count, a breakdown's five columns — are dimTableData's, so the
+           twin and the download are the same table by construction. */
         table={viz === 'table' ? undefined
-          /* The repeat panel's table twin carries the day count and the full
-             URL — the two things the chart had to shorten or move off the mark
-             to stay readable. Keyed off the DIMENSION, not off `viz`: switching
-             this panel to bars does not stop its rows being accounts. */
-          : dim.key === 'byRepeatOffender'
-            ? <DataTable head={['Channel / Profile URL', 'Days', 'Identified', 'Removed', 'Rate']}
-                onPick={pick} activeVal={active}
-                pickValues={rows.map(r => String(r.label ?? ''))}
-                rows={rows.map(r => {
-                  const urls = Number(r.urls) || 0
-                  const removed = Number(r.removed) || 0
-                  return [String(r.label ?? '—'), Number(r.repeats) || 0, urls, removed,
-                    `${pct(removed, urls)}%`]
-                })} />
-          : viz === 'value' || viz === 'ordinal'
-            // Single-series panels have no removal figure to show — a bucket's
-            // rows have all come down by definition.
-            ? <DataTable head={[dim.label, 'Count']}
-                onPick={pick} activeVal={active}
-                pickValues={rows.map(r => String(r.label ?? ''))}
-                rows={rows.map(r => [String(r.label ?? '—'), Number(r.urls) || 0])} />
-            : dimTable(rows, pick, active)}
+          : <DataTable head={td.head} rows={td.rows}
+              onPick={pick} activeVal={active} pickValues={td.pickValues} />}
         className={spanClass}>
         {viz === 'donut'   && <Donut rows={rows} m={m} onPick={pick} activeVal={active} />}
         {viz === 'share'   && <Donut rows={rows} m={m} onPick={pick} activeVal={active} ramp="ordinal" />}
@@ -3882,6 +5020,38 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
           </div>
         )
 
+      /* The live counts strip, drawn where the layout put it.
+
+         Only reached once the panel has been moved off the top of the page —
+         leading it, the same card is the band above both rails instead, which is
+         what the reader can pin. See gridPanels, which is where that choice is
+         made rather than here: a component that appears in two branches of one
+         render is a component React tears down and rebuilds every time the
+         branch flips, and this one holds the reading, the last good copy kept
+         for a failed refresh and its own refresh timer.
+
+         It carries no pin here, deliberately. Everything above it would have to
+         scroll under it for pinning to mean anything, and it is not above them
+         any more. */
+      case 'realtime':
+        return (
+          <div key={p.key} className={spanClass}>
+            <RealtimeCard view="sports" clientId={filters.clientId}
+              assetIds={realtimeAssetIds}
+              franchise={filters.franchiseName || undefined}
+              matchDay={filters.matchDay || undefined}
+              assetNames={realtimeAssetNames}
+              windowOptions={REALTIME_WINDOWS}
+              scopeFilters={realtimeScopeFilters}
+              dimOptions={realtimeDimOptions}
+              onDimsChange={onRtDimsChange}
+              platformKey={section}
+              waitingFor={rtWaitingFor}
+              title={p.label || undefined}
+              desc={p.desc} />
+          </div>
+        )
+
       case 'trend': {
         // A per-source trend draws one half of a two-halved report; without a
         // role it is the merged one.
@@ -3914,8 +5084,10 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
           : isSummary ? 'Infringement Identification & Removal' : 'Identification & Removal'
         const trendKey = `${section}:${p.key}`
         const trendMode = vizFor(trendKey, 'auto') as 'auto' | 'column' | 'line' | 'area'
+        const td = trendTableData(rows, first, second, trendGrain)
         return (
           <Card key={p.key} title={p.label || title} info={p.desc} className={spanClass}
+            exportTable={td} exportSubtitle={exportScope} exportFooter={EXPORT_FOOTER}
             action={<VizPicker options={TREND_VIZ} value={trendMode} fallback="auto"
               saved={vizDefault[trendKey]}
               onPick={v => setViz(trendKey, v)}
@@ -3923,12 +5095,9 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             chartTitle={src
               ? `${src.label} URLs found against those ${src.secondKey === 'delisted' ? 'de-indexed' : 'removed'}, by ${trendGrain}`
               : `Links found against links taken down, by ${trendGrain}`}
-            table={<DataTable head={[trendGrain === 'month' ? 'Month' : 'Date', first, second, 'Rate']}
+            table={<DataTable head={td.head} rows={td.rows}
               onPick={pickPeriod} activeVal={drilled ? drill!.label : ''}
-              /* The raw label, not the printed one: the column reads "11 Aug"
-                 and the range needs "2026-08-11". */
-              pickValues={rows.map(t => String(t.label ?? ''))}
-              rows={rows.map(t => [shortDate(t.label), t.urls, t.removed, `${t.rate}%`])} />}>
+              pickValues={td.pickValues} />}>
             <Trend data={rows} m={m} firstName={first} secondName={second} mode={trendMode}
               onPick={pickPeriod} />
           </Card>
@@ -3941,24 +5110,43 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
       case 'rate': {
         const rateKey = `${section}:${p.key}`
         const rateMode = vizFor(rateKey, 'line') as 'line' | 'area' | 'column'
+        const rateTd = rateTableData(trend, trendGrain)
         return (
           <Card key={p.key} title={p.label || 'Removal rate'} info={p.desc} className={spanClass}
+            exportTable={rateTd} exportSubtitle={exportScope} exportFooter={EXPORT_FOOTER}
             action={<VizPicker options={RATE_VIZ} value={rateMode} fallback="line"
               saved={vizDefault[rateKey]}
               onPick={v => setViz(rateKey, v)}
               onSetDefault={v => saveVizDefault(rateKey, v)} />}
             chartTitle={`Share of that ${trendGrain}'s identified links that came down`}
-            table={<DataTable head={[trendGrain === 'month' ? 'Month' : 'Date', 'Removal rate']}
+            table={<DataTable head={rateTd.head} rows={rateTd.rows}
               onPick={pickPeriod} activeVal={drilled ? drill!.label : ''}
-              pickValues={trend.map(t => String(t.label ?? ''))}
-              rows={trend.map(t => [shortDate(t.label), `${t.rate}%`])} />}>
+              pickValues={rateTd.pickValues} />}>
             <RateTrend data={trend} m={m} mode={rateMode} onPick={pickPeriod} />
           </Card>
         )
       }
 
-      default:
+      /* A BREAKDOWN, and only a breakdown.
+
+         This was the `default:` arm, and that is how a ghost card got onto the
+         report. The server gained the `realtime` kind before this bundle did;
+         an older build had no case for it, fell through to here, and drew the
+         live strip as an empty breakdown — a second card headed "Realtime"
+         with a chart/table toggle and "No data." in it, directly under the real
+         one. Nothing was wrong with either half. The catch-all simply answered
+         a question it had not been asked.
+
+         So an unknown kind now draws NOTHING. A panel this build does not
+         understand is one the server knows about and it does not, which happens
+         on every deploy where the two move apart — and a missing card while a
+         bundle catches up is a great deal better than a plausible empty one
+         that a reader will report as broken data. */
+      case 'dim':
         return renderDim({ key: p.key, label: p.label ?? p.key, viz: p.viz, desc: p.desc }, spanClass)
+
+      default:
+        return null
     }
   }
 
@@ -4042,7 +5230,12 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         data ahead of now either way. */}
     <DateRangePicker
       value={{ from: filters.from, to: filters.to }}
-      onChange={r => setFilters(f => ({ ...f, from: r.from, to: r.to }))}
+      onChange={r => {
+        // From here on the window is theirs — see rangePicked. Switching
+        // platform will carry it rather than replacing it with a default.
+        rangePicked.current = true
+        setFilters(f => ({ ...f, from: r.from, to: r.to }))
+      }}
       min={activeSection?.period?.start}
       max={activeSection?.period && activeSection.period.end < today()
         ? activeSection.period.end
@@ -4117,19 +5310,21 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
       </div>
     )}
 
-    {lastRun && <p className="text-[10px] text-gray-400 pt-1">Last run {lastRun.toLocaleTimeString()}</p>}
     </>
   )
 
   return (
-    <div className="p-3 sm:p-4 fade-in">
+    <div ref={printRoot} className="p-3 sm:p-4 fade-in">
       {/* No progress bar pinned to the top of the window any more. It sat above
           the app chrome, far from the panels it described, and on a re-run the
           only other signal was the report dimming to 60% — which reads as
           "disabled" rather than "reloading". The loader below takes over for
           every run, first and subsequent. */}
 
-      <nav className="flex items-center gap-1 text-xs mb-3">
+      {/* Chrome, not report: a trail back to Home and three controls, none of
+          which means anything once the page is a document. The PDF states the
+          report's name and scope in its own header instead — see printPdf. */}
+      <nav {...{ [PRINT_HIDE_ATTR]: '' }} className="flex items-center gap-1 text-xs mb-3">
         <Link to={scoped ? '/dashboard' : '/admin/home'}
           className="font-medium text-[#14254A]/45 hover:text-[#14254A] dark:text-white/40 dark:hover:text-white">Home</Link>
         <span className="text-[#14254A]/25 dark:text-white/25">›</span>
@@ -4155,9 +5350,49 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             entirely questions about the latter. Hidden without the grant —
             there is no disabled state, because the reason it is unavailable is
             on a screen the reader cannot open. */}
+        {/* Both to the right, in one group. "Export" takes the report away and
+            "Arrange" changes what the report IS — neither is a question about
+            what is on screen, which is what the filter rail is for. */}
+        <span className="ml-auto flex items-center gap-2">
+        {section && (
+          <button type="button" onClick={exportReport} disabled={loading || !data}
+            title="Every chart on this report, one sheet per chart, as a spreadsheet"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg
+              text-[11px] font-semibold border border-gray-200 text-gray-600
+              hover:bg-white hover:text-[#14254A] transition-colors
+              disabled:opacity-40 disabled:cursor-not-allowed
+              dark:border-white/15 dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 3v12" /><path d="M7 11l5 5 5-5" /><path d="M4 20h16" />
+            </svg>
+            Export
+          </button>
+        )}
+        {/* The page itself, rather than the numbers out of it. Beside Export
+            because they are the same act — taking the report away — and the
+            difference is only what the reader is going to do with it: a
+            spreadsheet to work in, a document to send on. */}
+        {section && (
+          <button type="button" onClick={printPdf} disabled={loading || !data}
+            title="The whole page as a PDF, without the navigation or filter panes — the filters you set are printed under the title"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg
+              text-[11px] font-semibold border border-gray-200 text-gray-600
+              hover:bg-white hover:text-[#14254A] transition-colors
+              disabled:opacity-40 disabled:cursor-not-allowed
+              dark:border-white/15 dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 9V3h12v6" />
+              <path d="M6 18H4v-6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v6h-2" />
+              <rect x="7" y="15" width="10" height="6" rx="1" />
+            </svg>
+            PDF
+          </button>
+        )}
         {scoped && canArrange && section && (
           <button type="button" onClick={() => setLayoutOpen(true)}
-            className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg
               text-[11px] font-semibold border border-gray-200 text-gray-600
               hover:bg-white hover:text-[#14254A] transition-colors
               dark:border-white/15 dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white">
@@ -4171,7 +5406,24 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             Arrange
           </button>
         )}
+        </span>
       </nav>
+
+      {/* The one way the PDF export fails is a blocked pop-up, and it fails
+          invisibly — a button that appears to do nothing. Said out loud, with
+          the fix, because it is the reader's own browser setting. */}
+      {printError && (
+        <div {...{ [PRINT_HIDE_ATTR]: '' }}
+          className="mb-3 rounded-xl px-4 py-2.5 text-[12px] border flex items-center gap-3
+            bg-amber-50 border-amber-200 text-amber-800
+            dark:bg-amber-500/10 dark:border-amber-400/25 dark:text-amber-200">
+          <span className="flex-1">{printError}</span>
+          <button onClick={() => setPrintError('')}
+            className="text-[11px] font-bold uppercase tracking-wider opacity-70 hover:opacity-100">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* A login the module reaches but the mapping does not. Stated plainly:
           an empty report here would be read as "no infringements were found",
@@ -4242,7 +5494,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
           The asset does change it, which is why it is the one slicer that
           travels. Sent as a GUID — the reports screens carry ids, and the card
           resolves names only for the War Room. */}
-      {showRealtime && (
+      {showRealtime && rtLeads && (
         /* ── Pinned: an OPAQUE gutter, not just a sticky card ────────────────
            Sticking the card alone left the strip above it transparent, so the
            report scrolled up through the gap and KPI figures appeared to float
@@ -4306,16 +5558,37 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             : ''}`}>
           <RealtimeCard view="sports" clientId={filters.clientId}
             assetIds={realtimeAssetIds}
-            /* The narrowing filters that put the card on screen at all — see
-               showRealtime. Sending only the asset was the bug: picking Serie A
-               narrowed every panel below to 22,007 rows and left the card
-               reporting 103,512 for the whole season. */
+            /* The narrowing filters, as the reader sets them. Sending only the
+               asset was the bug: picking Serie A narrowed every panel below to
+               22,007 rows and left the card reporting 103,512 for the whole
+               season. */
             franchise={filters.franchiseName || undefined}
             matchDay={filters.matchDay || undefined}
             /* Names for the caption in the card's corner. The filters above
                narrow the count; this is what tells the reader what it was
                narrowed TO. */
             assetNames={realtimeAssetNames}
+            /* The window control on the card, and the strip along its bottom.
+               Together they are what lets the card be on screen from the first
+               paint: a day's count is cheap, and the strip is how a reader
+               still knows what it does and does not cover. */
+            windowOptions={REALTIME_WINDOWS}
+            scopeFilters={realtimeScopeFilters}
+            dimOptions={realtimeDimOptions}
+            /* And back the other way: what the card's own pickers hold, so
+               those lists can be re-listed under the scope the count actually
+               has rather than the report's. */
+            onDimsChange={onRtDimsChange}
+            /* Which report this is, so the card is folded the way THIS
+               section's layout says — the platform list is a per-report
+               setting, like the width and the title below. */
+            platformKey={section}
+            waitingFor={rtWaitingFor}
+            /* The name and the note Report Configuration gave it. `title` falls
+               back to the card's own heading and `desc` to nothing, which is
+               what an unconfigured panel — and an older server — sends. */
+            title={rtPanel?.label || undefined}
+            desc={rtPanel?.desc}
             pinned={rtPinned} onTogglePin={() => setRtPinned(p => !p)}
             className={rtPinned ? 'shadow-lg' : ''} />
         </div>
@@ -4333,6 +5606,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             xl-only: below that the rail is a full-width strip with no room to
             fly out and no hover to open it, so the list simply stays inline. */}
         <aside
+          {...{ [PRINT_HIDE_ATTR]: '' }}
           onMouseEnter={railOpen ? undefined : openFlyout}
           onMouseLeave={railOpen ? undefined : closeFlyout}
           onFocus={railOpen ? undefined : openFlyout}
@@ -4440,7 +5714,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         {/* ── Centre: KPI band + panels ────────────────────────────────────── */}
         {/* The centre takes everything the two rails do not, so collapsing
             either one widens the charts instead of leaving a gap. */}
-        <main className="w-full xl:flex-1 xl:min-w-0 space-y-3 sm:space-y-4">
+        <main ref={printMain} className="w-full xl:flex-1 xl:min-w-0 space-y-3 sm:space-y-4">
 
           {/* The KPI band is a panel like any other now — it is drawn inside the
               layout below, so it can be moved or hidden along with the charts
@@ -4450,7 +5724,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
               title={sections.length === 0 ? 'Loading reports…' : 'Choose a platform to begin'}
               body={sections.length === 0
                 ? 'Fetching the available reports from the analytics warehouse.'
-                : 'Pick a platform from the navigation on the left, then a client. The report then runs itself over the last 30 days.'} />
+                : 'Pick a platform from the navigation on the left, then a client. The report then runs itself over the window that platform opens on.'} />
           ) : !filters.clientId ? (
             <Notice
               cardTitle={activeSection.label}
@@ -4595,7 +5869,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
                   do not add up simply wraps, which is the honest result of that
                   choice rather than something to be silently corrected here. */}
               <div className="grid grid-cols-2 xl:grid-cols-12 gap-3 xl:gap-4">
-                {panels.map(renderPanel)}
+                {gridPanels.map(renderPanel)}
               </div>
             </>
           )}
@@ -4624,7 +5898,15 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
               and the fix is an endpoint no reader of a report is going to call.
               Both are in the server log for the person who can act on them. */}
           {data?.queryWarning && (
-            <div className="rounded-xl px-4 py-3 text-sm border bg-amber-50 border-amber-200 text-amber-800
+            /* The REASON rides on the title attribute rather than the face of
+               the card. It is already in the payload — redacted of warehouse
+               names by reportsources.go — so hiding it from the markup was
+               hiding it from the one person on the page who might act on it,
+               while still shipping it to the browser. On the title it is a hover
+               away for whoever needs it and absent from the report for everyone
+               else, and it is now in the server log as well. */
+            <div title={String(data.queryWarning)}
+              className="rounded-xl px-4 py-3 text-sm border bg-amber-50 border-amber-200 text-amber-800
               dark:bg-amber-500/10 dark:border-amber-400/25 dark:text-amber-200">
               <strong>Some panels could not be loaded.</strong>
               <p className="text-[11px] mt-1 opacity-80">
@@ -4728,7 +6010,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             — the live card above spans both of them. See railInset.
         */}
         {activeSection?.sourceKind !== 'powerbi' && (
-        <aside style={railInset}
+        <aside {...{ [PRINT_HIDE_ATTR]: '' }} style={railInset}
           className={`w-full xl:flex-none xl:sticky
             xl:top-[calc(0.5rem_+_var(--rt-band,0px))] ${
           filtersOpen ? 'xl:w-[244px]' : 'xl:w-[60px]'}`}>
@@ -4863,8 +6145,12 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
 
               <div className="px-5 py-3 flex-shrink-0 border-t border-gray-100 dark:border-white/10
                 bg-gray-50/70 dark:bg-white/[0.03] flex items-center justify-between gap-3">
+                {/* In-flight only. The clock time of the last run used to sit
+                    here once the run finished, and it answered a question
+                    nobody was asking: the figures are re-fetched as the
+                    slicers move, so "now" is the only answer it ever had. */}
                 <span className="text-[11px] text-gray-400">
-                  {loading ? 'Running…' : lastRun ? `Last run ${lastRun.toLocaleTimeString()}` : ''}
+                  {loading ? 'Running…' : ''}
                 </span>
                 <button onClick={() => setFiltersWide(false)}
                   className="px-5 py-2 rounded-xl text-xs font-bold text-white hover:opacity-90"

@@ -938,6 +938,12 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 	s.JoinAssetMaster = s.AssetNameCol == "" && s.AssetCol != ""
 	s.Role, s.RoleLabel = inferRole(shape)
 
+	/* A sports report reading an ALL-GENRE table has to narrow itself, because
+	   the table will not do it — see reportassetgenre.go, where the rule and the
+	   reasoning behind it live. Guarded on the asset column too: a table with no
+	   assets has no asset list for a genre to narrow. */
+	s.SportsAssetsOnly = s.AssetCol != "" && sportsReportOnAllGenreTable(platformKey, label, table)
+
 	// Measures: a pre-aggregated table sums its count columns; a raw table counts
 	// rows and reads a removal flag.
 	for _, pair := range measurePairs {
@@ -1385,6 +1391,14 @@ func ReportPlatformsList(w http.ResponseWriter, r *http.Request) {
 					entry["identExpr"] = s.IdentExpr
 					entry["removedExpr"] = s.RemovedExpr
 					entry["dimensions"] = len(s.Dimensions)
+					/* Whether this table's titles are held to the sports genre.
+					   Reported for the same reason every other inference on this
+					   entry is: the narrowing is decided from the platform's NAME
+					   (see reportassetgenre.go), so an admin renaming a report
+					   turns it on or off — and "why does the Asset list still
+					   show films" has an answer visible on this screen rather
+					   than only in the log. */
+					entry["sportsAssetsOnly"] = s.SportsAssetsOnly
 				} else {
 					entry["usable"] = false
 					sh := tableShapeOf(t)

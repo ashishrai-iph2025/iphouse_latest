@@ -114,6 +114,26 @@ export default function NotificationDetailPage({ id, basePath }: { id: string; b
   const actorName = [actor.first_name, actor.last_name].filter(Boolean).join(' ').trim()
     || actor.name || item.actor_name || item.actor_username || '—'
 
+  /* WHO the action was taken by, drawn for staff only.
+
+     `scope` is the server's own answer to "whose notifications is this person
+     allowed to see" — 'all' for an IP House Admin or Super Admin, and anything
+     else for a login on the client side. Reused rather than re-derived from a
+     role flag here, because it is the same predicate the feed query was built
+     from: a page that decided this for itself could show a card the list it
+     came from would never have offered.
+
+     On the client side the panel is off. Every field in it — the sign-in
+     address, the sign-in method, the role, whether the account is active — is
+     an ADMINISTRATIVE fact about a login rather than anything about the event,
+     and on this side of the portal it is either the reader's own details read
+     back to them or a colleague's login profile shown for no reason. What
+     happened, and when, is the whole of what the page is for there.
+
+     Staff keep it: for them the actor is the subject of the page, which is also
+     why the Tracking Report link below is theirs alone. */
+  const showActor = scope === 'all'
+
   return (
     <div className="fade-in">
       {backLink}
@@ -140,9 +160,28 @@ export default function NotificationDetailPage({ id, basePath }: { id: string; b
         </div>
       </div>
 
+      {/* ── Acted on someone's behalf ───────────────────────────────────
+          Above the panels, and shown to EVERYONE. It used to sit inside User
+          details, which is now staff-only — and the client is precisely who
+          this sentence is written for: it is the portal telling them an IP
+          House login did this while viewing the site as them. A disclosure
+          that disappears for the party being disclosed to is not one. */}
+      {meta.impersonatedBy ? (
+        <div className="mt-4 flex items-start gap-2 px-4 py-3 rounded-2xl bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 text-xs text-violet-800 dark:text-violet-200">
+          <svg className="w-4 h-4 flex-shrink-0 mt-px" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" />
+          </svg>
+          <span>
+            Performed by IP House staff while viewing the portal as this client
+            {meta.impersonatorName ? <> — <b>{meta.impersonatorName}</b></> : null}.
+          </span>
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
 
         {/* ── Who ─────────────────────────────────────────────────────── */}
+        {showActor && (
         <Panel title="User details" icon={<IconUser />}>
           <Row label="Name" value={actorName} />
           <Row label="Sign-in address" value={actor.login_username || item.actor_username || '—'} mono />
@@ -167,20 +206,15 @@ export default function NotificationDetailPage({ id, basePath }: { id: string; b
               </Tag>
             } />
           )}
-          {meta.impersonatedBy && (
-            <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-xl bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 text-[11px] text-violet-800 dark:text-violet-200">
-              <svg className="w-3.5 h-3.5 flex-shrink-0 mt-px" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" />
-              </svg>
-              <span>
-                Performed by IP House staff while viewing the portal as this client
-                {meta.impersonatorName ? <> — <b>{meta.impersonatorName}</b></> : null}.
-              </span>
-            </div>
-          )}
         </Panel>
+        )}
 
         {/* ── When ────────────────────────────────────────────────────── */}
+        {/* Takes the whole row where User details is not beside it, rather than
+            half of one with a gap in the other half — two stacked full-width
+            panels is a page, a half-width panel alone is a page missing
+            something. */}
+        <div className={showActor ? '' : 'lg:col-span-2'}>
         <Panel title="Timing" icon={<IconClock />}>
           <Row label="Notification time" value={exactTime(item.created_at)} />
           <Row label="Relative" value={relativeTime(item.created_at)} />
@@ -194,6 +228,7 @@ export default function NotificationDetailPage({ id, basePath }: { id: string; b
             Times are shown in your local timezone.
           </p>
         </Panel>
+        </div>
 
         {/* ── What ────────────────────────────────────────────────────── */}
         <div className="lg:col-span-2">

@@ -60,6 +60,11 @@ import InfoDot from '@/components/shared/InfoDot'
 import AlertDialog from '@/components/ui/AlertDialog'
 import { useTimeZone } from '@/lib/timezone'
 import { resolveFields, isLiveStatus } from '@/lib/infringementFields'
+/* The turnaround a record took, measured by exactly the rule the War Room's
+   TAT charts measure by — including Open Web's de-indexing/removal split.
+   Imported rather than reimplemented: a drawer that disagreed with the chart
+   about the same row would be two answers to one question. */
+import { diffTatMins, effectiveRemovalTime } from '@/lib/warroom'
 import { isOpenWebPlatform } from '@/lib/platformCategories'
 import { downloadCsv, type CsvColumn } from '@/lib/exportCsv'
 import { downloadXlsx } from '@/lib/exportXlsx'
@@ -116,10 +121,19 @@ The matching TIMES stay. enforcementDoneAt and removalTime are the record of
 what happened and when, which is exactly what a client is entitled to; only the
 name attached to it goes.
 
-Matched on the suffix rather than by listing four keys, so a fifth stage added
+Matched on the PATTERN rather than by listing the keys, so a stage added
 upstream is hidden the day it appears rather than the day somebody notices.
+
+Anchored at the end once, and no longer. Enumerated across this repo and the
+analytics one the platform tables live in, the known set is discoveryDoneBy,
+discoveryQCDoneBy, enforcementDoneBy, enforcementQCDoneBy and removalDoneBy —
+all of which the anchored version caught. But `discoveryQCDoneBy` appears only
+in the other repo, which is the point: this list is not ours to know in full. A
+`doneByBot` or an `enforcementDoneByName` would have walked straight past a
+suffix match and published a colleague's name to a client, so the match is now
+anywhere in the key.
 */
-export const OPERATOR_COLUMN = /done_?by$/i
+export const OPERATOR_COLUMN = /done_?by/i
 
 /*
 The QC gate, which is ours and not the record's.
@@ -249,6 +263,27 @@ const OPEN_WEB_FIELD_LABELS: Record<string, string> = {
   sourcehost: 'Host Domain',
 }
 
+/*
+── Names the warehouse sends as one word ────────────────────────────────────
+
+	Open Web's columns arrive lowercased and unseparated — `removalstatus`,
+	`dmcaremovalstatus`, `delistingremovalstatus` — and humanise() splits on a
+	case change, so with no case to change it handed the label straight back:
+	"Removalstatus", "Dmcaremovalstatus", "Delistingremovalstatus". Those are not
+	words, and they were the label on a drawer card, a table header and a column
+	in every CSV and XLSX this screen exports.
+
+	Keyed lowercase because the SAME column arrives as `removalStatus` from the
+	social endpoints and `RemovalStatus` from others; all three spellings landing
+	on one label is the point of doing it here rather than per platform.
+*/
+const RUN_ON_LABELS: Record<string, string> = {
+  removalstatus:          'Removal Status',
+  dmcaremovalstatus:      'DMCA Removal Status',
+  delistingremovalstatus: 'Delisting Removal Status',
+  profileremovalstatus:   'Profile Removal Status',
+}
+
 /** What the card calls the linking page, per platform. Open Web has no "post". */
 export function postUrlLabel(openWeb: boolean, mediaOnly: boolean): string {
   if (mediaOnly) return 'Media File'
@@ -277,6 +312,8 @@ export function columnTitle(key: string, openWeb = false): string {
     const renamed = OPEN_WEB_FIELD_LABELS[key.toLowerCase()]
     if (renamed) return renamed
   }
+  const runOn = RUN_ON_LABELS[key.toLowerCase()]
+  if (runOn) return runOn
   const label = humanise(key)
   return isImageKey(key) ? label.replace(/\s*urls?$/i, '') : label
 }
@@ -429,6 +466,189 @@ export const GROUP_ORDER = [...FIELD_GROUPS.map(g => g.title), 'Other']
 
 export const isCountKey = (key: string) =>
   /(count|views|likes|comments|subscribers|followers|members|shares)$/i.test(key)
+
+/* ── The record's chronology ────────────────────────────────────────────────
+
+	Five stamps tell a row's whole story — found, notice sent, de-indexed, DMCA
+	answered, taken down — and until now they were scattered across two sections:
+	the arrival dates in Discovery among the country and the search engine, the
+	action dates in Enforcement among the statuses. A reader who wanted the order
+	of events had to assemble it from opposite ends of the panel, and know which
+	word belonged to which stage.
+
+	So the times come out of both groups into one, in two lanes — when it showed
+	up, and what we did about it — followed by the gaps between them, which is the
+	number anyone actually asks for.
+
+	Matched on the KEY rather than by listing columns, because each platform
+	spells its stamps differently and a fixed list would quietly drop the ones it
+	had not been told about — which is the failure this whole file exists to
+	avoid.
+*/
+/* A bare "at"/"on" suffix is not enough: `takedownReason` ends in "on" and is
+   an Enforcement field, so a looser test filed a sentence in the timeline. The
+   suffix only counts across a case or underscore boundary — `discoveryDoneAt`,
+   `updatedOn`, `created_at` — which is how a stamp is actually spelled. */
+export const isTimestampKey = (key: string) =>
+  /(time|date)/i.test(key) || /_(at|on)$/i.test(key) || /[a-z](At|On)$/.test(key)
+
+/** When the record arrived: uploaded, published, discovered, created. */
+export const isDiscoveryTimeKey = (key: string) =>
+  isTimestampKey(key) && /(upload|publish|discover|detect|created)/i.test(key)
+
+/** What we did about it, and when. A status is an outcome rather than a time
+    — see isOutcomeStatusKey, which puts those beside the screenshot instead. */
+export const isEnforcementTimeKey = (key: string) =>
+  isTimestampKey(key) && groupOf(key) === 'Enforcement' && !/status$/i.test(key)
+
+/*
+	The outcome statuses — de-indexing, DMCA, removal.
+
+	These ride BESIDE the screenshot rather than waiting in a section three
+	scrolls down. They are the answer to the only question a reader opens a
+	record to ask — did anything happen to this — and setting them level
+	with the evidence means the picture and the verdict are read in one glance.
+*/
+export const isOutcomeStatusKey = (key: string) =>
+  groupOf(key) === 'Enforcement' && /(status|statusname)$/i.test(key)
+
+/** De-indexing first, then DMCA, then removal: the order the pipeline runs. */
+const OUTCOME_ORDER = [/delist/i, /dmca/i, /removal/i]
+export const outcomeRank = (key: string): number => {
+  const i = OUTCOME_ORDER.findIndex(re => re.test(key))
+  return i === -1 ? OUTCOME_ORDER.length : i
+}
+
+/*
+	The order the stamps go in, which is not the order they arrive in.
+
+	The endpoint serialises its columns however it serialises them, and on Open
+	Web that put Delisting Time, DMCA Removal Time, Enforcement Time, Removal
+	Time in exactly that order — the notice third, two stages after the outcome
+	it caused. A section calling itself a timeline has to be in time order or it
+	is a list with a misleading heading, so the lanes rank their fields by the
+	stage each one names.
+
+	Ranked by NAME rather than by sorting on the values, because the values are
+	mostly absent: an unenforced row has one stamp and four blanks, and sorting
+	those would shuffle the blanks to one end and lose the shape of the funnel.
+*/
+const DISCOVERY_TIME_ORDER = [/publish|created/i, /upload/i, /discover|detect/i]
+export const discoveryTimeRank = (key: string): number => {
+  const i = DISCOVERY_TIME_ORDER.findIndex(re => re.test(key))
+  return i === -1 ? DISCOVERY_TIME_ORDER.length : i
+}
+
+const ENFORCEMENT_TIME_ORDER = [/enforce|notice/i, /delist/i, /dmca/i, /removal|takedown/i]
+export const enforcementTimeRank = (key: string): number => {
+  const i = ENFORCEMENT_TIME_ORDER.findIndex(re => re.test(key))
+  return i === -1 ? ENFORCEMENT_TIME_ORDER.length : i
+}
+
+/** First key on the row carrying a real value, as trimmed text. */
+const firstVal = (row: Record<string, any>, ...keys: string[]): string | null => {
+  for (const k of keys) if (hasValue(row?.[k])) return String(row[k]).trim()
+  return null
+}
+
+export interface RecordTat {
+  discoveredAt: string | null
+  enforcedAt: string | null
+  /** The stamp that CLOSES the row, and only once the outcome it names has
+      actually happened: an Open Web linking URL closes on de-indexing (and only
+      where that was approved), a host URL and every other platform on removal.
+      Null while the row is still open — which is a different fact from a
+      missing timestamp, and is why the card reads "In progress". */
+  closedAt: string | null
+  /** What that closing stamp is called on THIS row. */
+  closeLabel: string
+  /** Minutes, or null when an end of the span is not there to measure from. */
+  toEnforcement: number | null
+  toClose: number | null
+}
+
+/**
+ * The two turnarounds a single record took.
+ *
+ * Discovery → Enforcement is how long it sat before a notice went out.
+ * Enforcement → close is how long that notice took to land, and WHAT counts as
+ * landing depends on the row: an Open Web linking URL is de-indexed rather than
+ * removed, so its clock stops at the de-indexing time. That is the rule
+ * lib/warroom.effectiveRemovalTime already states for the aggregate charts, and
+ * it is called here rather than restated so the two can only ever agree.
+ */
+export function recordTat(row: Record<string, any>, openWeb: boolean): RecordTat {
+  const discoveredAt = firstVal(row,
+    'urlUploadDate', 'URLUploadDate', 'urluploaddate',
+    'discoveryDoneAt', 'publishedDate', 'PublishedDate', 'uploadDate', 'createdAt')
+  const enforcedAt = firstVal(row,
+    'enforcementTime', 'EnforcementTime', 'enforcementtime', 'enforcementDoneAt')
+
+  // An Open Web row with no host URL is a linking URL — the pair's other end.
+  const isSource = hasValue(firstVal(row, 'sourceURL', 'SourceURL', 'sourceUrl'))
+
+  const closedAt = effectiveRemovalTime({
+    platform: openWeb ? 'internet' : String(row['platform'] ?? ''),
+    isSource,
+    removalStatus: firstVal(row, 'removalStatus', 'removalstatus', 'RemovalStatus'),
+    removalTime: firstVal(row, 'removalTime', 'RemovalTime'),
+    delistingStatus: firstVal(row,
+      'delistingStatus', 'delistingremovalstatus', 'delistingRemovalStatus'),
+    delistingTime: firstVal(row, 'delistingTime', 'delistingDate'),
+  } as any) ?? null
+
+  return {
+    discoveredAt,
+    enforcedAt,
+    closedAt,
+    closeLabel: openWeb && !isSource ? 'De-Indexing' : 'Removal',
+    toEnforcement: diffTatMins(discoveredAt, enforcedAt),
+    toClose: diffTatMins(enforcedAt, closedAt),
+  }
+}
+
+/** A span in the largest unit that still reads as a duration rather than as a
+    number: minutes inside the hour, hours inside the day, days past it. */
+export function formatDuration(mins: number): string {
+  const m = Math.round(mins)
+  if (m < 60) return `${m} min`
+  if (m < 1440) {
+    const h = Math.floor(m / 60), r = m % 60
+    return r ? `${h} hr ${r} min` : `${h} hr`
+  }
+  let d = Math.floor(m / 1440)
+  let h = Math.round((m % 1440) / 60)
+  if (h === 24) { d += 1; h = 0 }
+  return h ? `${d} d ${h} hr` : `${d} d`
+}
+
+/**
+ * A measured gap, or the reason there is not one.
+ *
+ * A bare dash would say all three of "nothing has happened yet", "this stage
+ * does not apply here" and "the figure failed to load" in the same mark, and
+ * only one of those is ever true of a given row. So each is written out: a span
+ * still open reads "In progress", a row not yet actioned reads what it is
+ * waiting on, and a pair of stamps in the wrong order — a data fault rather
+ * than a turnaround — refuses to be read as a duration at all.
+ */
+export function TatValue({ mins, start, end, pending }: {
+  mins: number | null
+  start: string | null
+  end: string | null
+  pending: string
+}) {
+  const muted = 'text-gray-300 dark:text-white/25'
+  if (mins === null) return <span className={muted}>{start ? pending : 'Not recorded'}</span>
+  if (mins < 0) {
+    return (
+      <span className={muted} title="The closing timestamp is earlier than the one it is measured from.">
+        Not measurable
+      </span>
+    )
+  }
+  return <span className="tabular-nums" title={`${start} → ${end}`}>{formatDuration(mins)}</span>
+}
 
 
 /**
@@ -640,7 +860,7 @@ export function FieldCard({ label, big, wide, children }: {
  * fields grouped into the questions somebody actually asks of a row — what is it,
  * where is it, how big was it, what have we done about it.
  */
-export function RecordDetail({ row, openWeb = false, onPreview, labelFor }: {
+export function RecordDetail({ row, openWeb = false, onPreview, labelFor, hideField }: {
   row: Record<string, any>
   openWeb?: boolean
   onPreview: (src: string) => void
@@ -652,6 +872,21 @@ export function RecordDetail({ row, openWeb = false, onPreview, labelFor }: {
       the row does not carry — what is on screen is what the API answered, and
       nothing here can pad that out. */
   labelFor?: (key: string) => string | undefined
+  /*
+    A screen that hides MORE than the shared rule does.
+
+    isHiddenField is the floor — internal ids, operator names, our own QC — and
+    every screen honours it. This is a screen's own addition on top, for fields
+    that are real and legitimate somewhere else but noise here.
+
+    A predicate rather than a list, and additive rather than a replacement: a
+    caller can only ever hide further, never un-hide something the shared rule
+    keeps from a client. That direction is deliberate — the floor exists because
+    of what happened when a field nobody had decided to publish reached a
+    client's screen, and a prop that could lift it would be a way to do that
+    again by accident.
+  */
+  hideField?: (key: string) => boolean
 }) {
   const [shotFailed, setShotFailed] = useState(false)
 
@@ -677,27 +912,51 @@ export function RecordDetail({ row, openWeb = false, onPreview, labelFor }: {
   const label = (k: string) => labelFor?.(k) || columnTitle(k, openWeb)
 
   const entries = Object.entries(row)
-    .filter(([k, v]) => !isHiddenField(k) && (
+    .filter(([k, v]) => !isHiddenField(k) && !hideField?.(k) && (
       hasValue(v) || (!isScalar(v) && v != null) || groupOf(k) === 'Enforcement'))
     .filter(([k]) => !isEclipsed(k, row))
 
   const shot = entries.find(([k, v]) => isImageKey(k) && isUrl(v))
 
-  /* The figures that ride BESIDE the screenshot rather than waiting below it.
-     A screenshot is tall and narrow — a phone-shaped capture in a half-screen
-     panel leaves most of that row empty — and the numbers a reader wants at the
-     same moment as the picture are the reach figures: how far this post got.
+  /* What rides BESIDE the screenshot rather than waiting below it.
 
-     Counts first because they are the ones worth reading at a glance; a platform
-     that reports none (Open Web has no likes) falls back to its overview, so the
-     rail is never empty beside a picture. */
+     A screenshot is tall and narrow — a phone-shaped capture in a half-screen
+     panel leaves most of that row empty — so the rail beside it carries whatever
+     a reader wants at the same moment as the picture.
+
+     The OUTCOMES come first: de-indexing, DMCA, removal. They are the answer to
+     the question a record is opened to ask — did anything happen to this — and
+     they used to sit in the Enforcement section, below the fold on Open Web,
+     with four timestamps between them. Reach counts fill whatever room is left,
+     which on the social platforms is most of it, and a row reporting neither
+     falls back to its overview so the rail is never empty beside a picture. */
+  const outcomes = entries
+    .filter(([k]) => k !== shot?.[0] && isOutcomeStatusKey(k))
+    .sort(([a], [b]) => outcomeRank(a) - outcomeRank(b))
   const counts = entries.filter(([k, v]) =>
     k !== shot?.[0] && isCountKey(k) && isFinite(Number(v)))
-  const hero = (counts.length > 0
-    ? counts
+  const hero = (outcomes.length > 0 || counts.length > 0
+    ? [...outcomes, ...counts]
     : entries.filter(([k]) => k !== shot?.[0] && groupOf(k) === 'Overview')
   ).slice(0, 4)
   const heroKeys = new Set(hero.map(([k]) => k))
+
+  /* The chronology, lifted out of Discovery and Enforcement into one section —
+     see the note above isTimestampKey. Two lanes and a turnaround, and each
+     lane keeps the row's own field order within it. */
+  const discoveryTimes = entries
+    .filter(([k]) => k !== shot?.[0] && !heroKeys.has(k) && isDiscoveryTimeKey(k))
+    .sort(([a], [b]) => discoveryTimeRank(a) - discoveryTimeRank(b))
+  const enforcementTimes = entries
+    .filter(([k]) => k !== shot?.[0] && !heroKeys.has(k) && isEnforcementTimeKey(k))
+    .sort(([a], [b]) => enforcementTimeRank(a) - enforcementTimeRank(b))
+  const timeLanes = [
+    { title: 'Discovery', fields: discoveryTimes },
+    { title: 'Enforcement', fields: enforcementTimes },
+  ].filter(l => l.fields.length > 0)
+  const timeKeys = new Set([...discoveryTimes, ...enforcementTimes].map(([k]) => k))
+
+  const tat = recordTat(row, openWeb)
 
   const sections = GROUP_ORDER
     .map(title => ({
@@ -705,8 +964,9 @@ export function RecordDetail({ row, openWeb = false, onPreview, labelFor }: {
       fields: entries
         // The screenshot at the top IS this field — listing it again below, as a
         // thumbnail of the picture already on screen, is the same thing twice.
-        // Same for anything promoted into the rail beside it.
-        .filter(([k]) => k !== shot?.[0] && !heroKeys.has(k))
+        // Same for anything promoted into the rail beside it, and for the stamps
+        // the timeline above already lays out in order.
+        .filter(([k]) => k !== shot?.[0] && !heroKeys.has(k) && !timeKeys.has(k))
         .filter(([k]) => groupOf(k) === title)
         .sort(([a], [b]) => {
           const ra = LEAD_COLUMNS.indexOf(a), rb = LEAD_COLUMNS.indexOf(b)
@@ -764,6 +1024,54 @@ export function RecordDetail({ row, openWeb = false, onPreview, labelFor }: {
             </div>
           )}
         </div>
+
+        {/* When it showed up, what we did about it, and how long each step took.
+            Drawn before the rest because it is the record's spine: every other
+            section describes the row, this one describes what happened to it. */}
+        {timeLanes.length > 0 && (
+          <section className="border-b border-gray-100 dark:border-white/10 bg-gray-50/60 dark:bg-white/[0.02]">
+            <h3 className="px-5 pt-4 pb-2 text-[10px] font-bold uppercase tracking-widest text-gray-400">
+              Timeline
+            </h3>
+            <div className="px-5 pb-4 space-y-3.5">
+              {timeLanes.map(lane => (
+                <div key={lane.title}>
+                  <p className="text-[9px] font-bold uppercase tracking-widest text-[#FC934C]/80 mb-1.5">
+                    {lane.title}
+                  </p>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
+                    {lane.fields.map(([k, v]) => (
+                      <FieldCard key={k} label={label(k)}>
+                        <DetailValue fieldKey={k} value={v} onPreview={onPreview} />
+                      </FieldCard>
+                    ))}
+                  </div>
+                </div>
+              ))}
+
+              {/* The two gaps between those stamps. Named end to end rather than
+                  as one word, because "TAT" alone does not say which two events
+                  it spans — and on Open Web the second one ends at de-indexing
+                  rather than at removal, which is the whole reason the label is
+                  built from the row instead of written out. */}
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-widest text-[#FC934C]/80 mb-1.5">
+                  Turnaround (TAT)
+                </p>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
+                  <FieldCard label="Discovery → Enforcement">
+                    <TatValue mins={tat.toEnforcement} start={tat.discoveredAt}
+                      end={tat.enforcedAt} pending="Not enforced yet" />
+                  </FieldCard>
+                  <FieldCard label={`Enforcement → ${tat.closeLabel}`}>
+                    <TatValue mins={tat.toClose} start={tat.enforcedAt}
+                      end={tat.closedAt} pending="In progress" />
+                  </FieldCard>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
 
         {sections.map(section => (
           <section key={section.title}

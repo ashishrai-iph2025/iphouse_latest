@@ -66,7 +66,10 @@ const SPANS: Span[] = ['full', 'half', 'third', 'quarter']
 
 interface LayoutPanel {
   key: string
-  kind: 'tile' | 'heading' | 'trend' | 'rate' | 'dim' | 'filter'
+  /** `realtime` is the live counts strip above a sports report — a panel like
+      any other here, so it is moved, resized, hidden, renamed and described on
+      this screen alongside the charts it sits with. */
+  kind: 'tile' | 'heading' | 'trend' | 'rate' | 'dim' | 'filter' | 'realtime'
   name: string
   label?: string
   viz?: string
@@ -104,11 +107,30 @@ interface LayoutPanel {
       floating beside a chart. A slicer sits in a one-column rail, so it has no
       width either. */
   fixedSpan?: boolean
+  /** Live counts only: every UGC and social platform the counts service has been
+      seen to report, and whether this layout folds it into one summary row.
+
+      The list is the portal's own record of what has answered rather than a live
+      reading — see realtimeplatforms.go — so it is instant, works on the
+      all-clients default where there is no client to count for, and keeps a
+      platform configurable through a quiet week. Absent on every other kind. */
+  realtimePlatforms?: RealtimePlatformChoice[]
+}
+
+/** One UGC/social platform on the live card's platform list. */
+interface RealtimePlatformChoice {
+  key: string
+  label: string
+  family: string
+  /** Whether it is currently FOLDED. The checkbox ticks what is shown, so the
+      row is drawn inverted — see the note in realtimeplatforms.go on why the
+      stored form is the other way round. */
+  rolledUp: boolean
 }
 
 const KIND_LABEL: Record<LayoutPanel['kind'], string> = {
   tile: 'KPI card', heading: 'Section rule', trend: 'Trend', rate: 'Trend', dim: 'Chart',
-  filter: 'Filter',
+  filter: 'Filter', realtime: 'Live counts',
 }
 
 /* ── The filter pane ──────────────────────────────────────────────────────────
@@ -156,6 +178,15 @@ const KIND_STYLE: Record<LayoutPanel['kind'], { tint: string; glyph: React.React
     tint: 'bg-sky-100 text-sky-700 dark:bg-sky-400/15 dark:text-sky-200',
     glyph: <><path d="M3 5h18l-7 8v6l-4 2v-8L3 5z" /></>,
   },
+  /* A pulse, in its own colour. The live counts strip is the one panel on the
+     page NOT drawn from the report's result set — it counts straight from the
+     enforcement side on its own refresh — and a reader arranging the page has to
+     be able to see that at a glance, or they will move it around expecting the
+     date range to reach it. */
+  realtime: {
+    tint: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-200',
+    glyph: <><path d="M3 12h4l2.5-7 5 14L17 12h4" /></>,
+  },
 }
 
 function KindIcon({ kind }: { kind: LayoutPanel['kind'] }) {
@@ -176,6 +207,11 @@ interface TableDetail {
   clientCol?: string; dateCol?: string
   identExpr?: string; removedExpr?: string
   dimensions?: number; error?: string
+  /** Whether this table's titles are held to the Sports genre, read off the
+   *  title master because the table itself records no genre. Decided from the
+   *  platform's NAME — see go-server/handlers/reportassetgenre.go — so renaming
+   *  a report turns it on or off, and this is where that is visible. */
+  sportsAssetsOnly?: boolean
 }
 /** One source as it is described to a login that may not see warehouse names.
     An alias to tell it apart, a reference to quote, and its state — no table,
@@ -598,6 +634,12 @@ export default function ReportConfigPage() {
         rowLimit: typeof p.rowLimit === 'number' ? p.rowLimit : undefined,
         defaultRowLimit: typeof p.defaultRowLimit === 'number' ? p.defaultRowLimit : undefined,
         fixedSpan: !!p.fixedSpan,
+        realtimePlatforms: Array.isArray(p.realtimePlatforms)
+          ? p.realtimePlatforms.map((x: any) => ({
+              key: String(x.key), label: String(x.label || x.key),
+              family: String(x.family || ''), rolledUp: !!x.rolledUp,
+            }))
+          : undefined,
       }))
       setVizChoices(d.vizChoices || [])
       setLayout(panels)
@@ -761,6 +803,20 @@ export default function ReportConfigPage() {
   const setDesc = (key: string, desc: string) =>
     setLayout(cur => cur.map(p => p.key === key ? { ...p, desc } : p))
 
+  /* Which platforms the live card lists on their own.
+
+     The checkbox is "show this one", and the stored value is the opposite — so
+     ticking CLEARS `rolledUp`. Inverted here, once, rather than in the row: the
+     reason the storage runs the other way is about platforms that do not exist
+     yet (see realtimeplatforms.go), and that reason has no business being
+     restated at every checkbox. */
+  const setPlatformShown = (panelKey: string, platformKey: string, shown: boolean) =>
+    setLayout(cur => cur.map(p => p.key !== panelKey ? p : {
+      ...p,
+      realtimePlatforms: (p.realtimePlatforms ?? []).map(x =>
+        x.key === platformKey ? { ...x, rolledUp: !shown } : x),
+    }))
+
   /* Two lists in one array: the grid the report draws, and the rail beside it.
      They are edited on the same screen and saved in the same call — one layout,
      one order — but they are never packed into the same rows, because a slicer
@@ -768,12 +824,35 @@ export default function ReportConfigPage() {
   const gridPanels = useMemo(() => layout.filter(p => !isPaneFilter(p)), [layout])
   const panePanels = useMemo(() => layout.filter(isPaneFilter), [layout])
 
+  /* Whether the live counts strip is still the FIRST thing on the page.
+
+     It is the one panel whose POSITION changes what it can do, not only where it
+     sits. Left at the top it is the full-width band a reader can pin: it holds
+     its place across the whole report while everything scrolls under it, which
+     is the reason to leave a live figure on screen at all. Moved below any other
+     panel it becomes an ordinary card in the grid and the pin goes with the
+     position — a card pinned from the middle of a page has nothing to stick to.
+
+     Said in the row rather than enforced, because moving it down is a reasonable
+     thing to want: a client who reads the tiles first and glances at the live
+     count second is exactly who this control is for. It just must not be a
+     silent trade. */
+  const realtimeLeads = useMemo(() => {
+    const shown = gridPanels.filter(p => !p.hidden)
+    return shown.length > 0 && shown[0].kind === 'realtime'
+  }, [gridPanels])
+
   /* Every field the save sends is compared here, `rowLimit` included. A field
      the editor can change but this cannot see is a change the Save button stays
      disabled for — the edit is visible on screen and unsaveable, with nothing
      to say why. */
   const layoutFingerprint = (ps: LayoutPanel[]) =>
-    JSON.stringify(ps.map(p => [p.key, p.span, p.viz ?? '', p.hidden, p.title, p.desc, p.rowLimit ?? 0]))
+    JSON.stringify(ps.map(p => [p.key, p.span, p.viz ?? '', p.hidden, p.title, p.desc, p.rowLimit ?? 0,
+      // The folded platforms, in a stable order. Without this the checkboxes
+      // are a control the Save button cannot see: the change is on screen and
+      // unsaveable, with nothing to say why.
+      (p.realtimePlatforms ?? []).filter(x => x.rolledUp).map(x => x.key).sort().join(','),
+    ]))
 
   const layoutDirty = useMemo(
     () => layoutFingerprint(layout) !== layoutFingerprint(layoutSaved),
@@ -797,6 +876,13 @@ export default function ReportConfigPage() {
             // 0 means "the registry's own number". Only sent for a panel that
             // actually has a top-N to set.
             rowLimit: p.defaultRowLimit ? (p.rowLimit || 0) : 0,
+            /* The FOLDED platforms — the boxes that are not ticked. Sent only
+               for the live strip; on any other panel the server treats a stored
+               value as a stale row, and sending one would be writing a row
+               nothing reads. */
+            realtimeRollup: p.kind === 'realtime'
+              ? (p.realtimePlatforms ?? []).filter(x => x.rolledUp).map(x => x.key)
+              : undefined,
           })),
         }),
       })
@@ -1198,6 +1284,20 @@ export default function ReportConfigPage() {
               {p.defaultHidden === true ? ' · off unless switched on' : ''}
               {p.defaultHidden === false && p.hidden ? ' · normally shown' : ''}
             </span>
+          ) : p.kind === 'realtime' ? (
+            /* The one panel whose position changes what it DOES, so the line
+               says which of the two it currently is rather than repeating the
+               kind label the icon beside it already carries. */
+            <span className="block text-[10px] text-gray-400 truncate"
+              title={realtimeLeads
+                ? 'At the top of the page it is the full-width band a reader can pin, holding its place while the report scrolls under it.'
+                : 'Below another panel it is an ordinary card in the grid — a card pinned from the middle of a page has nothing to stick to.'}>
+              Live counts ·{' '}
+              {p.hidden
+                ? 'off'
+                : realtimeLeads ? 'top of the page, readers can pin it' : 'in the grid, not pinnable'}
+              {p.span !== p.defaultSpan ? ` · default ${SPAN_LABEL[p.defaultSpan]?.toLowerCase()}` : ''}
+            </span>
           ) : (
             <span className="block text-[10px] text-gray-400 truncate">
               {KIND_LABEL[p.kind]}
@@ -1302,7 +1402,10 @@ export default function ReportConfigPage() {
                 placeholder:text-gray-300 dark:placeholder:text-white/25
                 focus:outline-none focus:border-[#FC934C]" />
             <span className="text-[10px] text-gray-400 block mt-0.5">
-              Shown as the card&apos;s title on the report. Leave empty to keep &ldquo;{p.name}&rdquo;.
+              {p.kind === 'realtime'
+                ? <>Shown as the heading on the live counts strip, beside the &ldquo;x ago&rdquo;
+                    stamp. Leave empty to keep &ldquo;{p.name}&rdquo;.</>
+                : <>Shown as the card&apos;s title on the report. Leave empty to keep &ldquo;{p.name}&rdquo;.</>}
             </span>
           </label>
           <label className="block">
@@ -1317,11 +1420,83 @@ export default function ReportConfigPage() {
                 placeholder:text-gray-300 dark:placeholder:text-white/25
                 focus:outline-none focus:border-[#FC934C]" />
             <span className="text-[10px] text-gray-400 block mt-0.5">
-              {p.defaultDesc
-                ? 'Appears behind an ⓘ on the card. Leave empty to keep the built-in note shown above in grey.'
-                : 'Appears behind an ⓘ on the card. Leave empty for no icon.'}
+              {/* The live card is the one place this text is ADDED to rather
+                  than swapped in. Its own note is rebuilt from every reading —
+                  the season it covered, what it was narrowed to, whether a
+                  platform failed to answer and the total is therefore a floor —
+                  so replacing it with fixed prose would drop the one line that
+                  says the number is incomplete. */}
+              {p.kind === 'realtime'
+                ? 'Appears behind the ⓘ on the strip, above the card’s own live note — which says what the reading covered and whether any platform failed to answer, and is kept whatever you write here.'
+                : p.defaultDesc
+                  ? 'Appears behind an ⓘ on the card. Leave empty to keep the built-in note shown above in grey.'
+                  : 'Appears behind an ⓘ on the card. Leave empty for no icon.'}
             </span>
           </label>
+
+          {/* ── Which platforms the live card lists on their own ───────────
+              The sports card covers fifteen platforms, of which a fixture
+              usually touches three or four. It already drops the ones that
+              found nothing; this decides which of the rest are worth a row of
+              their own on this report.
+
+              Untick and the platform is FOLDED, not hidden — its count is
+              summed into a single “UGC & Social Media” row. That distinction is
+              the whole point and it is said in the footnote, because a control
+              that reads as “hide” on a card full of totals would be one nobody
+              dared use.
+
+              UGC and social only. Open Web carries most of the volume on every
+              sports report and the server refuses to fold it, so offering the
+              tick here would be offering something that does not happen. */}
+          {p.kind === 'realtime' && (
+            <div>
+              <span className="text-[9px] font-bold uppercase tracking-widest text-gray-400 block mb-1">
+                Platforms listed separately
+              </span>
+              {(p.realtimePlatforms ?? []).length === 0 ? (
+                /* Two very different silences, and only one of them is a
+                   problem the reader can act on. This one is "no reading has
+                   been taken yet", which resolves itself the moment somebody
+                   opens the report — drawn as a note rather than as an empty
+                   list, which would read as "the service watches nothing". */
+                <p className="text-[10px] text-gray-400">
+                  No UGC or social platforms recorded yet. The list fills in from the first live
+                  reading taken on a sports report, and then this is where they are chosen.
+                </p>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-1">
+                    {(p.realtimePlatforms ?? []).map(x => (
+                      <label key={x.key}
+                        className="flex items-center gap-1.5 text-[11px] text-[#14254A] dark:text-white
+                          cursor-pointer min-w-0">
+                        <input type="checkbox" checked={!x.rolledUp}
+                          onChange={e => setPlatformShown(p.key, x.key, e.target.checked)}
+                          className="accent-[#FC934C] flex-shrink-0" />
+                        <span className="truncate" title={x.label}>{x.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <span className="text-[10px] text-gray-400 block mt-1">
+                    {(() => {
+                      const folded = (p.realtimePlatforms ?? []).filter(x => x.rolledUp).length
+                      if (folded === 0) {
+                        return 'Every platform gets its own row. Untick one to fold its count into a single “UGC & Social Media” row instead of listing it.'
+                      }
+                      if (folded === 1) {
+                        /* One folded is a rename, not a summary, and the server
+                           leaves it as itself for that reason. Said here, or
+                           the tick would look broken on the report. */
+                        return 'One platform unticked. A single platform is left as itself — folding one row into a row is only a vaguer name for it — so untick a second to see them combined.'
+                      }
+                      return `${folded} platforms fold into one “UGC & Social Media” row. Their counts are summed into it, not dropped — the card’s total is unchanged.`
+                    })()}
+                  </span>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
       </div>
@@ -2060,6 +2235,15 @@ export default function ReportConfigPage() {
                                   It can fill <b className="text-[#14254A] dark:text-white">{t.dimensions}</b>{' '}
                                   breakdown panel{t.dimensions === 1 ? '' : 's'}.
                                 </p>
+                                {t.sportsAssetsOnly && (
+                                  <p className="text-[11px] text-gray-500 dark:text-white/45 mt-1.5 leading-relaxed">
+                                    This report is named for sport and this table records every genre, so its
+                                    Asset list and Assets panel are held to <b className="text-[#14254A]
+                                    dark:text-white">Sports</b> titles, taken from the title master. The volume
+                                    figures are not narrowed. Rename the report without the word and it shows
+                                    the whole catalogue again.
+                                  </p>
+                                )}
                                 <details className="mt-1.5">
                                   <summary className="text-[10px] font-bold uppercase tracking-widest
                                     text-gray-400 cursor-pointer hover:text-[#14254A] dark:hover:text-white w-fit">

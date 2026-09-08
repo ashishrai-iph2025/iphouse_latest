@@ -7,7 +7,7 @@ import {
 } from 'recharts'
 import {
   aggregate, buildTatBuckets, inTatBucket, rowSubPlatform, rowChannelKey,
-  tatUrlToEnforcementMins, tatEnforcementToRemovalMins,
+  tatUrlToEnforcementMins, tatEnforcementToRemovalMins, platformDisplayName,
   type WarRoomReport as Report, type WarRoomRow, type WarRoomFilters, type TatBucket,
   type Totals, type Funnel, type Removal, type Segment, type Breakdowns, type PlatformResult,
 } from '@/lib/warroom'
@@ -110,7 +110,7 @@ const KPI_EXPORT_COLS: CsvColumn<{ metric: string; value: number }>[] = [
    sync with the actual aggregation logic in go-server/markscan/warroom.go —
    this is meant to describe reality, not aspiration. */
 const LOGIC = {
-  platformPicker: 'Each platform card totals rows fetched for that MarkScan endpoint (facebook/youtube/instagram/twitter/telegram/internet/UGC/etc). "Identified" = row count (Open Web counts distinct host+linking URLs instead, since the same URL can repeat across rows). "Removed" = rows where removalStatus is Dead/Removed, or (Open Web linking URLs) delistingStatus is Approved.',
+  platformPicker: 'Each platform card totals the rows fetched for that platform (Facebook, YouTube, Instagram, X, Telegram, Open Web, UGC & Other and the rest). "Identified" = row count (Open Web counts distinct host + linking URLs instead, since the same URL can repeat across rows). "Removed" = rows where removalStatus is Dead/Removed, or (Open Web linking URLs) delistingStatus is Approved.',
   trend: 'Groups rows by day using ReportDay: urlUploadDate, falling back to discoveryDoneAt, then uploadDate, enforcementTime, removalTime, createdAt — whichever is populated first. Each day plots identified (row count that day) vs removed (same rows where isRemoved() is true).',
   openWebStats: 'Open Web identification is distinct URLs, not raw rows, since one URL can appear on many rows: "Distinct host URLs"/"domains" = unique sourceURL/domain values; "Distinct linking URLs"/"domains" = unique infringingURL/domain values (rows with no sourceURL are linking-URL rows).',
   newDomains: 'For each linking domain, takes the earliest ReportDay across all its rows and buckets that domain under that first-seen date — so a domain only counts once, on the day it was first discovered.',
@@ -529,6 +529,27 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
      'searchEngine'] as const
   ).filter(k => filters[k])
 
+  /*
+    What a chip PRINTS for its value.
+
+    Most dimensions filter on a value that is already a display name — a country,
+    a language, a status — and those print as they are. Two do not: `platform`
+    and `subPlatform` filter on MarkScan's own keys, so the chip read
+    "Platform: internet" after a click on a card labelled Open Web. That is an
+    endpoint name shown to a client, and it contradicted the very control it had
+    been set from.
+
+    Resolved through the SAME maps those controls label from — platformDisplayName
+    for the platform strip, UGC_LABELS for the platforms under the UGC umbrella —
+    rather than through a second table written here, which is how the two would
+    drift apart again.
+  */
+  const chipValue = (k: keyof WarRoomFilters, v: string): string => {
+    if (k === 'platform') return platformDisplayName(v)
+    if (k === 'subPlatform') return UGC_LABELS[String(v).trim().toLowerCase()] ?? v
+    return v
+  }
+
   /* ── Export payloads ──────────────────────────────────────────────────────
      One per visual, built from exactly what that visual renders so a download
      always matches the screen under the current cross-filters. */
@@ -699,7 +720,7 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
             <button key={k} onClick={() => toggle(k as any, filters[k as keyof WarRoomFilters]!)}
               className="px-2.5 py-1 rounded-full font-semibold border transition-colors"
               style={{ background: '#FC934C15', borderColor: '#FC934C55', color: ORANGE_TEXT }}>
-              {DIM_LABEL[k] ?? k}: <strong>{filters[k as keyof WarRoomFilters]}</strong> ✕
+              {DIM_LABEL[k] ?? k}: <strong>{chipValue(k, filters[k as keyof WarRoomFilters]!)}</strong> ✕
             </button>
           ))}
           <button onClick={() => setFilters({})}

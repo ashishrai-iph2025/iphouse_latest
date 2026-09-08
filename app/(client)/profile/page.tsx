@@ -1,7 +1,8 @@
 ﻿'use client'
 import { usePasswordPolicy, checkPassword, PasswordRules } from '@/lib/passwordPolicy'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
+import AssetRegister from '@/components/client/AssetRegister'
 import { useSession } from '@/lib/auth-client'
 import Breadcrumb from '@/components/ui/Breadcrumb'
 
@@ -18,7 +19,27 @@ export default function ProfilePage() {
   const { data: session } = useSession()
   const user = session?.user as any
 
-  const [tab,     setTab]     = useState<'info' | 'password'>('info')
+  const [tab,     setTab]     = useState<'info' | 'password' | 'assets'>('info')
+  /*
+    Whether this account holds the asset-register grant.
+
+    ASKED, rather than inferred from a failed register call. A 403 and a
+    reporting service that is down are different answers and only one of them
+    means the tab should not exist — showing the tab and letting it fail would
+    tell most people the platform is broken when it is working exactly as
+    configured. Undefined until the answer arrives, so the tab does not flash
+    in and out on every page load.
+  */
+  const [canAssets, setCanAssets] = useState<boolean | undefined>(undefined)
+
+  useEffect(() => {
+    let live = true
+    fetch('/api/assets/access', { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => { if (live) setCanAssets(d?.enabled === true) })
+      .catch(() => { if (live) setCanAssets(false) })
+    return () => { live = false }
+  }, [])
   const [logo,    setLogo]    = useState<string | null>(null)
   const [pwForm,  setPwForm]  = useState({ current: '', newPass: '', confirm: '' })
   const [pwMsg,   setPwMsg]   = useState('')
@@ -169,6 +190,8 @@ export default function ProfilePage() {
             {([
               { key: 'info',     label: 'Account Info',     icon: '👤' },
               { key: 'password', label: 'Change Password',  icon: '🔒' },
+              /* Only for accounts that hold the grant — see canAssets. */
+              ...(canAssets ? [{ key: 'assets' as const, label: 'Asset Register', icon: '📋' }] : []),
             ] as const).map(t => (
               <button key={t.key} onClick={() => setTab(t.key)}
                 className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-1.5 ${
@@ -224,6 +247,12 @@ export default function ProfilePage() {
               </div>
             </div>
           )}
+
+          {/* Asset Register — the full title list, and protection requests.
+              Guarded on canAssets as well as the tab, so revoking the grant
+              closes the panel of anyone who happens to be sitting on it rather
+              than only hiding the way back to it. */}
+          {tab === 'assets' && canAssets && <AssetRegister />}
 
           {/* Change Password */}
           {tab === 'password' && (

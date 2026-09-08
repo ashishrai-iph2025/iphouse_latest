@@ -108,7 +108,11 @@ export default function InfoDot({ text }: { text?: string }) {
     <>
       {/* The description is the accessible name, so a screen reader reads it on
           focus without depending on the bubble being open. */}
+      {/* Dropped from a printed page — see lib/printReport. The note behind it
+          opens on hover, and on paper that is a grey circle beside a heading
+          with no way to find out what it was for. */}
       <span ref={dotRef} tabIndex={0} role="note" aria-label={text}
+        data-print-hide=""
         onMouseEnter={show} onMouseLeave={hide}
         onFocus={show} onBlur={hide}
         className={`inline-grid place-items-center w-4 h-4 flex-shrink-0 rounded-full

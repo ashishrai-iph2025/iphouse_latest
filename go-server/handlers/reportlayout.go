@@ -113,6 +113,23 @@ func ensureLayoutSchema() {
 				log.Printf("[layout] add description: %v", err)
 			}
 		}
+		/* Which UGC and social platforms the live card folds into one row.
+
+		   Only ever set on the realtime panel's row, and empty everywhere else.
+		   A column on the layout table rather than a table of its own because it
+		   IS a layout setting — per platform report, per client, saved and reset
+		   by the same screen and the same request as the panel's width and its
+		   title. A second table would need its own key, its own migration and
+		   its own half of every save, to hold one string per card.
+
+		   Empty means "fold nothing", which is what every existing row means and
+		   what an unconfigured card does. See realtimeplatforms.go. */
+		if !portalColumnExists(layoutTable, "realtime_rollup") {
+			if _, _, err := db.Exec(
+				"ALTER TABLE " + layoutTable + " ADD COLUMN realtime_rollup VARCHAR(1000) NOT NULL DEFAULT '' AFTER description"); err != nil {
+				log.Printf("[layout] add realtime_rollup: %v", err)
+			}
+		}
 	})
 }
 
@@ -189,6 +206,13 @@ const (
 	panelRate    = "rate"    // removal rate over time
 	panelDim     = "dim"     // one breakdown
 	panelFilter  = "filter"  // ONE slicer in the report's filter pane
+	/* The live counts strip — RealtimeCard, above the report on the sports
+	   pages. A panel like the rest, so it can be moved, resized, hidden,
+	   renamed and described on the same screen as everything else it sits
+	   with. It is NOT drawn from the report's own result set: it counts
+	   straight from the enforcement side, on its own refresh, which is exactly
+	   why it needs a note of its own more than any card here. */
+	panelRealtime = "realtime"
 )
 
 // Stable keys for the panels that are not breakdowns.
@@ -200,6 +224,7 @@ const (
 	keyTrendRole = "trend:"  // + role, e.g. trend:linking
 	keyTilePfx   = "kpi:"    // + metric, e.g. kpi:totalAssets
 	keyFilterPfx = "filter:" // + slicer parameter, e.g. filter:country
+	keyRealtime  = "realtime"
 )
 
 /*
@@ -366,6 +391,10 @@ type panelDef struct {
 	   top-N at all, and on those the control is not offered: see rowLimitFor. */
 	Limit        int
 	DefaultLimit int
+	/* Which UGC and social platforms the live card folds into one row, comma
+	   separated. Only ever set on the realtime panel; empty everywhere else,
+	   and empty there folds nothing. See realtimeplatforms.go. */
+	Rollup string
 }
 
 func (p panelDef) asMap() map[string]any {
@@ -385,9 +414,21 @@ func (p panelDef) asMap() map[string]any {
 	if p.Title != "" {
 		out["label"] = p.Title
 	}
-	// What the admin wrote, or the built-in note until they write one.
-	if d := panelDescOf(p); d != "" {
-		out["desc"] = d
+	/* What the admin wrote, or the built-in note until they write one.
+
+	   The live counts card is the one exception, and only ADMIN text travels to
+	   it. That card writes its own note from each reading — the season it
+	   covered, what it was narrowed to, whether a platform failed to answer, all
+	   of which change between refreshes — and it keeps that note whatever is set
+	   here, showing the admin's paragraph above it. Sending the built-in default
+	   as well would print a static paragraph directly over the live one saying
+	   the same thing. See scopeNote in components/shared/RealtimeCard.tsx. */
+	desc := panelDescOf(p)
+	if p.Kind == panelRealtime {
+		desc = p.Desc
+	}
+	if desc != "" {
+		out["desc"] = desc
 	}
 	if p.Sub != "" {
 		out["sub"] = p.Sub
@@ -477,6 +518,32 @@ func mergesReports(platformKey string) bool {
 	return ok && len(p.Tables) >= 3
 }
 
+/*
+hasRealtime is whether this platform's report carries the LIVE COUNTS strip —
+RealtimeCard, the figure that counts straight from the enforcement side rather
+than from the prepared tables the rest of the page reads.
+
+Sports only, because that is the only place the card is fed: the count is scoped
+to the client's configured season, and the narrowing slicers it honours — match
+day, asset, franchise — exist on no other report.
+
+Derived through isSportsPlatform rather than a list of keys held here, for the
+same reason the reports page reads it off the platform's own name: the keys are
+configuration an admin edits on the next tab, and a hardcoded list would go
+quietly wrong the day somebody adds a sports platform, with the symptom being a
+panel that is simply absent from this screen.
+
+The panel EXISTING is not the card appearing. The report still draws it only
+once a client and one of those narrowing slicers are chosen — an unfiltered live
+count over a whole season is the most expensive query in the product, run to
+answer a question nobody asked. This decides whether the panel is on the page to
+be arranged at all.
+*/
+func hasRealtime(platformKey string) bool {
+	p, ok := platformByKey(platformKey)
+	return ok && isSportsPlatform(p)
+}
+
 // defaultPanels builds the layout a platform has before anyone configures it —
 // which is the page exactly as it was written by hand: headline figures, the
 // trend (one per source where the platform's tables describe different things),
@@ -489,11 +556,34 @@ func mergesReports(platformKey string) bool {
 // carry a delisting measure, which decides what their trend card is called;
 // `merged` says the platform is several reports rather than one seen from both
 // ends, which earns it an overall trend under the per-role pair — see
-// mergesReports, which is what the callers pass here.
+// mergesReports, which is what the callers pass here; `realtime` says the report
+// carries the live counts strip, which is hasRealtime for the same reason.
+//
+// Both are passed rather than looked up here so that this function stays a pure
+// function of a platform's SHAPE. Reading the platform table from inside it
+// would put a database call under every caller — including the tests, which
+// describe a shape directly and have no database at all.
 func defaultPanels(platformKey string, dims []map[string]any, roles []string, tiles []string,
-	actions map[string]string, delisting map[string]bool, merged bool) []panelDef {
+	actions map[string]string, delisting map[string]bool, merged, realtime bool) []panelDef {
 	// Four across, which is what a KPI band has always looked like.
-	out := make([]panelDef, 0, len(tiles)+len(dims)+6)
+	out := make([]panelDef, 0, len(tiles)+len(dims)+7)
+	/* The live counts strip, FIRST and full width — which is exactly where it
+	   has always been drawn, so a platform nobody has arranged looks as it did.
+	   From here it can be moved under the tiles, narrowed, switched off, renamed
+	   or given a note of its own like any other panel.
+
+	   Its position carries one extra meaning the rest do not: left at the top of
+	   the page it is the sticky band the reader can PIN, running the full width
+	   of the report and holding its place while everything scrolls under it.
+	   Moved below another panel it becomes an ordinary card in the grid, and the
+	   pin goes with the position — a card pinned from the middle of a page has
+	   nothing to stick to. See showRealtime in app/admin/reports/page.tsx. */
+	if realtime {
+		out = append(out, panelDef{
+			Key: keyRealtime, Kind: panelRealtime, Span: spanFull,
+			Label: "Realtime",
+		})
+	}
 	for _, metric := range tiles {
 		out = append(out, panelDef{
 			Key: keyTilePfx + metric, Kind: panelTile, Metric: metric,
@@ -608,7 +698,46 @@ type layoutRow struct {
 	Title  string // custom card title; empty keeps the default name
 	Desc   string // shown behind an info icon on the card; empty means no icon
 	Limit  int    // top-N cut for a breakdown; 0 keeps the registry's own
+	/* Which UGC and social platforms the live card folds into one row, comma
+	   separated. Only meaningful on the realtime panel; empty everywhere else,
+	   and empty there means fold nothing. See realtimeplatforms.go. */
+	Rollup string
 	Set    bool
+}
+
+/*
+realtimeRollupFor is the fold configured for one client's live card.
+
+Reads through the same layout the report page is drawn from — the client's own
+row where it has one, the all-clients default otherwise — so the card a reader
+sees and the setting an admin edited are one thing rather than two that agree
+most of the time.
+
+Only the sports view has a live card to configure, and only its layout carries
+the setting; every other view folds nothing. Named here rather than in
+realtimeplatforms.go because it is the layout it reads, and layoutFor is this
+file's.
+*/
+func realtimeRollupFor(view, platformKey, clientID string) map[string]bool {
+	/* Only the sports view has a live card that can be configured, and only a
+	   request that says WHICH report it is on can be. The War Room's card sends
+	   neither and folds nothing, which is the behaviour it has always had. */
+	if view != "sports" || strings.TrimSpace(platformKey) == "" {
+		return nil
+	}
+	/* Per SECTION, like every other layout setting. A client reads Summary,
+	   Open Web and Social as separate reports with separate arrangements, and
+	   the fold is arranged on the same screen and stored on the same row as the
+	   card's width and its title — so an admin who configures the card on the
+	   report they are looking at has configured the card they are looking at.
+	   The alternative, one setting per client read off the Summary, would make
+	   this the single control on that screen that does nothing where it is
+	   edited. */
+	row, ok := layoutFor(strings.TrimSpace(platformKey), clientID)[keyRealtime]
+	if !ok || row.Rollup == "" {
+		return nil
+	}
+	return parseRollup(row.Rollup)
 }
 
 /*
@@ -632,7 +761,7 @@ func layoutFor(platformKey, clientID string) map[string]layoutRow {
 func readLayoutRows(platformKey, clientID string) map[string]layoutRow {
 	out := map[string]layoutRow{}
 	rows, err := db.Query(
-		"SELECT panel_key, sort_order, span, viz, is_hidden, custom_label, description, row_limit FROM "+layoutTable+
+		"SELECT panel_key, sort_order, span, viz, is_hidden, custom_label, description, row_limit, realtime_rollup FROM "+layoutTable+
 			" WHERE platform_key = ? AND client_id = ?", platformKey, clientID)
 	if err != nil {
 		return out
@@ -646,6 +775,7 @@ func readLayoutRows(platformKey, clientID string) map[string]layoutRow {
 			Title:  strings.TrimSpace(strFromAny(r["custom_label"])),
 			Desc:   strings.TrimSpace(strFromAny(r["description"])),
 			Limit:  int(numOf(r["row_limit"])),
+			Rollup: strings.TrimSpace(strFromAny(r["realtime_rollup"])),
 			Set:    true,
 		}
 	}
@@ -769,6 +899,12 @@ func applyLayout(platformKey, clientID string, panels []panelDef) []panelDef {
 			if p.Kind == panelDim && p.DefaultLimit > 0 && row.Limit > 0 {
 				p.Limit = row.Limit
 			}
+			// And only the live strip folds platforms. Same rule as the two
+			// above: a stored value against any other panel is a row left
+			// behind by a panel that changed kind, not an instruction.
+			if p.Kind == panelRealtime {
+				p.Rollup = row.Rollup
+			}
 		}
 		list = append(list, ranked{p, rank})
 	}
@@ -797,7 +933,8 @@ func hiddenDimsFor(platformKey, clientID string, dims []map[string]any, roles, t
 	actions map[string]string, delisting map[string]bool) map[string]bool {
 	out := map[string]bool{}
 	for _, p := range applyLayout(platformKey, clientID,
-		defaultPanels(platformKey, dims, roles, tiles, actions, delisting, mergesReports(platformKey))) {
+		defaultPanels(platformKey, dims, roles, tiles, actions, delisting,
+			mergesReports(platformKey), hasRealtime(platformKey))) {
 		if p.Kind == panelDim && p.Hidden {
 			out[p.Key] = true
 		}
@@ -811,7 +948,8 @@ func hiddenDimsFor(platformKey, clientID string, dims []map[string]any, roles, t
 func sectionPanels(platformKey, clientID string, dims []map[string]any, roles, tiles []string,
 	actions map[string]string, delisting map[string]bool) []map[string]any {
 	panels := applyLayout(platformKey, clientID,
-		defaultPanels(platformKey, dims, roles, tiles, actions, delisting, mergesReports(platformKey)))
+		defaultPanels(platformKey, dims, roles, tiles, actions, delisting,
+			mergesReports(platformKey), hasRealtime(platformKey)))
 	out := make([]map[string]any, 0, len(panels))
 	for _, p := range panels {
 		if p.Hidden {
@@ -1182,7 +1320,7 @@ func adminHiddenPanels(platformKey string) map[string]bool {
 		return out
 	}
 	defaults := defaultPanels(platformKey, in.Dims, in.Roles, in.Tiles, in.Actions, in.Delisting,
-		mergesReports(platformKey))
+		mergesReports(platformKey), hasRealtime(platformKey))
 	base := applyLayout(platformKey, layoutAllClients, defaults)
 	for _, p := range base {
 		if p.Hidden {
@@ -1235,7 +1373,7 @@ func ReportLayoutGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defaults := defaultPanels(key, in.Dims, in.Roles, in.Tiles, in.Actions, in.Delisting,
-		mergesReports(key))
+		mergesReports(key), hasRealtime(key))
 	panels := applyLayout(key, clientID, defaults)
 
 	/* The filter pane hangs off the layout that was just applied, not off the
@@ -1320,6 +1458,21 @@ func ReportLayoutGet(w http.ResponseWriter, r *http.Request) {
 			// the screen can mark the ones that have been overridden — and say
 			// which two are deliberately off to begin with.
 			row["defaultHidden"] = !defaultFilterVisible(p.Param, stillShown)
+		}
+		/* The live card's platform list, on the live card's own row.
+
+		   Sent only for that panel, because it is the only one it means anything
+		   on — a checklist of social platforms under a KPI tile would be a
+		   control with nothing to act on. The screen ticks what is SHOWN, so
+		   each entry carries `rolledUp` and the editor draws it inverted; see
+		   realtimeplatforms.go for why the stored form is the other way round.
+
+		   The catalogue can be EMPTY, and that is a state the screen has to be
+		   able to say something about rather than draw as "no platforms": it
+		   means no reading has been taken yet on this install, not that the
+		   service watches nothing. */
+		if p.Kind == panelRealtime {
+			row["realtimePlatforms"] = realtimePlatformChoices(parseRollup(p.Rollup))
 		}
 		out = append(out, row)
 	}
@@ -1506,6 +1659,10 @@ func ReportLayoutSave(w http.ResponseWriter, r *http.Request) {
 			// 0 (or absent) means "the registry's own number", which is how a
 			// panel goes back to its default without a separate control.
 			RowLimit int `json:"rowLimit"`
+			/* The live card's folded platforms — the ones the screen did NOT
+			   tick. Absent on every other panel, and absent here means fold
+			   nothing, which is what an unconfigured card does. */
+			RealtimeRollup []string `json:"realtimeRollup"`
 		} `json:"panels"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
@@ -1597,6 +1754,23 @@ func ReportLayoutSave(w http.ResponseWriter, r *http.Request) {
 		if rowLimit > maxRowLimit {
 			rowLimit = maxRowLimit
 		}
+		/* The folded platforms, normalised and capped at what the column holds.
+
+		   Cut rather than refused, like the title above it — though it takes a
+		   service watching sixty social platforms with long keys to reach a
+		   thousand characters, and a truncated list would silently unfold the
+		   tail. So it is cut on a SEPARATOR: a shorter list that is entirely
+		   correct beats a longer one whose last entry is half a key matching
+		   nothing. */
+		rollup := joinRollup(p.RealtimeRollup)
+		if len(rollup) > 1000 {
+			rollup = rollup[:1000]
+			if i := strings.LastIndex(rollup, ","); i >= 0 {
+				rollup = rollup[:i]
+			} else {
+				rollup = ""
+			}
+		}
 		// Which list this panel is ordered within — see the note on the two
 		// counters above.
 		order := 0
@@ -1608,13 +1782,13 @@ func ReportLayoutSave(w http.ResponseWriter, r *http.Request) {
 			order = pos
 		}
 		if _, _, err := db.Exec(`
-			INSERT INTO `+layoutTable+` (platform_key, client_id, panel_key, sort_order, span, viz, is_hidden, custom_label, description, row_limit, updated_by)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO `+layoutTable+` (platform_key, client_id, panel_key, sort_order, span, viz, is_hidden, custom_label, description, row_limit, realtime_rollup, updated_by)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON DUPLICATE KEY UPDATE sort_order=VALUES(sort_order), span=VALUES(span),
 			  viz=VALUES(viz), is_hidden=VALUES(is_hidden), custom_label=VALUES(custom_label),
 			  description=VALUES(description), row_limit=VALUES(row_limit),
-			  updated_by=VALUES(updated_by)`,
-			key, clientID, pk, order, span, viz, hidden, title, desc, rowLimit, who); err != nil {
+			  realtime_rollup=VALUES(realtime_rollup), updated_by=VALUES(updated_by)`,
+			key, clientID, pk, order, span, viz, hidden, title, desc, rowLimit, rollup, who); err != nil {
 			log.Printf("[layout] save %s/%s/%s: %v", key, clientID, pk, err)
 			Fail(w, 500, "Could not save this layout")
 			return

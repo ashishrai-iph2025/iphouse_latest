@@ -159,12 +159,9 @@ func UserNav(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	allowed, _ := db.Query(`
-		SELECT m.Id AS moduleId, m.ModuleName, m.pageName, m.nav_order AS navOrder
-		FROM user_module_permission_test u
-		JOIN module_permission m ON m.Id = u.moduleId
-		WHERE u.loginId = ? AND u.allowed = 1 AND m.status = 0
-		ORDER BY m.nav_order ASC, m.Id ASC`, claims.LoginID)
+	// The SAME query the server-side module gate reads — see grantedModuleRows.
+	// Shared so the nav and the API cannot disagree about what is granted.
+	allowed, _ := grantedModuleRows(claims.LoginID)
 
 	// Diagnostic: how many module grants exist for this login (vs total rows).
 	allRows, _ := db.Query(`SELECT moduleId, allowed FROM user_module_permission_test WHERE loginId = ?`, claims.LoginID)
