@@ -37,6 +37,7 @@ import ReportLayoutEditor from '@/components/reports/ReportLayoutEditor'
 import { DEFAULT_THEME, themeFor, type CustomPalette, type MarkTheme } from '@/lib/reportTheme'
 import { EngineChart, NATIVE } from '@/lib/charts/engines'
 import type { ChartForm, ChartSpec } from '@/lib/charts/spec'
+import { durationMinutes, foldTatRows } from '@/lib/tatBuckets'
 
 /* ── Palette ───────────────────────────────────────────────────────────────────
    Two families, deliberately kept apart:
@@ -187,13 +188,31 @@ function niceTicks(max: number, count = 5): number[] {
   return out
 }
 
-/** The first number in a bucket label — "12-24 hours" → 12 — so ordered buckets
-    can be put back in their own order after the server sorted them by size.
+/** The first number in a bucket label — "11-20" → 11 — so ordered buckets can
+    be put back in their own order after the server sorted them by size.
     Labels with no number sort last, which keeps an "Unknown" bucket at the end. */
 function leadingNum(s: string): number {
   const hit = /(-?\d+(?:\.\d+)?)/.exec(String(s))
   return hit ? Number(hit[1]) : Number.POSITIVE_INFINITY
 }
+
+/**
+ * Where a row sits on an ORDERED bucket axis.
+ *
+ * A duration is placed on the minute axis; anything else falls back to its
+ * leading number, which is what a page-number or a tier bucket needs.
+ *
+ * The fallback is not cosmetic. leadingNum alone is UNIT-BLIND, and on the
+ * turnaround bands that is the difference between a ramp and nonsense: it reads
+ * "1-2 hr" as 1 and "15-30 min" as 15, so the hours sort ahead of the minutes
+ * and the panel comes out 0-15 min, 1-2 hr, 2 hr+, 15-30 min, 30 min-1 hr —
+ * five bands in an order whose shading asserts a sequence the labels contradict.
+ *
+ * A bucket set is homogeneous in practice, so the two scales never mix within
+ * one panel: every turnaround label parses as a duration, and no page-number
+ * label does.
+ */
+const ordinalKey = (s: string) => durationMinutes(s) ?? leadingNum(s)
 
 /** Axis tick label. Only ever sees the round numbers `niceTicks` produced, so
     one decimal is always enough to keep two neighbours apart. */
@@ -705,8 +724,62 @@ const FULL_SET_DIMS = new Set(['byMatchDay', 'byFranchise'])
  */
 const SEQUENCE_DIMS = new Set(['byMatchDay'])
 
+/** The turnaround panel's key, matched by orderRows below. Spelled once —
+ *  the server uses the same string (dimTAT in tatbuckets.go). */
+const TAT_DIM = 'byTAT'
+
+/*
+ * The combined root-domain cards — volume, success AND the mirror count, per
+ * brand. TWO of them, one per side of the enforcement: linking domains (the
+ * pages that point at infringing content) and host domains (the ones serving
+ * it). Same strings as dimDomainRootAll and dimDomainRootSource in
+ * go-server/handlers/domainroot.go.
+ *
+ * They are never one card. The two sides are different populations measured on
+ * different facts — a link is DE-INDEXED from search results, a host is TAKEN
+ * DOWN — so adding them would sum unlike things and double-count any operator
+ * appearing on both. The server pins each panel to its own column; this file
+ * only has to name the second measure correctly on each.
+ */
+const DOMAIN_ROOT_ALL = 'byDomainRootAll'
+const DOMAIN_ROOT_SOURCE = 'byDomainRootSource'
+const ROOT_ALL_DIMS = new Set([DOMAIN_ROOT_ALL, DOMAIN_ROOT_SOURCE])
+
+/** What each side calls the measure beside "Identified", what a rate over it is
+ *  a rate OF, and what its rows are. The linking card counts delistings Google
+ *  approved; the host card counts URLs the host actually took down. */
+const ROOT_SIDE: Record<string, { name: string; rate: string; head: string }> = {
+  [DOMAIN_ROOT_ALL]: {
+    name: 'De-indexed', rate: 'De-indexing rate', head: 'Linking domain',
+  },
+  [DOMAIN_ROOT_SOURCE]: {
+    name: 'Removed', rate: 'Removal rate', head: 'Host domain',
+  },
+}
+
+/** The side a panel is. Falls back to the linking one, which is the side a
+ *  panel carrying this shape is if it is not the host. */
+const rootSide = (key: string) => ROOT_SIDE[key] ?? ROOT_SIDE[DOMAIN_ROOT_ALL]
+
 /**
- * Rows in the order their panel should read them.
+ * Rows in the order their panel should read them — and, for turnaround, in the
+ * bands it is allowed to have.
+ *
+ * ── Turnaround ───────────────────────────────────────────────────────────
+ *
+ * Folded into the five fixed bands and stripped of anything that is not a
+ * duration. The server does this too (go-server/handlers/tatbuckets.go) and
+ * that is where it belongs — only the server can MEASURE a turnaround off two
+ * timestamps rather than re-read somebody's banding of it.
+ *
+ * It is done again here because this panel is assembled from several platforms
+ * over several code paths — measured, folded, the summary's merge of both, and
+ * a Redis payload that may have been written by an older build — and one path
+ * letting a "Pending" row through puts it back on the page. This is the single
+ * point every one of them passes through on the way to being drawn, and doing
+ * it here also fixes the exports and the table twin, which read the same rows.
+ *
+ * ── Everything else ──────────────────────────────────────────────────────
  *
  * Numeric collation, so "Match 2" comes before "Match 10" — the plain string
  * comparison puts 10 second, which is the classic way a fixture list ends up in
@@ -715,6 +788,7 @@ const SEQUENCE_DIMS = new Set(['byMatchDay'])
  * them is worse than reordering neither.
  */
 const orderRows = (key: string, rows: any[]) => {
+  if (key === TAT_DIM) return foldTatRows(rows)
   if (!SEQUENCE_DIMS.has(key) || rows.length < 2) return rows
   return [...rows].sort((a, b) =>
     String(a.label ?? '').localeCompare(String(b.label ?? ''), undefined, { numeric: true }))
@@ -820,6 +894,32 @@ function dimTableData(key: string, label: string, viz: string, rows: any[]): Pan
         const urls = Number(r.urls) || 0
         const removed = Number(r.removed) || 0
         return [String(r.label ?? '—'), Number(r.repeats) || 0, urls, removed, `${pct(removed, urls)}%`]
+      }),
+      pickValues,
+    }
+  }
+
+  /* The combined root-domain cards: everything this report holds per brand, one
+     card per side of the enforcement.
+
+     Their own shape because of the MIRRORS column, which is the reason the
+     cards exist — volume and mirror-domain count are orders of magnitude apart,
+     so they cannot share a chart's axis, and a table is the one place they can
+     sit beside each other without one of them lying about the other's scale.
+
+     The second column is NAMED FOR THE SIDE: the linking card's is the count
+     Google approved for de-indexing, the host card's is what came down. Two
+     different facts, so never one heading over both. */
+  if (ROOT_ALL_DIMS.has(key)) {
+    const side = rootSide(key)
+    const t = rows.reduce((a, x) => a + (Number(x.urls) || 0), 0)
+    return {
+      head: [side.head, 'Identified', side.name, side.rate, 'Mirror domains', 'Share'],
+      rows: rows.map(r => {
+        const urls = Number(r.urls) || 0
+        const removed = Number(r.removed) || 0
+        return [String(r.label ?? '—'), urls, removed, `${pct(removed, urls)}%`,
+          Number(r.mirrors) || 0, `${pct(urls, t)}%`]
       }),
       pickValues,
     }
@@ -966,7 +1066,7 @@ function dimSpec(form: ChartForm, rows: any[], o: {
       pick: String(r.value ?? r.label ?? ''),
       value: Number(r.urls) || 0,
     }))
-    if (o.ordered) all.sort((a, b) => leadingNum(a.title) - leadingNum(b.title))
+    if (o.ordered) all.sort((a, b) => ordinalKey(a.title) - ordinalKey(b.title))
     const tail = all.slice(keep)
     const slices = tail.length > 0
       ? [...all.slice(0, keep), {
@@ -990,7 +1090,7 @@ function dimSpec(form: ChartForm, rows: any[], o: {
   }
 
   const picked = (o.ordered
-    ? [...rows].sort((a, b) => leadingNum(String(a.label)) - leadingNum(String(b.label)))
+    ? [...rows].sort((a, b) => ordinalKey(String(a.label)) - ordinalKey(String(b.label)))
     : rows
   ).slice(0, o.limit ?? 12)
 
@@ -1158,6 +1258,15 @@ const DIM_VIZ: VizOption[] = [
 /** Offered only where the dimension is geographic — a map of channel names is
     not a map of anything. */
 const MAP_VIZ: VizOption = { key: 'map', label: 'World map', hint: 'Countries tinted by volume' }
+
+/** Offered only on the combined root-domain card — the one breakdown whose
+    rows carry a mirror-domain count, and the reason that card exists. Listed first
+    there, because it is the only shape on the menu that draws all three of its
+    measures; every other one silently leaves the mirror count out. */
+const MIRROR_VIZ: VizOption = {
+  key: 'mirror', label: 'Volume & mirrors',
+  hint: 'Found and removed as bars, with each brand\'s mirror-domain count on its own scale',
+}
 
 /** Offered only on the repeat-offenders panel — it is the one breakdown whose
     rows carry a day count, and on any other panel this shape draws an axis of
@@ -1974,7 +2083,9 @@ function columnWidth(avail: number, categories: number, seriesCount: number, ins
  * series; on the area it is still the last point only, because sixty labels
  * along a line is a grey smear and there are no discrete marks to hang them on.
  */
-function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode = 'auto',
+/* Exported for .preview-trend.tsx, which renders THIS component rather than a
+   copy of it — see the note on MirrorBars. */
+export function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode = 'auto',
   single = false, color, onPick }: {
   data: any[]; m: MarkTheme
   /* Clicking a period narrows the whole report to it — see periodSpan and
@@ -2059,15 +2170,96 @@ function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode
     )
   }
 
-  /* The last point of each series, set in the right margin rather than over the
-     plot — an end-label placed inside lands on top of its own line. */
-  const endLabel = (props: any) => {
+  /*
+    ── THE END LABELS, AND WHY ONE RENDERER DRAWS BOTH ──────────────────────
+
+    The last value of each series, set in the right margin rather than over the
+    plot — an end-label placed inside lands on top of its own line.
+
+    Drawn together, because the two labels have to know about each other. Each
+    used to be positioned at its own series' last point, which is correct right
+    up until the lines CONVERGE at the right edge — and they converge exactly
+    when removal is keeping pace with identification, which is the good case and
+    the one a reader looks at hardest. On a 15K axis a day ending 1.9K found
+    against 1.4K removed puts the two labels four pixels apart: "1.9K" and
+    "1.4K" print through each other and the reader gets one smudge, which is
+    worse than no label at all.
+
+    So they are laid out as a stack: natural positions first, then anything too
+    close to the label above it is pushed down to clear it, and if that pushes
+    the last one past the baseline the whole stack lifts instead — a label must
+    never end up in among the date ticks.
+
+    THE Y-SCALE IS RECOVERED FROM THE POINTS THIS RENDERER IS ALREADY HANDED.
+    LabelList calls it once per index, so by the time it reaches the last one it
+    has seen enough (value, y) pairs to solve y = a·v + b exactly. That is worth
+    a sentence because the obvious alternative — recomputing the scale from the
+    axis domain and the card's own margins — hardcodes recharts' axis height and
+    silently drifts the day anything about the axis changes. This cannot drift:
+    it is measured off the line the chart actually drew.
+
+    Attached to the FIRST series only. A second copy would draw the same pair
+    again, over itself.
+  */
+  const END_GAP = 11          // the least two 10px figures can be apart and stay legible
+  const END_DY = 3.5          // baseline offset that centres a 10px figure on its line
+  const endSeen: Array<[number, number]> = []
+
+  const endLabels = (props: any) => {
+    const v = Number(props.value)
+    if (isFinite(v) && isFinite(props.y)) endSeen.push([v, props.y])
     if (props.index !== data.length - 1) return null
+
+    /* y = a·v + b. Any two points with DIFFERENT values determine it; a series
+       that held one value all window gives none, and then every label sits at
+       the y this one was handed and the stacking below separates them. */
+    let a = 0
+    let b = props.y
+    for (let i = 1; i < endSeen.length; i++) {
+      const [v0, y0] = endSeen[0]
+      const [v1, y1] = endSeen[i]
+      if (v1 !== v0) {
+        a = (y1 - y0) / (v1 - v0)
+        b = y0 - a * v0
+        break
+      }
+    }
+
+    const last = data[data.length - 1] ?? {}
+    const marks = series.map(sr => {
+      const val = Number(last[sr.key]) || 0
+      return { key: sr.key, color: sr.color, val, y: a !== 0 ? a * val + b : props.y }
+    }).sort((p, q) => p.y - q.y)
+
+    // Top down, each clearing the one above it.
+    for (let i = 1; i < marks.length; i++) {
+      if (marks[i].y - marks[i - 1].y < END_GAP) marks[i].y = marks[i - 1].y + END_GAP
+    }
+    /* `b` is the y of value zero — the plot's own baseline. A stack that has
+       grown past it moves up as a whole rather than letting its last figure
+       hang below the axis into the date ticks.
+
+       Measured on the BASELINE the text will actually be drawn at, END_DY below
+       the mark: testing the mark itself leaves the figure hanging that far into
+       the axis, which is where this sat until the rendered geometry was read
+       back off the DOM rather than eyeballed. */
+    if (a !== 0) {
+      const over = marks[marks.length - 1].y + END_DY - b
+      if (over > 0) for (const mk of marks) mk.y -= over
+    }
+
     return (
-      <text x={props.x + 7} y={props.y + 3.5} textAnchor="start" fontSize={10} fontWeight={700}
-        className="fill-[#14254A] dark:fill-white">
-        {fmt(Number(props.value))}
-      </text>
+      <g>
+        {marks.map(mk => (
+          /* In the SERIES' OWN COLOUR, not the ink the other figures use. A
+             label that has been nudged off its line is no longer identified by
+             where it sits, so it has to be identified by what it looks like. */
+          <text key={mk.key} x={props.x + 7} y={mk.y + END_DY} textAnchor="start"
+            fontSize={10} fontWeight={700} fill={mk.color}>
+            {fmt(mk.val)}
+          </text>
+        ))}
+      </g>
     )
   }
 
@@ -2127,7 +2319,8 @@ function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode
                   stroke={s.color} strokeWidth={2} dot={false}
                   fill={mode === 'line' ? 'none' : `url(#tr-${s.key})`}
                   activeDot={{ r: 4, strokeWidth: 2, stroke: m.surface }} isAnimationActive={false}>
-                  <LabelList dataKey={s.key} content={endLabel} />
+                  {/* Both end labels come off this one list — see endLabels. */}
+                  {s.key === series[0].key && <LabelList dataKey={s.key} content={endLabels} />}
                 </Area>
               ))}
             </AreaChart>
@@ -2333,7 +2526,7 @@ function Donut({ rows, m, onPick, activeVal = '', ramp = 'cat' }: {
     value_: String(r.value ?? r.label ?? ''),
   }))
   // Server rows arrive biggest-first, which is the wrong order for a sequence.
-  if (ordered) all.sort((a, b) => leadingNum(a.name) - leadingNum(b.name))
+  if (ordered) all.sort((a, b) => ordinalKey(a.name) - ordinalKey(b.name))
 
   const kept = all.slice(0, limit)
   const tail = all.slice(limit)
@@ -2488,7 +2681,7 @@ function ValueBars({ rows, m, onPick, activeVal = '', ordered = false, limit = 1
   ordered?: boolean; limit?: number
 }) {
   const data = (ordered
-    ? [...rows].sort((a, b) => leadingNum(String(a.label)) - leadingNum(String(b.label)))
+    ? [...rows].sort((a, b) => ordinalKey(String(a.label)) - ordinalKey(String(b.label)))
     : rows
   ).slice(0, limit)
   if (data.length === 0) return <div className="text-sm text-gray-400 py-3">No data.</div>
@@ -2529,18 +2722,34 @@ function ValueBars({ rows, m, onPick, activeVal = '', ordered = false, limit = 1
 }
 
 /** Ranked table with a share column — for long, name-heavy dimensions. */
-function RankTable({ rows, onPick, activeVal = '', limit = 12 }: {
+function RankTable({ rows, onPick, activeVal = '', limit = 12, mirrors = false,
+  nameHead = 'Name', removedHead }: {
   rows: any[]; onPick?: (v: string) => void; activeVal?: string; limit?: number
+  /** Show the distinct mirror-domain count beside the volume. The root-domain rows
+      have always carried it; only the combined cards ask for it, because on the
+      other two it would repeat a figure the panel is already plotting. */
+  mirrors?: boolean
+  nameHead?: string
+  /** What this panel's second measure IS, where it is not plain removal — the
+      linking card counts delistings Google approved. Named rather than assumed:
+      the column holds whichever measure the server resolved, and a fixed
+      "Removed" over a de-indexing count is the one mislabel it invites. */
+  removedHead?: string
 }) {
   const data = rows.slice(0, limit)
   const total = data.reduce((a, r) => a + (Number(r.urls) || 0), 0)
   if (data.length === 0) return <div className="text-sm text-gray-400 py-3">No data.</div>
+  const took = removedHead || 'Removed'
+  const rate = removedHead ? removedHead + ' rate' : 'Removal rate'
+  const head = mirrors
+    ? ['#', nameHead, 'Identified', took, rate, 'Mirror domains', 'Share']
+    : ['#', nameHead, 'Identified', took, rate, 'Share']
   return (
     <div className="overflow-x-auto -mx-1">
       <table className="w-full text-xs">
         <thead>
           <tr className="text-gray-400">
-            {['#', 'Name', 'Identified', 'Removed', 'Removal rate', 'Share'].map((h, i) => (
+            {head.map((h, i) => (
               <th key={h} className={`font-bold uppercase tracking-widest text-[9px] px-1.5 pb-2 ${
                 i <= 1 ? 'text-left' : 'text-right'}`}>{h}</th>
             ))}
@@ -2564,12 +2773,184 @@ function RankTable({ rows, onPick, activeVal = '', limit = 12 }: {
                 <td className="px-1.5 py-1.5 text-right font-bold tabular-nums text-[#14254A] dark:text-white">{full(urls)}</td>
                 <td className="px-1.5 py-1.5 text-right font-bold tabular-nums text-[#14254A] dark:text-white">{full(removed)}</td>
                 <td className="px-1.5 py-1.5 text-right tabular-nums text-gray-500 dark:text-white/50">{pct(removed, urls)}%</td>
+                {mirrors && (
+                  /* The operator's footprint, not their volume. Set in the ink
+                     the figures use rather than the muted grey of the two
+                     percentages beside it — it is a COUNT, and reading it as a
+                     rate is the one mistake this column invites. */
+                  <td className="px-1.5 py-1.5 text-right font-bold tabular-nums text-[#14254A] dark:text-white">
+                    {full(Number(r.mirrors) || 0)}
+                  </td>
+                )}
                 <td className="px-1.5 py-1.5 text-right tabular-nums text-gray-400">{pct(urls, total)}%</td>
               </tr>
             )
           })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+/**
+ * One bar per measure, on the volume scale. The figure sits at the tip rather
+ * than inside, so a short bar still carries its number.
+ */
+function VolumeBar({ v, max, color }: { v: number; max: number; color: string }) {
+  return (
+    <span className="flex items-center gap-1.5 min-w-0">
+      <span className="h-2.5 rounded-r-[3px]"
+        style={{ width: `${Math.max(0.4, (v / max) * 100)}%`, minWidth: 2, background: color }} />
+      <span className="text-[10px] font-bold tabular-nums text-[#14254A] dark:text-white whitespace-nowrap">
+        {fmt(v, v >= 1000 ? 1 : 0)}
+      </span>
+    </span>
+  )
+}
+
+/*
+── THE COMBINED ROOT-DOMAIN CARD, AS A CHART ─────────────────────────────────
+
+   Three measures per brand, and the third is nowhere near the other two: a
+   brand with 1,900 identified URLs is running perhaps a dozen mirror domains. As a
+   third bar on the volume axis that dozen is a third of a pixel — which is why
+   this card shipped as a table, and why the chart beside it drew two of its
+   three figures and silently dropped the one the card exists for.
+
+   The fix is not a second y-axis. Two axes in one plot are aligned by nothing,
+   so every crossing a reader sees is an artefact of where the scales were
+   pinned. What the two halves share here is the BRAND ROWS, not a number line:
+   volume bars on the left against the largest volume, a mirror gauge on the
+   right against the largest mirror count, and a row you read across without
+   being invited to compare a length here with a length there.
+
+   Three things keep the two scales from reading as one. The mirror column has
+   its own heading, in domains. Its mark is a gauge in a well, and nothing
+   else on the card is drawn in a well, so nothing else reads as a share of its
+   own column's maximum. And its exact count is printed on every row, which is
+   the figure a reader actually takes away.
+
+   Built in this file, like the ranked table, the repeat list, the heat grid and
+   the map — the shapes no engine is offered, because a general charting library
+   has no way to put two scales side by side except by putting them in one plot.
+*/
+/* Exported for .preview-rootcard.tsx, which renders THIS component rather than
+   a copy of its markup. A preview that reimplements the thing it previews
+   agrees with the page exactly once — on the day it is written. */
+export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
+  removedName = 'Removed', nameHead = 'Root domain' }: {
+  rows: any[]; m: MarkTheme; onPick?: (v: string) => void; activeVal?: string; limit?: number
+  /** What the rows ARE. The same words the TABLE toggle uses, so switching
+      between the two views of one card does not rename its rows. */
+  nameHead?: string
+  /** What the second bar counts on this card. The linking side's is the count
+      Google approved for de-indexing, the host side's is what came down — two
+      different facts about two different tables, and the legend has to say
+      which one the reader is looking at. */
+  removedName?: string
+}) {
+  const data = rows.slice(0, limit).map(r => ({
+    label: String(r.label ?? '—'),
+    val: String(r.value ?? r.label ?? ''),
+    urls: Number(r.urls) || 0,
+    removed: Number(r.removed) || 0,
+    mirrors: Number(r.mirrors) || 0,
+  }))
+  if (data.length === 0) return <div className="text-sm text-gray-400 py-3">No data.</div>
+
+  const maxVol = Math.max(1, ...data.map(d => Math.max(d.urls, d.removed)))
+  const topMirror = Math.max(0, ...data.map(d => d.mirrors))
+  /* No mirror count anywhere in the window. Every gauge would be an empty well,
+     which reads as a column that failed rather than as a measure the data does
+     not carry — so the card draws the two volume bars and says so underneath.
+     This is also what a reader sees on a panel whose rows never had the figure,
+     if the shape is ever picked for one from Report Configuration. */
+  const showMirrors = topMirror > 0
+  // The third identity hue, which every theme's palette puts at cat[2] — the
+  // first colour that is neither of the two series drawn beside it.
+  const mirrorInk = m.cat[2] || m.removed
+  const hasActive = !!activeVal
+  /* The mirror track is a FRACTION of the volume track, never a fixed width.
+
+     Sized at half, and that is a correctness rule rather than a taste: with the
+     mirror column fixed, a narrow card squeezed the elastic volume column below
+     it and the gauge came out LONGER than the bars beside it — the small
+     measure drawn as the big one, which is the exact misreading the separate
+     scale exists to prevent. As a fraction the two shrink together and the
+     ordering holds at every width. */
+  const cols = showMirrors ? '128px minmax(0,2fr) minmax(0,1fr)' : '128px minmax(0,1fr)'
+
+  return (
+    <div className="py-1">
+      {/* The headings do the work a legend cannot: they say which column is
+          counted in URLs and which in domains BEFORE a single bar is read. */}
+      <div className="grid items-end gap-3 px-1.5 pb-1.5 text-[9px] font-bold uppercase tracking-widest text-gray-400"
+        style={{ gridTemplateColumns: cols }}>
+        <span>{nameHead}</span>
+        <span>Identified / {removedName}</span>
+        {showMirrors && <span className="text-right">Mirror domains</span>}
+      </div>
+
+      <div className="flex flex-col gap-1">
+        {data.map((d, i) => {
+          const isActive = activeVal === d.val || activeVal === d.label
+          return (
+            <button key={d.val + i} type="button" disabled={!onPick} onClick={() => onPick?.(d.val)}
+              title={`${d.label}: ${full(d.urls)} identified, ${full(d.removed)} ${removedName.toLowerCase()}${
+                showMirrors ? `, across ${full(d.mirrors)} mirror domain${d.mirrors === 1 ? '' : 's'}` : ''}`}
+              className={`grid items-center gap-3 rounded-md px-1.5 py-1 text-left transition-all ${
+                onPick ? 'hover:bg-[#14254A]/[0.04] dark:hover:bg-white/5' : 'cursor-default'} ${
+                isActive ? 'bg-[#14254A]/[0.05] ring-1 ring-[#14254A]/30 dark:bg-white/5 dark:ring-white/20' : ''} ${
+                hasActive && !isActive ? 'opacity-40' : ''}`}
+              style={{ gridTemplateColumns: cols }}>
+              <span className="text-xs text-gray-600 dark:text-gray-300 truncate" title={d.label}>{d.label}</span>
+              <span className="flex flex-col gap-1 min-w-0">
+                <VolumeBar v={d.urls} max={maxVol} color={m.ident} />
+                <VolumeBar v={d.removed} max={maxVol} color={m.removed} />
+              </span>
+              {showMirrors && (
+                <span className="flex items-center gap-2 justify-end">
+                  {/* Capped, so a full-width card does not spend 400 pixels
+                      drawing a count of nine. Past the cap the column's slack
+                      turns into distance between the two scales, which is the
+                      better use for it. */}
+                  <span className="relative h-2.5 flex-1 rounded-full overflow-hidden"
+                    style={{ background: m.grid, maxWidth: 180 }}>
+                    {/* A floor of 4% so a brand on ONE domain still shows a
+                        mark. Zero gets nothing: an empty well and a printed 0
+                        is the honest picture of a brand seen on no mirror
+                        domain this panel could resolve. */}
+                    <span className="absolute inset-y-0 left-0 rounded-full"
+                      style={{
+                        width: d.mirrors > 0 ? `${Math.max(4, (d.mirrors / topMirror) * 100)}%` : 0,
+                        background: mirrorInk,
+                      }} />
+                  </span>
+                  <span className="text-[10px] font-bold tabular-nums text-[#14254A] dark:text-white w-8 text-right">
+                    {full(d.mirrors)}
+                  </span>
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      <Legend items={[
+        { label: 'Identified', color: m.ident },
+        { label: removedName, color: m.removed },
+        // The scale is named in the legend as well as over the column: this is
+        // the one entry a reader must not take as another bar on the left.
+        ...(showMirrors
+          ? [{ label: `Mirror domains`, color: mirrorInk }]
+          : []),
+      ]} />
+
+      {!showMirrors && (
+        <p className="pt-1 text-center text-[11px] text-gray-400">
+          No mirror domain counts in this window.
+        </p>
+      )}
     </div>
   )
 }
@@ -5139,7 +5520,13 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
        it would draw an empty world and a list of things that are not countries.
        Repeat offenders is the same rule for the same reason — it is the only
        panel whose rows carry the day count that shape draws. */
-    const options = configured === 'map' ? [MAP_VIZ, ...DIM_VIZ]
+    const options = ROOT_ALL_DIMS.has(dim.key) ? [MIRROR_VIZ, ...DIM_VIZ]
+      /* Report Configuration can put the mirror shape on any panel — the Go
+         vocabulary does not know which dimension carries the count. Offering it
+         back where it was configured keeps the picker able to name the shape
+         the card is currently in, which is the whole of what `fallback` reads. */
+      : configured === 'mirror' ? [MIRROR_VIZ, ...DIM_VIZ]
+      : configured === 'map' ? [MAP_VIZ, ...DIM_VIZ]
       : configured === 'repeat' ? [REPEAT_VIZ, ...DIM_VIZ]
       : DIM_VIZ
     /* Built once. The toggle below draws it and the download hands it over —
@@ -5163,13 +5550,18 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
           ? <SeasonColumns rows={rows} m={m} onPick={pick} activeVal={active} />
           : <ColumnChart rows={rows} m={m} onPick={pick} activeVal={active} />)}
         {viz === 'repeat'  && <RepeatOffenders rows={rows} m={m} onPick={pick} activeVal={active} />}
-        {viz === 'table'   && <RankTable rows={rows} onPick={pick} activeVal={active} />}
+        {viz === 'mirror'  && <MirrorBars rows={rows} m={m} onPick={pick} activeVal={active}
+          removedName={rootSide(dim.key).name} nameHead={rootSide(dim.key).head} />}
+        {viz === 'table'   && <RankTable rows={rows} onPick={pick} activeVal={active}
+          mirrors={ROOT_ALL_DIMS.has(dim.key)}
+          removedHead={ROOT_ALL_DIMS.has(dim.key) ? rootSide(dim.key).name : undefined}
+          nameHead={ROOT_ALL_DIMS.has(dim.key) ? rootSide(dim.key).head : 'Name'} />}
         {viz === 'value'   && <ValueBars rows={rows} m={m} onPick={pick} activeVal={active} />}
         {viz === 'ordinal' && <ValueBars rows={rows} m={m} onPick={pick} activeVal={active} ordered />}
         {viz === 'map'     && <WorldMap rows={rows} m={m} onPick={pick} activeVal={active} />}
         {viz === 'heat'    && <HeatGrid rows={rows} m={m} onPick={pick} activeVal={active} />}
         {!['donut', 'share', 'stacked', 'table', 'heat', 'map', 'hbar', 'column',
-           'value', 'ordinal', 'repeat'].includes(viz) && (
+           'value', 'ordinal', 'repeat', 'mirror'].includes(viz) && (
           <SegmentBars rows={rows} m={m} activeVal={active} onPick={pick} />
         )}
       </>

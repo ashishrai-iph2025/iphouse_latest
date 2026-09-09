@@ -60,6 +60,27 @@ export function exportLogo(): Promise<ExportLogo | null> {
   return (pending ??= load())
 }
 
+/*
+	How long any one step of the logo load may take before the export gives up on
+	it and ships unbranded.
+
+	Generous, because this is a local asset and the only thing waiting on it is a
+	file the reader has already asked for — a slow disk should not cost them the
+	branding. Short enough that a stall is a two-second delay rather than a
+	download that never arrives.
+*/
+const LOGO_DEADLINE_MS = 2000
+
+/** Rejects if the step has not settled in time, so a stall degrades to null the
+    same way an error does. */
+function withDeadline<T>(p: Promise<T>): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error('logo load timed out')), LOGO_DEADLINE_MS)),
+  ])
+}
+
 async function load(): Promise<ExportLogo | null> {
   try {
     const src = new Image()
@@ -68,10 +89,30 @@ async function load(): Promise<ExportLogo | null> {
        at toBlob with a security error rather than at the image. Set anyway, so
        that stays true if the asset ever moves to a CDN. */
     src.crossOrigin = 'anonymous'
-    src.src = LOGO_SRC
-    // decode(), not onload: it settles when the image is ready to PAINT, so the
-    // first drawImage below cannot land on nothing.
-    await src.decode()
+    /* onload, NOT decode(), and a deadline over the top of it.
+
+       decode() was the obvious choice — it settles when the image is ready to
+       paint, so the drawImage below cannot land on nothing — and it is the
+       reason an export could hang forever. In a HIDDEN document Chromium never
+       settles it: not resolved, not rejected, no error for the catch below to
+       turn into a null. Measured on this asset, same tab, same server: onload
+       fired in 9ms and decode() was still pending after five seconds. A reader
+       who clicks Download and switches tab while it works has a hidden
+       document, and got no file and no message.
+
+       onload is enough for what this actually does. decode() guarantees paint
+       readiness for compositing; drawImage only needs the image loaded, which
+       is exactly what onload means.
+
+       The deadline is belt and braces over that. Nothing about a decorative
+       image should be able to withhold somebody's export — that is what the
+       comment at the head of this function has always claimed, and a race is
+       what makes it true for a stall as well as for a failure. */
+    await withDeadline(new Promise<void>((resolve, reject) => {
+      src.onload = () => resolve()
+      src.onerror = () => reject(new Error('logo failed to load'))
+      src.src = LOGO_SRC
+    }))
 
     const ratio = src.naturalWidth / Math.max(1, src.naturalHeight)
     const height = RASTER_H
@@ -84,7 +125,8 @@ async function load(): Promise<ExportLogo | null> {
     if (!ctx) return null
     ctx.drawImage(src, 0, 0, width, height)
 
-    const blob: Blob | null = await new Promise(res => canvas.toBlob(res, 'image/png'))
+    const blob: Blob | null = await withDeadline(
+      new Promise<Blob | null>(res => canvas.toBlob(res, 'image/png')))
     if (!blob) return null
 
     const bytes = new Uint8Array(await blob.arrayBuffer())
@@ -95,8 +137,11 @@ async function load(): Promise<ExportLogo | null> {
        resolves anywhere, and this one is small enough to inline. */
     const dataUrl = canvas.toDataURL('image/png')
     const img = new Image()
-    img.src = dataUrl
-    await img.decode()
+    await withDeadline(new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve()
+      img.onerror = () => reject(new Error('rasterised logo failed to load'))
+      img.src = dataUrl
+    }))
 
     return { img, bytes, dataUrl, width, height, ratio }
   } catch {

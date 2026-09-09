@@ -158,10 +158,17 @@ async function bodyToImage(root: HTMLElement): Promise<{
   const img = new Image()
   // encodeURIComponent rather than btoa: the labels are full of non-Latin-1
   // characters — dashes, accented club names — and btoa throws on every one.
-  img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(src)}`
-  /* decode(), not onload: it settles once the image is ready to PAINT rather
-     than merely loaded, so the first drawImage cannot land on a blank. */
-  await img.decode()
+  /* onload, NOT decode(), for the reason set out in lib/exportBrand.ts: in a
+     HIDDEN document Chromium never settles decode() — it neither resolves nor
+     rejects — so a reader who starts an export and switches tab gets no file
+     and no error. onload is all drawImage needs. The rejection path matters
+     here too: a malformed serialisation should fail the export loudly rather
+     than leave it pending forever. */
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve()
+    img.onerror = () => reject(new Error('panel image failed to load'))
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(src)}`
+  })
   return { img, w, h, overlays: canvasOverlays(root) }
 }
 

@@ -305,7 +305,52 @@ var (
 		// currently running. One measure, so single-series bars.
 		{Key: "byDomainRootMirrors", Column: "InfringingDomain",
 			Alts:  []string{"SourceDomain", "DomainURL", "Domain"},
-			Label: "Root Domain - Mirror Hostnames", Viz: "value"},
+			Label: "Root Domain - Mirror Domains", Viz: "value"},
+		/* And the two of them on one card — ONE PER SIDE of the enforcement.
+
+		   Two cards rather than one because Open Web reads two tables that hold
+		   different populations: the pages that LINK to infringing content and
+		   the ones that HOST it. Pinned by column with NO alternates, exactly as
+		   byDomain and byDomainSource below are, so neither card can ever be fed
+		   by the other's table. See dimDomainRootAll for what merging them did.
+
+		   It costs no extra query on either side: each folds the hostname
+		   breakdown its own panels already fetch, and the mirror count has always
+		   ridden along on every folded row.
+
+		   Offered alongside the plain ranked panels rather than replacing them,
+		   and Report Configuration can hide whichever a client does not want. */
+
+		/* The LINKING side, measured on GOOGLE DE-INDEXING.
+
+		   `Needs` is the honesty gate. This card's second measure is "Google
+		   approved the delisting", and on a table with no IsGoogleDelisted
+		   column there is nothing to draw it from — so the card is ABSENT there
+		   rather than quietly falling back to the plain removal count under a
+		   heading that says Google. A missing card is diagnosable; a wrong
+		   number wearing a right one's clothes is not.
+
+		   THE ENGINE IS NAMED IN THE TITLE, not just in the series label. Bing
+		   is tracked separately upstream — bingdelistingremovalstatus lands on
+		   the record drawer beside Google's — so a card headed plain
+		   "De-Indexing" over a measure that counts one of the two engines
+		   becomes a wrong claim the day the other one starts reporting. It
+		   counts Google, so it says Google.
+
+		   Widening it to "either engine" is a one-line change here — the
+		   `bingDelisted` measure is already declared and the fold already sums
+		   it — but it is a change to what the number MEANS, so it waits to be
+		   asked for rather than arriving with a deploy. */
+		{Key: "byDomainRootAll", Column: "InfringingDomain",
+			Needs: "IsGoogleDelisted",
+			Label: "Linking Domain - Identification, Google De-Indexing & Mirrors", Viz: "mirror"},
+		/* The HOST side, measured on removal.
+
+		   No Google gate: a host is not de-indexed, it is taken down, and the
+		   removal figure on this table is the notice the host acted on. Naming
+		   the two measures apart is the point of splitting the card. */
+		{Key: "byDomainRootSource", Column: "SourceDomain",
+			Label: "Host Domain - Identification, Removal & Mirrors", Viz: "mirror"},
 		// "Linking" and "Host" rather than "Infringing" and "Source": a platform
 		// that reads both tables shows both panels, and the pair only makes sense
 		// named for what each side of the enforcement actually is.
@@ -1111,6 +1156,7 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 			// Brands are a long tail too — thousands of them, and the panel
 			// says "Top 10" by being one.
 			"byDomainRoot", "byDomainRootMirrors",
+			"byDomainRootAll", "byDomainRootSource",
 			// Accounts are the longest tail of the lot, and this panel keeps
 			// only the ten most persistent of them.
 			dimRepeatOffender:
@@ -1889,22 +1935,7 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 					if breakdowns[key][label] == nil {
 						breakdowns[key][label] = map[string]int64{}
 					}
-					breakdowns[key][label]["urls"] += numOf(row["urls"])
-					breakdowns[key][label]["removed"] += numOf(row["removed"])
-					/* Recurrence is a DAY COUNT, so it is merged by taking the
-					   largest rather than by adding.
-
-					   Two tables that both saw an account on the same Saturday
-					   saw it on one day, not two, and summing them can hand the
-					   panel more days than the window holds — a figure the card
-					   presents as a fact about the calendar. The largest of the
-					   two is the most days any one source can actually vouch
-					   for, and it can only understate. Absent from every other
-					   panel's rows, where numOf reads the missing key as 0 and
-					   this is a no-op. */
-					if v := numOf(row["repeats"]); v > breakdowns[key][label]["repeats"] {
-						breakdowns[key][label]["repeats"] = v
-					}
+					accumulateBreakdown(breakdowns[key][label], row)
 					if v := strFromAny(row["value"]); v != "" {
 						if dimValues[key] == nil {
 							dimValues[key] = map[string]string{}
@@ -2001,13 +2032,7 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	for key, byLabel := range breakdowns {
 		rows := make([]map[string]any, 0, len(byLabel))
 		for label, m := range byLabel {
-			row := map[string]any{"label": label, "urls": m["urls"], "removed": m["removed"]}
-			if v := dimValues[key][label]; v != "" {
-				row["value"] = v
-			}
-			if key == dimRepeatOffender {
-				row["repeats"] = m["repeats"]
-			}
+			row := mergedBreakdownRow(label, m, dimValues[key][label])
 			rows = append(rows, row)
 		}
 		/* Ranked by RECURRENCE, then cut to ten — the order and the cut this one
@@ -2368,3 +2393,64 @@ func sourceChannelsFor(p platformDef) []string {
 // column to GROUP BY: the rows are each source's own totals, which the merge
 // already has in hand.
 const dimSourcePlatform = "bySourcePlatform"
+
+/*
+── MERGING A BREAKDOWN, ONCE ─────────────────────────────────────────────────
+
+	A breakdown row is merged twice on the way to a reader: once here, across the
+	tables of one platform, and once in reportsummary.go, across the platforms of
+	the summary. The two were separate copies of the same loop, and the copy is
+	what these functions exist to remove.
+
+	The drift is invisible when it happens. A merged row is CONSTRUCTED from the
+	summed measures rather than copied, so a measure that one merge names and the
+	other does not is simply gone by the time the page sees it — and the panel
+	renders a column of noughts beside figures that are all correct. The mirror
+	count on the combined root-domain card did exactly that: added to the summary
+	merge, missed here, and Open Web (two tables, so it merges) showed 0 mirrors
+	on every row.
+*/
+
+// accumulateBreakdown folds one source row into the running totals for a label.
+func accumulateBreakdown(dst map[string]int64, row map[string]any) {
+	dst["urls"] += numOf(row["urls"])
+	dst["removed"] += numOf(row["removed"])
+
+	/* The mirror count, on the root-domain panels. SUMMED, and the contrast with
+	   `repeats` below is the point: a hostname belongs to exactly one of the
+	   tables being merged — the linking table holds infringing domains, the host
+	   table holds source domains — so the two sides are counting different
+	   hostnames of one brand and adding them is what the figure means. */
+	dst["mirrors"] += numOf(row["mirrors"])
+
+	/* Recurrence is a DAY COUNT, so it is merged by taking the largest rather
+	   than by adding. Two tables that both saw an account on the same Saturday
+	   saw it on one day, not two, and summing them can hand the panel more days
+	   than the window holds — a figure the card presents as a fact about the
+	   calendar. The largest is the most any one source can vouch for, and it can
+	   only understate. */
+	if v := numOf(row["repeats"]); v > dst["repeats"] {
+		dst["repeats"] = v
+	}
+}
+
+/*
+mergedBreakdownRow rebuilds one row from those totals.
+
+`value` is the raw grouping value a click filters on, empty where the dimension
+has none. The extra measures are carried only where they are NON-ZERO, so a
+panel that never had a mirror count or a day count does not gain a column of
+noughts from a map that defaulted one in.
+*/
+func mergedBreakdownRow(label string, m map[string]int64, value string) map[string]any {
+	row := map[string]any{"label": label, "urls": m["urls"], "removed": m["removed"]}
+	if value != "" {
+		row["value"] = value
+	}
+	for _, k := range []string{"repeats", "mirrors"} {
+		if v := m[k]; v != 0 {
+			row[k] = v
+		}
+	}
+	return row
+}

@@ -65,7 +65,14 @@ import { resolveFields, isLiveStatus } from '@/lib/infringementFields'
    Imported rather than reimplemented: a drawer that disagreed with the chart
    about the same row would be two answers to one question. */
 import { diffTatMins, effectiveRemovalTime } from '@/lib/warroom'
-import { isOpenWebPlatform } from '@/lib/platformCategories'
+/* rowIsSourceUrl decides which END of the Open Web pair a row is, and it is
+   imported rather than re-derived for the same reason recordTat imports its
+   rule: the Linking/Host TABS filter the list with this exact function, so a
+   drawer answering the question its own way could hide the linking fields on a
+   row the tab above it had just filed under Linking. It also knows more than a
+   sourceURL check does — an explicit isSource flag where the server stamped
+   one, and every spelling of the host URL. */
+import { isOpenWebPlatform, rowIsSourceUrl } from '@/lib/platformCategories'
 import { downloadCsv, type CsvColumn } from '@/lib/exportCsv'
 import { downloadXlsx } from '@/lib/exportXlsx'
 
@@ -149,6 +156,36 @@ enforcementDoneAt (notice sent), removalTime (came down). Those are the audit
 trail a client is owed. Our internal review of our own work is not part of it.
 */
 export const QC_COLUMN = /qc_?done/i
+
+/*
+── FIELDS THE LINKING SIDE HAS THAT THE ENDPOINT DOES NOT SEND YET ──────────
+
+	Everywhere else this file renders exactly the keys a row carries and invents
+	nothing: a field the platform does not report is absent, which is how a
+	drawer avoids promising data that does not exist. These two are the stated
+	exception.
+
+	Bing de-indexing IS tracked — the columns are built and land in a coming
+	release — so on the linking side "Bing Delisting Status" is a field of the
+	record that has no value yet, not a field of some other platform. Waiting
+	for the first payload to reveal it means the panel silently changes shape
+	under a reader on release day, and until then gives them no way to tell
+	"Bing is not tracked" from "nothing submitted to Bing for this URL". The
+	label answers that; the empty value is read the same way every other blank
+	enforcement field on this panel is read.
+
+	SELF-RETIRING. Each key is added only where the row does not already carry
+	it, so the day the endpoint starts sending them the real values take over
+	and this list stops doing anything. Compared case-insensitively, because the
+	spelling that arrives may not be the spelling written here and two cards for
+	one field is worse than none.
+
+	LINKING ROWS ONLY, and only in the detail panel. The results table and the
+	exports still show a column when it holds something, which is the right rule
+	for a grid: a placeholder card in a panel is informative, two permanently
+	empty columns in every CSV between now and release are not.
+*/
+const PENDING_LINKING_FIELDS = ['bingdelistingremovalstatus', 'bingdelistingTime']
 
 /** Whether a field is kept from the reader entirely. */
 export const isHiddenField = (key: string) =>
@@ -261,6 +298,117 @@ const OPEN_WEB_FIELD_LABELS: Record<string, string> = {
   infringinghost: 'Linking Domain',
   sourcedomain: 'Host Domain',
   sourcehost: 'Host Domain',
+
+  /* ── The outcomes, named for the END they belong to ──────────────────────
+
+     Same problem as the URLs above and the same answer: the upstream names
+     describe the pipeline, and on Open Web the pipeline's words do not say
+     which half of the pair a status is about. Four of these five are the
+     LINKING URL's and one is the HOST's, which is not guessable from the names
+     — `removalstatus` and `dmcaremovalstatus` sit next to each other and belong
+     to opposite ends.
+
+       delistingremovalstatus / delistingTime          → Google de-indexing
+       bingdelistingremovalstatus / bingdelistingTime  → Bing de-indexing
+       dmcaremovalstatus / dmcaRemovalTime             → the LINK coming down
+       removalstatus / removalTime                     → the HOST coming down
+
+     The unqualified delisting is GOOGLE'S. It was the only de-indexing there
+     was until Bing got a column of its own, so the bare name is the one engine
+     that never needed a prefix — and leaving it labelled "Delisting Removal
+     Status" beside an explicit "Bing Delisting Status" reads as though one of
+     them were the overall verdict and the other a component of it.
+
+     The Bing pair is NOT IN THE API RESPONSE YET. Named here so the fields
+     appear correctly the day the endpoint starts sending them, with no release
+     on this side — the drawer renders whatever keys a row carries, so an
+     unlabelled new column would otherwise arrive as
+     "Bingdelistingremovalstatus" on a client's screen and in their exports. */
+  delistingremovalstatus:     'Google Delisting Status',
+  delistingtime:              'Google Delisting Time',
+  bingdelistingremovalstatus: 'Bing Delisting Status',
+  bingdelistingtime:          'Bing Delisting Time',
+  dmcaremovalstatus:          'Linking Removal Status',
+  dmcaremovaltime:            'Linking Removal Time',
+  removalstatus:              'Host Removal Status',
+  removaltime:                'Host Removal Time',
+}
+
+/*
+── WHICH SIDE OF THE PAIR A FIELD BELONGS TO ────────────────────────────────
+
+	An Open Web result is a PAIR: the page carrying the link, and the host
+	serving the file behind it. A row is one END of that pair — a row with a
+	sourceURL is the host end, a row without one is the linking end — and the
+	upstream sends the whole envelope either way.
+
+	So a linking row arrives carrying DMCA Removal Status, Removal Status, DMCA
+	Removal Time and Removal Time, every one of them empty, because those are
+	facts about the HOST and this row is not the host. The drawer showed them
+	anyway: three "Not recorded" cards at the top of the panel, level with the
+	one status that does say something. That is not a blank waiting to be
+	filled — no notice will ever be sent to a host on behalf of a linking URL,
+	so the field cannot ever be populated on this row, and presenting it as
+	pending misreads the pipeline as incomplete when it is complete.
+
+	The rule is the same one the report's linking/host card split states: the
+	two sides are different populations measured on different facts. A link is
+	DE-INDEXED from search results; a host is TAKEN DOWN.
+
+	MATCHED ON THE KEY, like everything else in this file, because each endpoint
+	spells its columns differently and a fixed list would quietly keep showing
+	the ones it had not been told about. `delist` is checked FIRST and wins: a
+	de-indexing field is a linking fact whatever else its name contains, and
+	`delistingRemovalStatus` would otherwise be caught by the host side's
+	`removal` and hidden on exactly the row it belongs to.
+*/
+
+/*
+	A de-indexing, or the LINK's own takedown.
+
+	`dmca` is on this side, which is the one classification here that cannot be
+	guessed from the name. A DMCA notice on Open Web is sent about the LINKING
+	page — `dmcaremovalstatus` is that page coming down — while the host's
+	takedown is the unqualified `removalstatus` beside it. Reading "DMCA" as a
+	host action is the obvious mistake and it puts the field on the wrong row in
+	both directions: hidden where it belongs, shown where it cannot apply.
+*/
+export const isLinkingSideKey = (key: string) =>
+  /(delist|deindex|de_index|google|bing|dmca|linking|infringing)/i.test(key)
+
+/** A fact about the HOST end: the plain, unqualified removal. Every other
+    `…removalstatus` on Open Web carries a prefix naming the linking-side action
+    it belongs to, so what is left unqualified is the host's. */
+export const isHostSideKey = (key: string) =>
+  !isLinkingSideKey(key) && /(removal|takedown|source|host)/i.test(key)
+
+/**
+ * Whether a field describes the end of the pair this row is NOT.
+ *
+ * Open Web only, and only where the row says which end it is. Everywhere else
+ * there is no pair: a Telegram post has no host behind it and its removal
+ * status is its own, so hiding a field whose name happens to contain "removal"
+ * would delete the record's only outcome.
+ *
+ * `openWeb` is passed rather than inferred from the row, because a row does not
+ * carry its own platform on every endpoint — the screen knows, and the screen
+ * is what already switches the Open Web vocabulary in columnTitle.
+ */
+export function isOtherSideField(key: string, row: Record<string, any>, openWeb: boolean): boolean {
+  if (!openWeb) return false
+  /* OUTCOMES ONLY — the statuses and the stamps that go with them.
+
+     A URL and a domain are the record's IDENTITY, not a claim about what
+     happened to it, and they are not side-specific in the way an outcome is: a
+     host row carries the linking URL that pointed at it, and showing the pair's
+     two ends together is most of why anyone opens a host record. Filtering
+     those out because one of them names the other side would delete the link
+     between the two halves — which is the opposite of what splitting the sides
+     is for. A linking row never carries a host URL anyway, so there is nothing
+     to hide there and everything to lose by trying. */
+  if (groupOf(key) !== 'Enforcement') return false
+  // The same test the Linking/Host tabs filter by — see the import.
+  return rowIsSourceUrl(row) ? isLinkingSideKey(key) : isHostSideKey(key)
 }
 
 /*
@@ -282,6 +430,29 @@ const RUN_ON_LABELS: Record<string, string> = {
   dmcaremovalstatus:      'DMCA Removal Status',
   delistingremovalstatus: 'Delisting Removal Status',
   profileremovalstatus:   'Profile Removal Status',
+
+  /* ── The linking side's own outcomes ──────────────────────────────────────
+
+     A de-indexing is per SEARCH ENGINE. "Delisting Removal Status: Approved"
+     is the pair's verdict and says nothing about which engine agreed, which is
+     the question a reader on the linking side is actually asking — Google
+     dropping a URL and Bing dropping it are separate submissions with separate
+     answers, and one can be approved while the other is still open.
+
+     Every spelling the warehouse and the API are known to use, because the
+     same fact arrives as a status string on one endpoint and a yes/no flag on
+     another; both land on one label so the drawer, the table and the exports
+     cannot disagree about what the column is called. A spelling nobody has
+     seen yet still gets a readable name from humanise() — this map only fixes
+     the run-on ones. */
+  googledelistingstatus:      'Google Delisting Status',
+  isgoogledelisted:           'Google Delisting Status',
+  bingdelistingstatus:        'Bing Delisting Status',
+  bingdelistingremovalstatus: 'Bing Delisting Status',
+  bingdelistingtime:          'Bing Delisting Time',
+  isbingdelisted:             'Bing Delisting Status',
+  infringingremovalstatus:    'Linking Removal Status',
+  linkingremovalstatus:       'Linking Removal Status',
 }
 
 /** What the card calls the linking page, per platform. Open Web has no "post". */
@@ -510,10 +681,31 @@ export const isEnforcementTimeKey = (key: string) =>
 	with the evidence means the picture and the verdict are read in one glance.
 */
 export const isOutcomeStatusKey = (key: string) =>
-  groupOf(key) === 'Enforcement' && /(status|statusname)$/i.test(key)
+  groupOf(key) === 'Enforcement' && (
+    /(status|statusname)$/i.test(key)
+    /* A per-engine de-indexing can arrive as a FLAG rather than a status —
+       `isGoogleDelisted` beside `googleDelistingStatus`, depending on which
+       endpoint answered. Both are the same outcome and belong in the same
+       place; without this the flag spelling drops to the Enforcement section
+       three scrolls down, beside the fields nobody opened the record for. */
+    || /^is(google|bing)delisted$/i.test(key))
 
-/** De-indexing first, then DMCA, then removal: the order the pipeline runs. */
-const OUTCOME_ORDER = [/delist/i, /dmca/i, /removal/i]
+/*
+	The order the outcomes read in, which is the order they can happen in.
+
+	Per-engine BEFORE the pair's overall verdict: "Google approved, Bing still
+	open, delisting Approved" reads as a story, where the same three the other
+	way round reads as a verdict followed by two figures that seem to qualify
+	it. Then DMCA and removal, the host's side of the pipeline, last.
+
+	Matched on the keys AS SPELLED, which is why `^delist` is anchored and sits
+	between the two engines rather than after them. Google's field is the
+	unqualified `delistingremovalstatus` and Bing's is
+	`bingdelistingremovalstatus` — so an unanchored /delist/ catches Bing's too,
+	and whichever of the two the pattern reached first would take both ranks.
+	The anchor is what keeps "bing…" out of Google's row.
+*/
+const OUTCOME_ORDER = [/google/i, /^delist/i, /bing/i, /dmca/i, /removal/i]
 export const outcomeRank = (key: string): number => {
   const i = OUTCOME_ORDER.findIndex(re => re.test(key))
   return i === -1 ? OUTCOME_ORDER.length : i
@@ -539,7 +731,9 @@ export const discoveryTimeRank = (key: string): number => {
   return i === -1 ? DISCOVERY_TIME_ORDER.length : i
 }
 
-const ENFORCEMENT_TIME_ORDER = [/enforce|notice/i, /delist/i, /dmca/i, /removal|takedown/i]
+// The stamps in the same order as the statuses above, and anchored for the same
+// reason: `bingdelistingTime` must not land in `delistingTime`'s place.
+const ENFORCEMENT_TIME_ORDER = [/enforce|notice/i, /google/i, /^delist/i, /bing/i, /dmca/i, /removal|takedown/i]
 export const enforcementTimeRank = (key: string): number => {
   const i = ENFORCEMENT_TIME_ORDER.findIndex(re => re.test(key))
   return i === -1 ? ENFORCEMENT_TIME_ORDER.length : i
@@ -915,6 +1109,26 @@ export function RecordDetail({ row, openWeb = false, onPreview, labelFor, hideFi
     .filter(([k, v]) => !isHiddenField(k) && !hideField?.(k) && (
       hasValue(v) || (!isScalar(v) && v != null) || groupOf(k) === 'Enforcement'))
     .filter(([k]) => !isEclipsed(k, row))
+    /* The other end of the pair, dropped — see isOtherSideField.
+
+       AFTER the Enforcement exception above and not folded into it, because the
+       two rules say different things. That one keeps an empty enforcement field
+       BECAUSE blank is the answer: nothing has been sent yet. This one drops a
+       field that can never be answered on this row at all, and the difference
+       matters — three permanently empty host cards at the top of a linking
+       record read as a pipeline that has stalled. */
+    .filter(([k]) => !isOtherSideField(k, row, openWeb))
+
+  /* The tracked-but-not-yet-sent linking fields, added empty where the row does
+     not have them — see PENDING_LINKING_FIELDS. They sort into place with
+     everything else below, so this only decides that they are present, never
+     where they land. */
+  if (openWeb && !rowIsSourceUrl(row)) {
+    const have = new Set(entries.map(([k]) => k.toLowerCase()))
+    for (const k of PENDING_LINKING_FIELDS) {
+      if (!have.has(k.toLowerCase())) entries.push([k, ''])
+    }
+  }
 
   const shot = entries.find(([k, v]) => isImageKey(k) && isUrl(v))
 
@@ -1610,7 +1824,13 @@ export function PlatformTable({ result, label, onPreview, onOpenRow, header, dow
                  addressed by. Passing the key would quietly drop the price,
                  seller and rating fields on exactly those two platforms. */
               const f = resolveFields(row, label)
-              const live = isLiveStatus(f.status)
+              /* Three states, not two. get() answers "—" when the row carries
+                 no status at all, and this used to paint that green and write
+                 the word "Active" into it — a claim the data never made, and
+                 the reason a whole platform's pills could be wrong without ever
+                 looking wrong. Unknown now reads as unknown. */
+              const known = f.status !== '—'
+              const live = known && isLiveStatus(f.status)
               // The page carrying the infringement, whatever this platform calls
               // it — a post on Facebook, a linking page on the open web.
               const postUrl = f.linkUrl !== '—' ? f.linkUrl : f.videoUrl
@@ -1685,7 +1905,7 @@ export function PlatformTable({ result, label, onPreview, onOpenRow, header, dow
                       live
                         ? 'bg-green-100 text-green-700 border-green-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:border-emerald-400/30'
                         : 'bg-gray-100 text-gray-500 border-gray-200 dark:bg-white/5 dark:text-white/60 dark:border-white/15'}`}>
-                      {f.status !== '—' ? f.status : 'Active'}
+                      {known ? f.status : 'Unknown'}
                     </span>
                     <button type="button"
                       onClick={e => { e.stopPropagation(); onOpenRow(row) }}

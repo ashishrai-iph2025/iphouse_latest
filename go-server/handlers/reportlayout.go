@@ -159,6 +159,12 @@ var vizChoices = []struct{ Key, Label string }{
 	// on — offered in the list because the layout may still pick it, and a
 	// panel without the figure simply draws the pair of columns.
 	{"repeat", "Repeat offenders"},
+	/* Volume bars and a mirror-count gauge on one card, each on its own scale.
+	   Like "repeat" above, it means something on exactly one panel — the
+	   combined root-domain card is the only breakdown whose rows carry a
+	   `mirrors` figure — and a panel without that figure simply draws the pair
+	   of volume bars and says underneath that it has no mirror counts. */
+	{"mirror", "Volume & mirrors"},
 	{"donut", "Donut"},
 	{"share", "Donut, ordered"},
 	{"table", "Ranked table"},
@@ -349,6 +355,11 @@ func kpiTilesFor(extras []string) []string {
 // arrives without a span.
 var wideViz = map[string]bool{
 	"heat": true, "map": true, "table": true, "hbar": true, "column": true,
+	/* Three columns of content — the brand, the volume bars and the mirror
+	   gauge — and the middle one is the only elastic thing in the row. At half
+	   a row the volume bars are shorter than the figures printed beside them
+	   and the two scales sit close enough to read as one. */
+	"mirror": true,
 	// Ten account URLs across one axis, each with a day count under it. At half
 	// a row every label is cut to a few characters and the card names nobody.
 	"repeat": true,

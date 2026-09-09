@@ -81,7 +81,9 @@ var dimDescriptions = map[string]string{
 	"byDomain":            "The websites LINKING to infringing content, ranked by how many links were found on each.",
 	"byDomainSource":      "The websites HOSTING infringing content, ranked by how many were found on each.",
 	"byDomainRoot":        "Infringing sites grouped by brand, so a site and its mirrors count as one.",
-	"byDomainRootMirrors": "How many distinct hostnames each brand was seen under — its mirror count, not its URL count.",
+	"byDomainRootMirrors": "How many distinct mirror domains each brand was seen under — its mirror count, not its URL count.",
+	"byDomainRootAll":     "The LINKING side, per brand: infringing URLs found on the operator's linking domains, how many of those Google approved for de-indexing, and how many distinct mirror domains it was running. Linking domains only — the pages that point at infringing content, never the ones hosting it, which have their own card. The mirror count is drawn on its own scale beside the volume bars, never on the same axis: it counts domains, and the volumes beside it count URLs, orders of magnitude larger. Switch to TABLE for the de-indexing rate and share.",
+	"byDomainRootSource":  "The HOST side, per brand: infringing URLs found on the operator's host domains, how many came down, and how many distinct mirror domains it was running. Host domains only. Its second measure is removal — a notice the host acted on — which is a different fact from the linking card's de-indexing, so the two are never added together. The mirror count is drawn on its own scale beside the volume bars. Switch to TABLE for the removal rate and share.",
 
 	"byAsset":     "The titles most affected, by how many infringing URLs were matched to each.",
 	"byAssetName": "The titles most affected, by how many infringing URLs were matched to each.",

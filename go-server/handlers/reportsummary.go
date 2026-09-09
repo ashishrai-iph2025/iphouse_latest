@@ -125,7 +125,13 @@ var summaryDims = []struct {
 	   many hosts each operator is running, and by what trick. */
 	{"byDomainRoot", "Top 10 Open Web Root Domains - Identification & Removal", "hbar", 4},
 	{"byDomain", "Top 10 Open Web Domains - Infringements", "hbar", 4},
-	{"byDomainRootMirrors", "Mirror Hostnames per Root Domain", "value", 5},
+	{"byDomainRootMirrors", "Mirror Domains per Root Domain", "value", 5},
+	/* The two above on one card, ONE PER SIDE — the linking domains measured on
+	   Google de-indexing, the host domains on removal. Never merged into one
+	   card: see dimDomainRootAll. The mirror count gets its own scale rather
+	   than a third series, and the TABLE toggle holds the same figures. */
+	{"byDomainRootAll", "Linking Domain - Identification, Google De-Indexing & Mirrors", "mirror", 5},
+	{"byDomainRootSource", "Host Domain - Identification, Removal & Mirrors", "mirror", 5},
 	{"byChannel", "Top 10 Social Media Channels - Infringements", "hbar", 4},
 	{"byPlatform", "Top 10 Social Media Platforms - Identification & Removal", "column", 5},
 	// How the enforcement went: what came off entirely, and how fast the rest
@@ -562,8 +568,10 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 					if breakdowns[key][label] == nil {
 						breakdowns[key][label] = map[string]int64{}
 					}
-					breakdowns[key][label]["urls"] += numOf(row["urls"])
-					breakdowns[key][label]["removed"] += numOf(row["removed"])
+					// The same fold the per-platform merge uses — see
+					// accumulateBreakdown in reportplatforms.go for why these two
+					// share one implementation.
+					accumulateBreakdown(breakdowns[key][label], row)
 					if v := strFromAny(row["value"]); v != "" {
 						if dimValues[key] == nil {
 							dimValues[key] = map[string]string{}
@@ -688,10 +696,7 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 	for key, byLabel := range breakdowns {
 		rows := make([]map[string]any, 0, len(byLabel))
 		for label, m := range byLabel {
-			row := map[string]any{"label": label, "urls": m["urls"], "removed": m["removed"]}
-			if v := dimValues[key][label]; v != "" {
-				row["value"] = v
-			}
+			row := mergedBreakdownRow(label, m, dimValues[key][label])
 			rows = append(rows, row)
 		}
 		sort.Slice(rows, func(i, j int) bool { return numOf(rows[i]["urls"]) > numOf(rows[j]["urls"]) })

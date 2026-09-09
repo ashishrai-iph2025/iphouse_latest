@@ -13,6 +13,8 @@
  * other for the same record.
  */
 
+import { isOpenWebPlatform, rowIsSourceUrl } from '@/lib/platformCategories'
+
 export interface InfringementRow {
   [key: string]: unknown
 }
@@ -60,9 +62,7 @@ export function resolveFields(row: InfringementRow, platform = '') {
   return {
     asset: get(row, 'assetName', 'AssetName', 'asset', 'Asset', 'title'),
     type: get(row, 'infringementType', 'InfringementType', 'infringementTypeName', 'type', 'isSourceURL'),
-    status: listing
-      ? get(row, 'removalStatus', 'RemovalStatus', 'status', 'currentStatusName')
-      : get(row, 'removalStatus', 'RemovalStatus', 'status'),
+    status: statusOf(row, platform, listing),
     videoUrl: get(row, 'videoURL', 'VideoURL', 'videoUrl', 'sourceURLLink'),
     profileUrl: get(row, 'profileURL', 'ProfileURL', 'channelOrProfileURL', 'channelURL', 'channelUrl', 'ChannelURL', 'shopUrl'),
     hostUrl: get(row, 'sourceURL', 'sourceUrl', 'SourceURL', 'hostURL', 'hostUrl'),
@@ -106,6 +106,44 @@ export function resolveFields(row: InfringementRow, platform = '') {
  * targets, and a record with no removal recorded has not been removed. Reading
  * "unknown" as "handled" would flatter every report it appears in.
  */
+/*
+── THE STATUS THE LIST PILL SHOWS ───────────────────────────────────────────
+
+	Two bugs met here and produced a green ACTIVE pill on rows that were dead.
+
+	THE SPELLING. This looked for `removalStatus`, `RemovalStatus` and `status`.
+	Open Web sends `removalstatus`, all lowercase — the same run-on spelling the
+	drawer has a whole label map for — so on Open Web the lookup matched nothing,
+	fell through to get()'s "—", and isLiveStatus reads "—" as live. Every row of
+	every Open Web search has therefore shown ACTIVE since the screen was built,
+	including the ones whose host file was confirmed gone. Nothing looked broken:
+	a green pill on a live URL and a green pill on a dead one are the same pixels.
+
+	THE SIDE. Open Web rows come in pairs and the two ends have separate
+	outcomes: `removalstatus` is the HOST file coming down, `dmcaremovalstatus`
+	is the LINKING page coming down. A row is one end, so the pill has to read
+	the outcome belonging to the end it is on — otherwise a linking row is
+	labelled by whether somebody else's host is still serving, which is not what
+	the line above the pill is describing.
+
+	The de-indexing statuses are deliberately NOT considered. A de-indexed link
+	is still there, and this pill says whether the thing is up.
+*/
+function statusOf(row: InfringementRow, platform: string, listing: boolean): string {
+  if (isOpenWebPlatform(platform)) {
+    return rowIsSourceUrl(row)
+      // The host end: is the file still served?
+      ? get(row, 'removalstatus', 'removalStatus', 'RemovalStatus')
+      // The linking end: is the page still up? Falling back to the host's only
+      // where the link has no status of its own, which is better than "—".
+      : get(row, 'dmcaremovalstatus', 'dmcaRemovalStatus', 'DMCARemovalStatus',
+            'removalstatus', 'removalStatus')
+  }
+  return listing
+    ? get(row, 'removalStatus', 'RemovalStatus', 'status', 'currentStatusName')
+    : get(row, 'removalStatus', 'RemovalStatus', 'status')
+}
+
 export function isLiveStatus(status: string) {
   const s = status.trim().toLowerCase()
   return s === '—' || s === '' || s.includes('active') || s === 'live'

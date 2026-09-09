@@ -1355,13 +1355,23 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		if truncated {
 			hostTruncated[col] = true
 		}
+		/* The service returns every measure it DECLARES on each row, so the
+		   Google count is already in the answer wherever the dataset has one —
+		   there is nothing extra to fetch for the de-indexing card. Asked of the
+		   catalogue rather than of the row, because a row that happens to read 0
+		   is not the same as a dataset that does not carry the measure. */
+		google := ds.HasMeasure("googleDelisted")
 		for _, r := range raw {
-			hostRows = append(hostRows, map[string]any{
+			row := map[string]any{
 				"label":   strFromAny(r["label"]),
 				"value":   strFromAny(r["grp"]),
 				"urls":    numOf(r["identified"]),
 				"removed": numOf(r["removed"]),
-			})
+			}
+			if google {
+				row["googleDelisted"] = numOf(r["googleDelisted"])
+			}
+			hostRows = append(hostRows, row)
 		}
 		hostCache[col] = hostRows
 		return hostRows, true
@@ -1448,6 +1458,35 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 					r["removed"] = int64(0)
 				}
 				sortRowsByURLs(out)
+			}
+			/* The LINKING combined card is measured on Google de-indexing, so the
+			   Google count becomes its second series outright rather than sitting
+			   beside the removal figure as a third.
+
+			   A swap and not an extra column, because everything downstream — the
+			   merge, the table twin, the export, the chart — reads one pair of
+			   measures per row, and a third would have to be threaded through all
+			   four to be drawn once. The panel is registered only where the
+			   measure exists (see Needs on the candidate), so this cannot leave a
+			   removal count sitting under a de-indexing heading. */
+			if d.Key == dimDomainRootAll {
+				for _, r := range out {
+					r["removed"] = numOf(r["googleDelisted"])
+				}
+			}
+			/* Both combined cards are RANKED, so their order has to be the
+			   ranking rather than the order the brands happened to appear in.
+			   Sorted before the cut below, or a top-10 is ten arbitrary brands
+			   numbered 1 to 10. */
+			if d.Key == dimDomainRootAll || d.Key == dimDomainRootSource {
+				sortRowsByURLs(out)
+			}
+			/* The working measure leaves here. It exists to be resolved into
+			   `removed` above; carried further it would reach the summary merge,
+			   which drops keys it does not name — so a single-table platform and
+			   a merged one would disagree about whether the row has it. */
+			for _, r := range out {
+				delete(r, "googleDelisted")
 			}
 			if d.Limit > 0 && len(out) > d.Limit {
 				out = out[:d.Limit]

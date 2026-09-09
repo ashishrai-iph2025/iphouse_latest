@@ -145,6 +145,10 @@ cost one indexed request instead of three unindexed ones.
 report wants: 131,333 infringements is one fact about livetv and "spread over 28
 hostnames" is the other, and neither is much use alone.
 
+`googleDelisted` rides along for the panels measured on de-indexing rather than
+on removal. It is summed here and resolved by the caller, so this stays one fold
+over one breakdown however many panels are cut from it.
+
 Sorted by volume, because that is the order every other ranked panel uses and
 the caller cuts a top N off the front.
 */
@@ -152,6 +156,7 @@ func foldDomainRows(rows []map[string]any, key func(string) string) []map[string
 	type agg struct {
 		label            string
 		urls, removed    int64
+		googleDelisted   int64
 		mirrors          int64
 		firstAppearedAtI int
 	}
@@ -175,6 +180,12 @@ func foldDomainRows(rows []map[string]any, key func(string) string) []map[string
 		}
 		a.urls += numOf(r["urls"])
 		a.removed += numOf(r["removed"])
+		/* The Google de-indexing count, where the source rows carry one. Folded
+		   alongside `removed` rather than instead of it, because the caller
+		   decides which of the two its panel is about — see the swap in the
+		   bridge. Zero on every row of a table that has no such measure, which
+		   is exactly the tables whose panels never read it. */
+		a.googleDelisted += numOf(r["googleDelisted"])
 		a.mirrors++
 	}
 
@@ -188,6 +199,10 @@ func foldDomainRows(rows []map[string]any, key func(string) string) []map[string
 			"urls":    a.urls,
 			"removed": a.removed,
 			"mirrors": a.mirrors,
+			/* A WORKING measure, not a panel one. The caller either swaps it
+			   into `removed` or drops it — see foldedDomainPanel — so it never
+			   reaches a merge, a table or an export under its own name. */
+			"googleDelisted": a.googleDelisted,
 		})
 	}
 	sortRowsByURLs(out)
@@ -201,12 +216,47 @@ func sortRowsByURLs(rows []map[string]any) {
 	})
 }
 
-// The three panel keys this file answers for. Named as constants because the
-// bridge, the registry and the summary all have to agree on them, and a typo in
-// any one of the three is a panel that silently never fills.
+// The panel keys this file answers for. Named as constants because the bridge,
+// the registry and the summary all have to agree on them, and a typo in any one
+// of the three is a panel that silently never fills.
 const (
 	dimDomainRoot        = "byDomainRoot"
 	dimDomainRootMirrors = "byDomainRootMirrors"
+	/* Both of the above on one card — and there are TWO of these cards, one per
+	   side of the enforcement.
+
+	   Open Web reads two tables and they hold different populations, not two
+	   halves of one: SportsURLRawData has the pages that LINK to infringing
+	   content, SportsSourceURLRawData the ones that HOST it. A link is
+	   de-indexed from search results; a host is taken down. Folding both into a
+	   single card added a linking brand's URLs to a host brand's, counted a
+	   hostname twice wherever an operator appears on both sides, and produced a
+	   success rate that mixed two different claims — see removalBasis.
+
+	   So they are pinned by COLUMN, the way byDomain and byDomainSource already
+	   are: InfringingDomain exists only on the linking table and SourceDomain
+	   only on the host one, so neither card can be fed by the other's side.
+	   Alternates on neither — a generic `Domain` spelling would let the wrong
+	   table answer for a panel whose whole point is which table it came from.
+
+	   The MIRROR COUNT is why either of these is a card of its own rather than a
+	   second series on the plain ranked panel. 131,333 infringements and 28
+	   hostnames are four orders of magnitude apart; as a third bar the count is
+	   a third of a pixel, and putting it on a second y-axis to fix that is the
+	   one thing a chart may never do — the two axes are aligned by nothing, so
+	   every crossing the reader sees is an artefact of where the scales were
+	   pinned.
+
+	   It is drawn WITHOUT a shared axis instead. The "mirror" shape gives the
+	   count its own short gauge beside the volume bars, and what the two halves
+	   share is the brand rows rather than a number line: you read across a row
+	   without being invited to compare a length here with a length there. The
+	   TABLE toggle is the same thing with the marks taken away. */
+	dimDomainRootAll = "byDomainRootAll"
+	// The host side of the same card. Its removal figure is a notice the host
+	// acted on, which is a different fact from the linking side's de-indexing —
+	// so the two are never added and never share an axis.
+	dimDomainRootSource = "byDomainRootSource"
 )
 
 /*
@@ -218,7 +268,7 @@ that two of these group by brand and one by class — it just folds and cuts.
 */
 func domainFoldFor(dimKey string) (func(string) string, bool) {
 	switch dimKey {
-	case dimDomainRoot, dimDomainRootMirrors:
+	case dimDomainRoot, dimDomainRootMirrors, dimDomainRootAll, dimDomainRootSource:
 		return domainRootBrand, true
 	}
 	return nil, false
