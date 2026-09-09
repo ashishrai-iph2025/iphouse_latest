@@ -193,7 +193,7 @@ export default function EditClientForm({ client }: { client: Client }) {
               MarkScan, the id says which client the analytics warehouse knows
               them as. */}
           <Section title="Data sources"
-            hint="Where this client's figures come from — the MarkScan account we fetch with, and the warehouse client their Reports read.">
+            hint="Where this client's figures come from — the enforcement account we fetch with, and the warehouse client their Reports read.">
             {/* Whether this company can reach MarkScan at all, said before the
                 two fields rather than left to be inferred from them — a filled
                 username with no password reads as configured and is not. */}
@@ -202,7 +202,7 @@ export default function EditClientForm({ client }: { client: Client }) {
                 border border-emerald-200 rounded-xl px-3 py-2 leading-relaxed">
                 <span aria-hidden>✓</span>
                 <span>
-                  <strong>MarkScan credentials are set.</strong> Leave both fields as they are to
+                  <strong>Enforcement API credentials are set.</strong> Leave both fields as they are to
                   keep them; type a new password only if you are replacing it.
                 </span>
               </p>
@@ -213,7 +213,7 @@ export default function EditClientForm({ client }: { client: Client }) {
                 <span>
                   <strong>
                     {!hasStoredUsername && !hasStoredPassword
-                      ? 'No MarkScan credentials are set.'
+                      ? 'No enforcement API credentials are set.'
                       : !hasStoredPassword
                         ? 'A username is set but no password is.'
                         : 'A password is set but no username is.'}

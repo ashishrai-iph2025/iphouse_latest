@@ -172,7 +172,20 @@ func ReportsSections(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	OK(w, map[string]any{"success": true, "sections": out, "configured": reportsBackendReady()})
+	/* How the page should DRAW what it is about to ask for.
+
+	   Sent with the sections rather than from an endpoint of its own, for the
+	   same reason the sports period is: the page already re-asks this the moment
+	   the client changes, and appearance is keyed on exactly that. A second
+	   request would be a second thing to keep in step with the first, and it
+	   would arrive after the first chart had already been drawn in the wrong
+	   palette. Report-wide rather than per section, because it is. */
+	OK(w, map[string]any{
+		"success":    true,
+		"sections":   out,
+		"appearance": appearanceFor(clientID),
+		"configured": reportsBackendReady(),
+	})
 }
 
 /*

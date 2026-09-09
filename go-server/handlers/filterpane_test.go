@@ -40,7 +40,10 @@ func TestDefaultFilterVisibleFollowsPanels(t *testing.T) {
 		t.Error("a parameter with no breakdown has nothing to follow out of the report, " +
 			"so hiding charts must not take its slicer away")
 	}
-	// Read off their own panel, so no dropdown unless one is asked for.
+	/* No dropdown unless one is asked for. Keyword is read off its own panel;
+	   turnaround is no longer read off anything — its bands are computed, so no
+	   spec registers it as a filter at all now (see tatbuckets.go). This still
+	   holds for both, and for turnaround it is now the weaker of two guarantees. */
 	for _, param := range []string{"tatBucket", "keyword"} {
 		if defaultFilterVisible(param, map[string]bool{param: true}) {
 			t.Errorf("%s is picked by clicking its own panel; it gets no dropdown by default", param)

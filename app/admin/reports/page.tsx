@@ -34,100 +34,47 @@ import RealtimeCard from '@/components/shared/RealtimeCard'
 import ReportLoader from '@/components/shared/ReportLoader'
 import PowerBIReport from '@/components/shared/PowerBIReport'
 import ReportLayoutEditor from '@/components/reports/ReportLayoutEditor'
+import { DEFAULT_THEME, themeFor, type CustomPalette, type MarkTheme } from '@/lib/reportTheme'
+import { EngineChart, NATIVE } from '@/lib/charts/engines'
+import type { ChartForm, ChartSpec } from '@/lib/charts/spec'
 
 /* ── Palette ───────────────────────────────────────────────────────────────────
    Two families, deliberately kept apart:
 
    · CHROME — brand navy/orange/gold. Headings, the active rail item, chips, the
-     progress bar. This is the product's identity and it matches War Room.
+     progress bar. This is the product's identity and it matches War Room. It is
+     fixed, and the three constants below are all of it.
 
-   · MARKS  — the colours data is drawn in. BRAND ONLY: navy, orange and gold,
-     plus tints of those three. A tint is the brand hue mixed with white by a
-     percentage, so every mark on this page is one of our colours at some
-     strength and nothing else.
+   · MARKS  — the colours data is drawn in. Six palettes, in lib/reportTheme.ts,
+     with the reader choosing between them from the Appearance control in this
+     page's toolbar. Every one of them keeps identification navy and removal
+     orange; what they vary is the categorical ramp, the sequential ramp and how
+     loud the grid and axis are. `m` below is whichever one is in force.
 
-     What that costs, so it is not rediscovered later: mixing navy toward white
-     desaturates it, so the navy steps read as blue-greys rather than as distinct
-     hues, and adjacent categorical steps are separated more by lightness than by
-     colour. Every component here prints the value beside its mark — the bar
-     lists, the donut legend, the table and the heat grid all do — which is the
-     relief that makes a low-separation set readable. Keep that rule if a new
-     visual is added: brand tints are only safe next to their numbers.
+     One rule survives the move and applies to any new visual added here: these
+     ramps separate neighbouring steps as much by LIGHTNESS as by hue, so a mark
+     is only safe next to its number. Every component on this page prints the
+     value beside the mark — the bar lists, the donut legend, the table and the
+     heat grid all do — and that is what makes a low-separation set readable.
 
-     Dark theme cannot use full navy on a navy card, so its navy family starts at
-     a lighter tint. Orange and gold carry unchanged in both themes.
-
+   · ENGINE — which library actually draws a chart is a separate choice again,
+     also in the toolbar. See lib/charts/engines.tsx; the components in this file
+     are the built-in engine and the fallback for every panel the others decline.
 */
 
 const BRAND_NAVY   = '#14254A'
 const BRAND_ORANGE = '#FC934C'
+const BRAND_GOLD   = '#FFC82B'
 
-interface MarkTheme {
-  ident: string          // series 1 — links identified
-  identSoft: string      // a lighter step of the same hue, for "the remainder"
-  removed: string        // series 2 — links taken down
-  cat: string[]          // categorical identity, fixed order, never cycled
-  other: string          // the folded tail of a categorical split
-  ordinal: string[]      // funnel stages: one hue, strongest step first
-  seq: string[]          // magnitude, lowest intensity first
-  seqInk: boolean[]      // true where a label on that step must be dark
-  segInk: string         // label colour inside a filled segment, this theme
-  surface: string        // card background — the colour the 2px spacers wear
-  grid: string
-  axis: string
-}
+/* The palettes themselves moved to lib/reportTheme.ts when the report gained a
+   theme picker: there are six of them now, they have to be reachable from the
+   chart-engine adapters in lib/charts (which know nothing about this page), and
+   a runtime choice between them is no longer a thing a `const` can express.
 
-/* Tints of the three brand colours. The number is how much white is mixed in,
-   so N60 is navy at 40% strength against a white card. Named rather than
-   computed at runtime: these exact steps were chosen so neighbouring
-   categorical slots differ in lightness as well as family. */
-const N40 = '#727C92'
-const N55 = '#959DAE'
-const N62 = '#A6ACBA'
-const N72 = '#BDC2CC'
-const N75 = '#C4C8D1'
-const N80 = '#D0D3DA'
-const N85 = '#DCDEE3'
-const N92 = '#EDEEF0'
-const N30 = '#5B6680'
-const N20 = '#43516E'
-const O40 = '#FDBE94'   // orange + 40% white
-const O55 = '#FECEAE'
-const G45 = '#FFE18A'   // gold + 45% white
-
-const BRAND_GOLD = '#FFC82B'
-
-const MARKS: Record<'light' | 'dark', MarkTheme> = {
-  light: {
-    ident: BRAND_NAVY, identSoft: N62, removed: BRAND_ORANGE,
-    // Order alternates family before it steps lightness, so the first slices —
-    // the ones that carry most of the total — are the easiest to tell apart.
-    cat: [BRAND_NAVY, BRAND_ORANGE, BRAND_GOLD, N40, O40, G45, N72, O55],
-    other: N75,
-    ordinal: [BRAND_NAVY, N40, N75],
-    seq: [N85, N75, N62, N40, BRAND_NAVY],
-    seqInk: [true, true, true, false, false],
-    segInk: BRAND_NAVY,
-    surface: '#ffffff',
-    grid: N92,
-    axis: N40,
-  },
-  dark: {
-    // Full navy is invisible on a navy card, so the family starts lighter here.
-    ident: N55, identSoft: N75, removed: BRAND_ORANGE,
-    cat: [N55, BRAND_ORANGE, BRAND_GOLD, N75, O40, G45, N30, O55],
-    other: N30,
-    ordinal: [N75, N55, N30],
-    seq: [N20, N30, N40, N62, N80],
-    seqInk: [false, false, false, true, true],
-    // Dark-theme fills are light tints and brand orange/gold, so a dark label
-    // beats a white one on all of them.
-    segInk: BRAND_NAVY,
-    surface: '#1a2d55',
-    grid: 'rgba(255,255,255,0.10)',
-    axis: N55,
-  },
-}
+   What has NOT changed is the rule they all keep — identification is navy,
+   removal is orange, in every theme and on every page of this product. The
+   three brand constants above stay here because the page's CHROME uses them:
+   a section rule, a legend key, a bullet. Those are identity, not data. */
 
 /** A categorical split shows at most this many slices; the rest fold to "Other".
     Past six segments neighbouring slices stop being tellable apart. */
@@ -576,37 +523,15 @@ const KPI_LABELS: Record<string, string> = {
   sourceRemoved: 'Listings Removed', infringingRemoved: 'Downloads Removed',
 }
 
-/** The line under a tile's number saying what it counts. Only for the figures
-    whose label does not already say it. */
-const KPI_FOOT: Record<string, string> = {
-  totalAssets: 'Titles in scope',
-  totalPlaces: 'Places content was found',
-  totalDomains: 'Sites carrying it',
-  totalChannels: 'Channels carrying it',
-  channelsSuspended: 'Taken offline entirely',
-  suspendedWebsites: 'Taken offline entirely',
-  profilesSuspended: 'Accounts taken down',
-  impactedSubscribers: 'Audience the infringement reached',
-  impactedTraffic: 'Audience the infringement reached',
-  viewsSaved: 'Views the removals prevented',
-  views: 'Views the infringement took',
-  viewsImpacted: 'Views the removals took down',
-  totalTVChannels: 'Distinct TV channel names',
-  delisted: 'Dropped by a search engine',
-  googleDelisted: 'Dropped by Google',
-  bingDelisted: 'Dropped by Bing',
-  notices: 'Distinct notices, not the URLs they listed',
-  delistingBatches: 'Distinct submissions, not the links they covered',
-  crawled: 'Pages crawled',
-  // Mobile apps.
-  totalApps: 'Distinct app titles',
-  totalDevelopers: 'Publishers behind them',
-  installs: 'Downloads the listings claim',
-  avgStars: 'Mean over rated listings',
-  enforced: 'Notices sent on a listing',
-  sourceRemoved: 'Store pages taken down',
-  infringingRemoved: 'Download links killed',
-}
+/* THE TILES CARRY NO FOOTNOTE LINE. There was a KPI_FOOT map here — a line
+   under each tile's number saying what it counted ("Sites carrying it", "Views
+   the infringement took", "Dropped by Google") — and it is gone from every tile
+   on every platform and every report, by request.
+
+   Where a figure genuinely needs explaining, the place for it is the ⓘ beside
+   the label: it is admin-editable per panel from Report Configuration, it does
+   not cost every tile a line of height, and it does not repeat a heading that
+   already says the same thing one word longer. See InfoDot and `p.desc`. */
 
 /** The cross-platform section, which the server serves as a virtual platform
     (go-server/handlers/reportsummary.go). Named here because its KPI band and
@@ -681,7 +606,7 @@ const REALTIME_WINDOWS = [24, 48, 72, 96, 120, 144, 168]
 
 /** Printed small along the bottom of every exported chart. A picture in a
     deck should say what produced it without anybody having to remember. */
-const EXPORT_FOOTER = 'IP House · MarkScan reports'
+const EXPORT_FOOTER = 'IP House · Reports'
 
 /*
 ── Rows that name nothing ───────────────────────────────────────────────────
@@ -854,7 +779,13 @@ const grainHead = (grain: string) => (grain === 'month' ? 'Month' : 'Date')
 
 function trendTableData(rows: any[], first: string, second: string, grain: string): PanelTable {
   return {
-    head: [grainHead(grain), first, second, 'Rate'],
+    /* The rate column is named for the SERIES it divides, not "Removal rate"
+       flat. On most panels `second` is Removal and it reads "Removal rate"; on
+       an open-web source whose second series is delisting it is "De-Indexing",
+       and `t.rate` is then a de-indexing rate. Calling that one a removal rate
+       would put the wrong measure's name on a real number — the same mistake
+       the De-Indexing / De-Indexed pair is kept apart to avoid. */
+    head: [grainHead(grain), first, second, `${second} rate`],
     /* Numbers as NUMBERS. On screen the difference is invisible; in the
        workbook it is whether the column can be summed, sorted or charted, and
        a count that arrives as text is a count somebody has to clean before
@@ -884,7 +815,7 @@ function dimTableData(key: string, label: string, viz: string, rows: any[]): Pan
 
   if (key === 'byRepeatOffender') {
     return {
-      head: ['Channel / Profile URL', 'Days', 'Identified', 'Removed', 'Rate'],
+      head: ['Channel / Profile URL', 'Days', 'Identified', 'Removed', 'Removal rate'],
       rows: rows.map(r => {
         const urls = Number(r.urls) || 0
         const removed = Number(r.removed) || 0
@@ -906,13 +837,245 @@ function dimTableData(key: string, label: string, viz: string, rows: any[]): Pan
 
   const total = rows.reduce((a, x) => a + (Number(x.urls) || 0), 0)
   return {
-    head: ['Name', 'Identified', 'Removed', 'Rate', 'Share'],
+    head: ['Name', 'Identified', 'Removed', 'Removal rate', 'Share'],
     rows: rows.map(r => {
       const urls = Number(r.urls) || 0
       const removed = Number(r.removed) || 0
       return [String(r.label ?? '—'), urls, removed, `${pct(removed, urls)}%`, `${pct(urls, total)}%`]
     }),
     pickValues,
+  }
+}
+
+/* ── PANELS, AS SOMETHING OTHER ENGINES CAN DRAW ───────────────────────────
+
+   Everything below this comment and above Legend turns a panel's rows into a
+   ChartSpec — the engine-neutral description in lib/charts/spec.ts. The
+   components further down this file remain the built-in engine and the
+   fallback for every panel the others decline; these two functions are the
+   translation layer for the ones they do not.
+
+   THE COLOUR DECISIONS ARE MADE HERE, NOT IN THE ENGINE. A spec carries
+   finished hex strings, so identification is navy and removal is orange
+   whichever library ends up drawing them, and an adapter that guessed at a
+   palette could not put them back.
+
+   THE ARITHMETIC IS ALSO MADE HERE. The 100% split is the clearest case:
+   ApexCharts, ECharts and Toast each normalise a stack differently — or not at
+   all — so the shares are computed once, and every engine is handed the same
+   numbers to draw rather than the same numbers to re-derive.
+*/
+
+/**
+ * Which neutral form a breakdown's chart type maps to.
+ *
+ * Absent means "no engine draws this one". Four shapes are deliberately not in
+ * here: the ranked TABLE and the repeat-offender LIST are not charts, the HEAT
+ * grid is a layout as much as a mark, and the world MAP needs a projection and
+ * a set of country shapes no general charting library is carrying. All four
+ * keep the components in this file whichever engine is selected.
+ *
+ * `bars` and `hbar` land on the same form on purpose. They are the same picture
+ * — a pair of horizontal bars per row — and differ today only because one was
+ * built in HTML and the other in recharts. An engine has one way to draw that.
+ */
+const DIM_FORM: Record<string, ChartForm> = {
+  bars:    'group-bar',
+  hbar:    'group-bar',
+  column:  'group-column',
+  value:   'single-bar',
+  ordinal: 'single-bar',
+  stacked: 'stack-100',
+  donut:   'donut',
+  share:   'donut',
+}
+
+/**
+ * How tall a delegated panel is drawn.
+ *
+ * The built-in components each work this out for themselves, from the rules
+ * their own marks need — see the note on HBarChart's row height for the
+ * measuring that went into one of them. An engine cannot ask those questions,
+ * so the answer is given: a row-per-category shape grows with its rows, and
+ * everything else is a fixed plot.
+ */
+function dimHeight(form: ChartForm, rows: number): number {
+  const n = Math.max(1, rows)
+  switch (form) {
+    // Two bars and a gap per row, plus the legend under the plot.
+    case 'group-bar':  return Math.min(560, Math.max(190, n * 40 + 44))
+    // One bar per row, so the band can be tighter.
+    case 'single-bar': return Math.min(520, Math.max(180, n * 28 + 24))
+    case 'stack-100':  return Math.min(520, Math.max(190, n * 32 + 44))
+    case 'donut':      return 220
+    default:           return 240   // columns and dated runs
+  }
+}
+
+/**
+ * The trend and rate cards' own chart types, as neutral forms.
+ *
+ * `auto` is the trend card's default and is not a shape at all — it is a rule:
+ * a dozen periods or fewer are columns, because each period is a discrete thing
+ * you compare; more than that is an area, because the shape of the run is the
+ * story and columns turn into a picket fence. Resolved here so every engine
+ * draws the same decision.
+ */
+function trendForm(mode: string, points: number): ChartForm {
+  if (mode === 'column') return 'group-column'
+  if (mode === 'area') return 'area'
+  if (mode === 'line') return 'line'
+  return points <= 12 ? 'group-column' : 'area'
+}
+
+/** How long a category label may be before it is cut, by the room the form gives it. */
+const LABEL_CAP: Partial<Record<ChartForm, number>> = {
+  'group-column': 14,   // an axis tick, upright, under a column
+  donut: 26,            // a legend row beside the ring
+  line: 14,
+  area: 14,
+}
+
+/**
+ * One breakdown panel as a spec.
+ *
+ * `ordered` is the ordinal case — buckets that have a sequence, like turnaround
+ * bands. They are sorted by their leading number and stepped through the
+ * one-hue ramp, so the colour carries the order; identity hues would say these
+ * are unrelated things.
+ */
+function dimSpec(form: ChartForm, rows: any[], o: {
+  m: MarkTheme; dark: boolean; height: number
+  limit?: number
+  onPick?: (v: string) => void
+  activeVal?: string
+  ordered?: boolean
+}): ChartSpec {
+  const { m, dark } = o
+  const cap = LABEL_CAP[form] ?? 24
+
+  /* A ring folds its tail into "Other"; every other shape simply stops at the
+     limit. Same rule and same cap as the built-in Donut, because the two have
+     to be the same picture — a reader switching engine is checking a rendering,
+     not being shown a different sixth slice. */
+  if (form === 'donut') {
+    const palette = o.ordered ? m.seq : m.cat
+    const keep = o.ordered ? m.seq.length : CAT_LIMIT
+    const all = rows.map(r => ({
+      title: String(r.label ?? '—'),
+      pick: String(r.value ?? r.label ?? ''),
+      value: Number(r.urls) || 0,
+    }))
+    if (o.ordered) all.sort((a, b) => leadingNum(a.title) - leadingNum(b.title))
+    const tail = all.slice(keep)
+    const slices = tail.length > 0
+      ? [...all.slice(0, keep), {
+          title: `Other (${tail.length})`, pick: '',
+          value: tail.reduce((a, b) => a + b.value, 0),
+        }]
+      : all
+    return {
+      form, m, dark, height: o.height,
+      categories: slices.map(d => midCut(d.title, cap)),
+      titles: slices.map(d => d.title),
+      picks: slices.map(d => d.pick),
+      // The folded tail is neutral, never the next colour in the ramp: "Other"
+      // is not a category, and giving it one makes it look like one.
+      sliceColors: slices.map((d, i) =>
+        d.pick === '' && tail.length > 0 ? m.other : palette[i % palette.length]),
+      series: [{ name: 'Identified', color: m.ident, data: slices.map(d => d.value) }],
+      activeVal: o.activeVal,
+      onPick: o.onPick,
+    }
+  }
+
+  const picked = (o.ordered
+    ? [...rows].sort((a, b) => leadingNum(String(a.label)) - leadingNum(String(b.label)))
+    : rows
+  ).slice(0, o.limit ?? 12)
+
+  const titles = picked.map(r => String(r.label ?? '—'))
+  const urls = picked.map(r => Number(r.urls) || 0)
+  const removed = picked.map(r => Number(r.removed) || 0)
+  const common = {
+    form, m, dark, height: o.height,
+    categories: titles.map(t => midCut(t, cap)),
+    titles,
+    // Lookup dimensions carry the id in `value` and the name in `label`: the
+    // report narrows by the id, the reader reads the name.
+    picks: picked.map(r => String(r.value ?? r.label ?? '')),
+    activeVal: o.activeVal,
+    onPick: o.onPick,
+  }
+
+  if (form === 'stack-100') {
+    const share = urls.map((u, i) => pct(removed[i], u))
+    return {
+      ...common, suffix: '%',
+      series: [
+        { name: 'Removed', color: m.removed, data: share },
+        { name: 'Active', color: m.identSoft, data: share.map(v => 100 - v) },
+      ],
+    }
+  }
+
+  if (form === 'single-bar') {
+    // One measure, so nothing is competing for the colour and an ordered set can
+    // spend it on the sequence instead. Labelled, because a lone bar next to a
+    // number is the whole point of this shape.
+    return {
+      ...common, labels: true,
+      sliceColors: o.ordered
+        ? picked.map((_, i) => m.seq[Math.min(m.seq.length - 1, i)])
+        : undefined,
+      series: [{ name: 'Identified', color: m.ident, data: urls }],
+    }
+  }
+
+  return {
+    ...common,
+    // Labels only where the marks are far enough apart to carry one. Ten
+    // horizontal rows have room at the tip of each bar; a dozen column pairs
+    // do not.
+    labels: form === 'group-bar' && picked.length <= 10,
+    series: [
+      { name: 'Identified', color: m.ident, data: urls },
+      { name: 'Removed', color: m.removed, data: removed },
+    ],
+  }
+}
+
+/**
+ * A dated run — the trend card, or the rate card — as a spec.
+ *
+ * Three label sets, and they are three different things: the AXIS gets the
+ * short form that fits a tick, the TOOLTIP gets the full date, and the CLICK
+ * carries the raw key, because narrowing the report to a period is done by
+ * parsing that key back into a span (see periodSpan).
+ */
+function trendSpec(form: ChartForm, data: any[], series: {
+  key: string; name: string; color: string
+}[], o: {
+  m: MarkTheme; dark: boolean; height: number
+  suffix?: string
+  onPick?: (label: string) => void
+}): ChartSpec {
+  return {
+    form,
+    m: o.m,
+    dark: o.dark,
+    height: o.height,
+    categories: data.map(d => shortDate(String(d.label ?? ''))),
+    titles: data.map(d => shortDateFull(String(d.label ?? ''))),
+    picks: data.map(d => String(d.label ?? '')),
+    series: series.map(s => ({
+      name: s.name, color: s.color, data: data.map(d => Number(d[s.key]) || 0),
+    })),
+    suffix: o.suffix,
+    onPick: o.onPick,
+    // A dozen periods or fewer can each carry their figure; past that the
+    // labels touch and the run is read as a shape instead.
+    labels: form === 'group-column' && data.length <= 12,
   }
 }
 
@@ -985,7 +1148,7 @@ const DIM_VIZ: VizOption[] = [
   { key: 'hbar',    label: 'Bar chart',       hint: 'Horizontal — best when the labels are long' },
   { key: 'column',  label: 'Column chart',    hint: 'Vertical columns' },
   { key: 'value',   label: 'Single bars',     hint: 'One measure only, largest first' },
-  { key: 'stacked', label: 'Stacked 100%',    hint: 'Removed against still-live, as a share of each row' },
+  { key: 'stacked', label: 'Stacked 100%',    hint: 'Removed against what is still active, as a share of each row' },
   { key: 'donut',   label: 'Donut',           hint: 'Share of the total — best under six slices' },
   { key: 'share',   label: 'Donut (ordered)', hint: 'Share on a one-hue ramp, in bucket order' },
   { key: 'table',   label: 'Ranked table',    hint: 'Every row with its rate and share' },
@@ -1301,13 +1464,16 @@ function CardDownload({ bodyRef, name, table, subtitle, footer }: {
     }
   }
 
-  const xlsx = () => {
+  const xlsx = async () => {
     if (!table) return
+    setBusy(true); setErr('')
     try {
-      downloadWorkbook(name, [{ name, title: name, subtitle, head: table.head, rows: table.rows }])
+      await downloadWorkbook(name, [{ name, title: name, subtitle, head: table.head, rows: table.rows }])
       setOpen(false)
     } catch (e: any) {
       setErr(e?.message || 'The workbook could not be produced.')
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -1567,7 +1733,7 @@ const KPI_ICON_FALLBACK = 'M6 12h.01M12 12h.01M18 12h.01'
  * The change on a tile, against the same-length window before this one.
  *
  * `tone` is the deliberate part. A rise is not automatically good news here:
- * more links taken down is, more links still live is not, and more links
+ * more links taken down is, more links left active is not, and more links
  * IDENTIFIED is neither — it can mean piracy grew or that detection did, and
  * this page cannot tell which. Those neutral figures get the arrow and the
  * number in ink, so the tile reports the movement without editorialising about
@@ -1626,8 +1792,8 @@ function kpiDelta(metric: string, cur: unknown, prev: unknown, window?: string):
  * itself stays in ink — a number is text, not a mark. Proportional figures, not
  * tabular: at this size equal-width digits look loose.
  */
-function Kpi({ label, value, foot, accent, spark, sparkData, dense, delta, icon, info }: {
-  label: string; value: string; foot?: string; accent: string
+function Kpi({ label, value, accent, spark, sparkData, dense, delta, icon, info }: {
+  label: string; value: string; accent: string
   spark?: string; sparkData?: any[]
   delta?: KpiDelta | null
   /** Metric key, for the chip glyph. */
@@ -1639,10 +1805,11 @@ function Kpi({ label, value, foot, accent, spark, sparkData, dense, delta, icon,
   info?: string
 }) {
   /* Every tile is the same box whatever it holds. The label sits at the top and
-     the sparkline at the bottom, with the value, its change and its footnote
-     taking the slack between them — so a tile with a trend and a tile without
-     still line up, instead of the row with sparklines standing taller than the
-     row below it. */
+     the sparkline at the bottom, with the value and its change taking the slack
+     between them — so a tile with a trend and a tile without still line up,
+     instead of the row with sparklines standing taller than the row below it.
+     The flex-1 spacer below is what absorbs the difference, and it is why
+     dropping the footnote line loosens the tiles rather than ragging the row. */
   const tone = delta?.tone === 'good'
     ? 'text-emerald-600 bg-emerald-50 dark:text-emerald-300 dark:bg-emerald-400/12'
     : delta?.tone === 'bad'
@@ -1685,7 +1852,6 @@ function Kpi({ label, value, foot, accent, spark, sparkData, dense, delta, icon,
           <span className="text-[10px] text-gray-400 truncate">vs previous period</span>
         </div>
       )}
-      {foot && <div className="text-[10px] text-gray-400 mt-1.5">{foot}</div>}
       <div className="flex-1 min-h-[6px]" />
       {spark && sparkData && sparkData.length > 1 && (
         <Spark data={sparkData} dataKey={spark} color={accent} />
@@ -2240,7 +2406,8 @@ function Donut({ rows, m, onPick, activeVal = '', ramp = 'cat' }: {
 }
 
 /**
- * 100% stacked bars — removed against still-live as a share of each row, so
+ * 100% stacked bars — removed against what is still active, as a share of each
+ * row, so
  * rows of wildly different size are still comparable on the one thing the
  * report is about. Built in HTML rather than recharts for the 2px surface gap
  * between the two segments, and so an in-segment label can be dropped when it
@@ -2297,7 +2464,7 @@ function StackedBars({ rows, m, onPick, activeVal = '', limit = 12 }: {
       </div>
       <Legend items={[
         { label: 'Removed', color: m.removed },
-        { label: 'Still live', color: m.identSoft },
+        { label: 'Active', color: m.identSoft },
       ]} />
     </>
   )
@@ -2308,7 +2475,7 @@ function StackedBars({ rows, m, onPick, activeVal = '', limit = 12 }: {
  *
  * For a dimension where there is no second measure to draw: channels suspended
  * per platform, or the count that landed in each turnaround bucket — a bucket's
- * rows have all been removed by definition, so "removed vs still live" is a bar
+ * rows have all been removed by definition, so "removed vs active" is a bar
  * at 100% next to a bar at nothing. The grouped list would print a "0" beside
  * every row instead of saying that.
  *
@@ -2373,7 +2540,7 @@ function RankTable({ rows, onPick, activeVal = '', limit = 12 }: {
       <table className="w-full text-xs">
         <thead>
           <tr className="text-gray-400">
-            {['#', 'Name', 'Identified', 'Removed', 'Rate', 'Share'].map((h, i) => (
+            {['#', 'Name', 'Identified', 'Removed', 'Removal rate', 'Share'].map((h, i) => (
               <th key={h} className={`font-bold uppercase tracking-widest text-[9px] px-1.5 pb-2 ${
                 i <= 1 ? 'text-left' : 'text-right'}`}>{h}</th>
             ))}
@@ -3791,7 +3958,33 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
   }, [vizDefault, setViz])
 
   const isDark  = useIsDark()
-  const m       = isDark ? MARKS.dark : MARKS.light
+
+  /** What Report Configuration says this client's report is drawn with and in. */
+  const [appearance, setAppearance] = useState<{
+    engine: string; theme: string; custom?: Partial<CustomPalette> | null
+  }>({ engine: NATIVE, theme: DEFAULT_THEME })
+
+  /* ── HOW THE REPORT LOOKS, AS OPPOSED TO WHAT IT SHOWS ───────────────────
+
+     Two report-wide choices, and unlike the per-panel chart shapes above,
+     NEITHER of them belongs to the reader:
+
+       engine · which library draws the charts. `native` is this file's own
+                components, and is also the fallback for every panel the chosen
+                library declines — the world map, the heat grid, the ranked
+                table, the repeat-offender list.
+       theme  · which of lib/reportTheme.ts's palettes every mark is drawn in,
+                including `custom`, whose colours arrive in `custom` below.
+
+     Both are configured per client in Report Configuration → Appearance, and
+     arrive with the section list because they are keyed on the same client the
+     section list already is. The reason they are configuration rather than a
+     preference is in go-server/handlers/reportappearance.go, and it is not
+     tidiness: a palette carries MEANING here — orange is the part we took down
+     — so a reader who could recolour it would be reading a different document
+     from everyone else looking at the same page. */
+  const engine = appearance.engine || NATIVE
+  const m: MarkTheme = themeFor(appearance.theme, isDark, appearance.custom)
 
   /* Column budget: 12 across, each rail costs 2 open and 1 collapsed. The main
      area absorbs whatever the rails hand back, so collapsing both is a genuinely
@@ -4084,7 +4277,19 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         return r.json()
       })
       .then(d => {
-        if (!mounted.current || !Array.isArray(d.sections)) return
+        if (!mounted.current) return
+        /* Before the sections, and outside the Array guard: a portal whose
+           registry is empty still has an appearance, and a report drawn in the
+           house palette because the section list happened to be empty would
+           flip colours the moment somebody configured a platform. */
+        if (d?.appearance) {
+          setAppearance({
+            engine: String(d.appearance.engine || NATIVE),
+            theme: String(d.appearance.theme || DEFAULT_THEME),
+            custom: d.appearance.custom ?? null,
+          })
+        }
+        if (!Array.isArray(d.sections)) return
         setSections(d.sections)
 
         /* Open the first platform straight away, for a CLIENT.
@@ -4495,22 +4700,30 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     const icon = metric
     switch (metric) {
       case 'identified':
-        return { label, icon, delta: d(), value: kpiFmt(kpi.identified), foot: 'Identified', accent: m.ident, spark: 'urls' }
+        return { label, icon, delta: d(), value: kpiFmt(kpi.identified), accent: m.ident, spark: 'urls' }
       case 'removed':
-        return { label, icon, delta: d(), value: kpiFmt(kpi.removed), foot: 'Taken down', accent: m.removed, spark: 'removed' }
+        return { label, icon, delta: d(), value: kpiFmt(kpi.removed), accent: m.removed, spark: 'removed' }
+      /* The numerator and denominator used to ride under this one — "16,824 of
+         27,294 taken down". It is the one footnote that said something the
+         label did not, and it is gone with the rest; both figures are tiles of
+         their own in the same band, which is where a reader can now get them.
+         The ⓘ is where to put it back if it is missed. */
       case 'removalPct':
-        return { label, icon, delta: d(), value: `${kpi.removalPct}%`, accent: m.removed, spark: 'removed',
-          foot: `${kpiFmt(kpi.removed)} of ${kpiFmt(kpi.identified)} taken down` }
+        return { label, icon, delta: d(), value: `${kpi.removalPct}%`, accent: m.removed, spark: 'removed' }
       case 'pending':
-        return { label, icon, delta: d(), value: kpiFmt(kpi.pending), foot: 'Still live', accent: m.ident }
+        return { label, icon, delta: d(), value: kpiFmt(kpi.pending), accent: m.ident }
       case 'savedRevenue': {
         if (kpi.savedRevenueLow === undefined) return null
-        // A range, and the rate that produced it: the multiplier is a commercial
-        // assumption set in the server environment, not something the warehouse
-        // knows, so the tile says which one it used rather than presenting the
-        // figure as measured.
-        const rate = data?.revenueRate as { min: number; max: number; currency?: string } | undefined
-        const cur = rate?.currency ?? ''
+        /* A RANGE, and it no longer names the rate that produced it.
+
+           WORTH KNOWING, because this is the one tile where the footnote was
+           not a restatement of the label: the multiplier is a commercial
+           assumption set in the server environment, not something the
+           warehouse measured, and "at 0.02–0.05 per view saved" was the only
+           thing on screen saying so. Removed with the rest by request. The
+           range itself still signals an estimate rather than a count, and the
+           ⓘ on the panel is where the rate belongs if it needs stating. */
+        const cur = (data?.revenueRate as { currency?: string } | undefined)?.currency ?? ''
         return {
           label, dense: true, accent: m.removed, icon,
           // The change on the floor of the range: both ends are the same views
@@ -4518,7 +4731,6 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
           // says it.
           delta: kpiDelta('savedRevenue', kpi.savedRevenueLow, kpiPrev?.savedRevenueLow, prevWindowLabel),
           value: `${cur}${kpiFmt(Number(kpi.savedRevenueLow))} – ${cur}${kpiFmt(Number(kpi.savedRevenueHigh))}`,
-          foot: rate ? `at ${rate.min}–${rate.max} per view saved` : 'from views saved',
         }
       }
       default: {
@@ -4532,7 +4744,6 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
           // Asset and site counts are whole things, not magnitudes — "1.2K
           // titles" reads as an estimate where 1,193 is the number.
           value: kpiFmt(Number(kpi[metric]), metric === 'totalAssets' ? 0 : 1),
-          foot: KPI_FOOT[metric],
           accent: enforcement ? m.removed : m.ident,
         }
       }
@@ -4746,7 +4957,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     }
   }, [sourceTrends, trend, trendGrain, data, activeSection, section, vizFor])
 
-  const exportReport = useCallback(() => {
+  const exportReport = useCallback(async () => {
     const stamp = new Date()
     const sheets: Sheet[] = [{
       name: 'Report',
@@ -4807,7 +5018,11 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     }
 
     const who = scope?.clientName ? `${scope.clientName} — ` : ''
-    downloadWorkbook(
+    /* Not awaited by a caller — this is a click handler and there is nothing
+       after it. Awaited HERE so a failure to build the workbook surfaces as a
+       rejected promise in the console rather than as a download that silently
+       never arrives. */
+    await downloadWorkbook(
       `${who}${activeSection?.label ?? section} — ${filters.from ?? ''} to ${filters.to ?? ''}`,
       sheets)
   }, [panels, panelTableFor, panelLabel, tileFor, activeSection, section, scope,
@@ -4832,14 +5047,14 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
    * that cannot be checked, and the reader of the PDF is exactly the person who
    * was not there when the slicers were set.
    */
-  const printPdf = useCallback(() => {
+  const printPdf = useCallback(async () => {
     if (!printRoot.current) return
     const who = scope?.clientName ? `${scope.clientName} — ` : ''
     const name = activeSection?.label ?? section
     const win = filters.from && filters.to
       ? `${shortDateFull(filters.from)} – ${shortDateFull(filters.to)}`
       : undefined
-    setPrintError(printReport(printRoot.current, {
+    setPrintError(await printReport(printRoot.current, {
       fileName: `${who}${name} — ${filters.from ?? ''} to ${filters.to ?? ''}`,
       title: name,
       client: scope?.clientName,
@@ -4871,7 +5086,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
 
   /** Every breakdown panel's table twin has the same five columns. */
   const dimTable = (rows: any[], onPick?: (v: string) => void, activeVal = '') => (
-    <DataTable head={['Name', 'Identified', 'Removed', 'Rate', 'Share']}
+    <DataTable head={['Name', 'Identified', 'Removed', 'Removal rate', 'Share']}
       onPick={onPick} activeVal={activeVal}
       /* The row's own label, not the cell text: the cell falls back to an em
          dash for a blank name, and filtering by "—" would find nothing while
@@ -4932,6 +5147,38 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
        exporting, which is why this is not inside the conditional under it. */
     const td = dimTableData(dim.key, dim.label, viz, rows)
     const tdExport = dimTableData(dim.key, dim.label, viz, rowsAll)
+
+    /* This file's own rendering of the panel. Always built, because it is what
+       the card shows on the built-in engine AND what every other engine falls
+       back to — for a shape it does not claim, and for a library that will not
+       load. Building the element is cheap; React only renders the branch that
+       is used. */
+    const builtIn = (
+      <>
+        {viz === 'donut'   && <Donut rows={rows} m={m} onPick={pick} activeVal={active} />}
+        {viz === 'share'   && <Donut rows={rows} m={m} onPick={pick} activeVal={active} ramp="ordinal" />}
+        {viz === 'stacked' && <StackedBars rows={rows} m={m} onPick={pick} activeVal={active} />}
+        {viz === 'hbar'    && <HBarChart rows={rows} m={m} onPick={pick} activeVal={active} />}
+        {viz === 'column'  && (FULL_SET_DIMS.has(dim.key)
+          ? <SeasonColumns rows={rows} m={m} onPick={pick} activeVal={active} />
+          : <ColumnChart rows={rows} m={m} onPick={pick} activeVal={active} />)}
+        {viz === 'repeat'  && <RepeatOffenders rows={rows} m={m} onPick={pick} activeVal={active} />}
+        {viz === 'table'   && <RankTable rows={rows} onPick={pick} activeVal={active} />}
+        {viz === 'value'   && <ValueBars rows={rows} m={m} onPick={pick} activeVal={active} />}
+        {viz === 'ordinal' && <ValueBars rows={rows} m={m} onPick={pick} activeVal={active} ordered />}
+        {viz === 'map'     && <WorldMap rows={rows} m={m} onPick={pick} activeVal={active} />}
+        {viz === 'heat'    && <HeatGrid rows={rows} m={m} onPick={pick} activeVal={active} />}
+        {!['donut', 'share', 'stacked', 'table', 'heat', 'map', 'hbar', 'column',
+           'value', 'ordinal', 'repeat'].includes(viz) && (
+          <SegmentBars rows={rows} m={m} activeVal={active} onPick={pick} />
+        )}
+      </>
+    )
+    /* Undefined for the four shapes no engine is offered — EngineChart then
+       renders `builtIn` unchanged, which is the whole of "an engine re-draws
+       what it can and leaves the rest alone". */
+    const form = DIM_FORM[viz]
+
     return (
       <Card key={dim.key} title={dim.label} info={dim.desc}
         exportTable={tdExport} exportSubtitle={exportScope} exportFooter={EXPORT_FOOTER}
@@ -4952,23 +5199,28 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
           : <DataTable head={td.head} rows={td.rows}
               onPick={pick} activeVal={active} pickValues={td.pickValues} />}
         className={spanClass}>
-        {viz === 'donut'   && <Donut rows={rows} m={m} onPick={pick} activeVal={active} />}
-        {viz === 'share'   && <Donut rows={rows} m={m} onPick={pick} activeVal={active} ramp="ordinal" />}
-        {viz === 'stacked' && <StackedBars rows={rows} m={m} onPick={pick} activeVal={active} />}
-        {viz === 'hbar'    && <HBarChart rows={rows} m={m} onPick={pick} activeVal={active} />}
-        {viz === 'column'  && (FULL_SET_DIMS.has(dim.key)
-          ? <SeasonColumns rows={rows} m={m} onPick={pick} activeVal={active} />
-          : <ColumnChart rows={rows} m={m} onPick={pick} activeVal={active} />)}
-        {viz === 'repeat'  && <RepeatOffenders rows={rows} m={m} onPick={pick} activeVal={active} />}
-        {viz === 'table'   && <RankTable rows={rows} onPick={pick} activeVal={active} />}
-        {viz === 'value'   && <ValueBars rows={rows} m={m} onPick={pick} activeVal={active} />}
-        {viz === 'ordinal' && <ValueBars rows={rows} m={m} onPick={pick} activeVal={active} ordered />}
-        {viz === 'map'     && <WorldMap rows={rows} m={m} onPick={pick} activeVal={active} />}
-        {viz === 'heat'    && <HeatGrid rows={rows} m={m} onPick={pick} activeVal={active} />}
-        {!['donut', 'share', 'stacked', 'table', 'heat', 'map', 'hbar', 'column',
-           'value', 'ordinal', 'repeat'].includes(viz) && (
-          <SegmentBars rows={rows} m={m} activeVal={active} onPick={pick} />
-        )}
+        {/* The panel's chart, drawn by whichever engine is selected — or by the
+            components in this file, which is what `builtIn` is and what every
+            engine falls back to.
+
+            A panel with NO form is not handed to EngineChart at all. That is
+            not the same as handing it one and letting it decline: a spec has to
+            name a shape, and any shape it named would be one the engines claim,
+            so the world map would come back as a bar chart of country names. */}
+        {/* An empty panel is also the built-in's job. Every component in this
+            file says "No data." in the card; an engine handed no rows draws an
+            empty plot with an axis on it, which reads as a chart that failed
+            rather than as a window with nothing in it. */}
+        {form && rows.length > 0
+          ? <EngineChart engine={engine} fallback={builtIn}
+              spec={dimSpec(form, rows, {
+                m, dark: isDark, height: dimHeight(form, rows.length),
+                onPick: pick, activeVal: active,
+                // `share` and `ordinal` are the two ordered breakdowns: bucket
+                // sequences, coloured by a one-hue ramp in their own order.
+                ordered: viz === 'share' || viz === 'ordinal',
+              })} />
+          : builtIn}
       </Card>
     )
   }
@@ -5006,8 +5258,14 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
               /* No figure in this result set — a platform whose tables COULD
                  produce this metric but whose run did not. The tile still
                  draws, because the layout put it here; an em dash is the
-                 honest value and hiding the card is the layout's call. */
-              : <Kpi label={label} value="—" foot="No figure for this period"
+                 honest value and hiding the card is the layout's call.
+
+                 It said "No figure for this period" underneath, and that line
+                 went with every other tile footnote. The em dash carries it
+                 alone now: it is the mark for "no value", it is visibly not a
+                 zero, and it is the same mark this report uses for an absent
+                 figure everywhere else. */
+              : <Kpi label={label} value="—"
                   accent={m.identSoft} icon={metric} info={p.desc} />}
           </div>
         )
@@ -5098,8 +5356,29 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             table={<DataTable head={td.head} rows={td.rows}
               onPick={pickPeriod} activeVal={drilled ? drill!.label : ''}
               pickValues={td.pickValues} />}>
-            <Trend data={rows} m={m} firstName={first} secondName={second} mode={trendMode}
-              onPick={pickPeriod} />
+            {/* Two things happen here.
+
+                "Automatic" is resolved BEFORE the engine sees it: the rule —
+                columns for a dozen periods or fewer, an area for more — is this
+                report's, not a library's, and an engine that had to be told
+                about it would be told four times. The built-in Trend still
+                takes the raw mode, because resolving `auto` is its own job.
+
+                And under two periods nothing is delegated at all. The built-in
+                says so in words there — "no dated rows in this range", or the
+                single period's figure with an invitation to widen the window —
+                where any engine would draw an axis with one dot on it. */}
+            {rows.length < 2
+              ? <Trend data={rows} m={m} firstName={first} secondName={second}
+                  mode={trendMode} onPick={pickPeriod} />
+              : <EngineChart engine={engine}
+                  fallback={<Trend data={rows} m={m} firstName={first} secondName={second}
+                    mode={trendMode} onPick={pickPeriod} />}
+                  spec={trendSpec(
+                    trendForm(trendMode, rows.length), rows,
+                    [{ key: 'urls', name: first, color: m.ident },
+                     { key: 'removed', name: second, color: m.removed }],
+                    { m, dark: isDark, height: 190, onPick: pickPeriod })} />}
           </Card>
         )
       }
@@ -5122,7 +5401,18 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             table={<DataTable head={rateTd.head} rows={rateTd.rows}
               onPick={pickPeriod} activeVal={drilled ? drill!.label : ''}
               pickValues={rateTd.pickValues} />}>
-            <RateTrend data={trend} m={m} mode={rateMode} onPick={pickPeriod} />
+            {/* Same rule as the trend beside it: a rate needs two periods to be
+                a rate, and the built-in is the one that says so. */}
+            {trend.length < 2
+              ? <RateTrend data={trend} m={m} mode={rateMode} onPick={pickPeriod} />
+              : <EngineChart engine={engine}
+                  fallback={<RateTrend data={trend} m={m} mode={rateMode} onPick={pickPeriod} />}
+                  spec={trendSpec(
+                    trendForm(rateMode, trend.length), trend,
+                    // One series, and it is a percentage — which is why the rate
+                    // has a card of its own rather than a second axis on the trend.
+                    [{ key: 'rate', name: 'Removal rate', color: m.removed }],
+                    { m, dark: isDark, height: 210, suffix: '%', onPick: pickPeriod })} />}
           </Card>
         )
       }
@@ -5353,6 +5643,11 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         {/* Both to the right, in one group. "Export" takes the report away and
             "Arrange" changes what the report IS — neither is a question about
             what is on screen, which is what the filter rail is for. */}
+        {/* No appearance control here. Which library draws the charts and which
+            palette they are drawn in are set per client in Report Configuration
+            → Appearance, and arrive with the section list; a reader's own switch
+            would let two people read the same page in colours that mean
+            different things. */}
         <span className="ml-auto flex items-center gap-2">
         {section && (
           <button type="button" onClick={exportReport} disabled={loading || !data}

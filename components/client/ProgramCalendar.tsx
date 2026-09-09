@@ -371,19 +371,18 @@ function paletteCss(count: number): string {
     light += `--c${i}:${slot(i).light};--c${i}-t:${slot(i).light}1F;`
     dark += `--c${i}:${slot(i).dark};--c${i}-t:${slot(i).dark}33;`
   }
-  /* The two STATE pills are variables for the same reason the categories are:
-     "Soon" was navy ink on a navy tint, which is invisible on the dark card's
-     own navy ground, and "Running" was a dark brown that reads as a smudge
-     there. An inline style cannot carry a `dark:` variant; a variable can. */
+  /* The "Upcoming" pill is a variable for the same reason the categories are:
+     it is navy ink on a navy tint, which is invisible on the dark card's own
+     navy ground. An inline style cannot carry a `dark:` variant; a variable
+     can. (`--cal-soon-*` keeps its name — the pill is the same one, said in a
+     better word.) */
   return `
 .ipcal{${light}--cal-ink:${NAVY};
   --cal-soon-bg:${NAVY}14;--cal-soon-fg:${NAVY};
-  --cal-run-bg:#FFC82B33;--cal-run-fg:#8a5a00;
   --cal-now-bg:${ORANGE}26;--cal-now-fg:#a55a13;
   --cal-war:#8a5a00;--cal-war-bg:#FFC82B33}
 .dark .ipcal{${dark}--cal-ink:#fff;
   --cal-soon-bg:#8FB4F229;--cal-soon-fg:#CFE0FB;
-  --cal-run-bg:#FFC82B2E;--cal-run-fg:#FFD979;
   --cal-now-bg:${ORANGE}2E;--cal-now-fg:#FFC79B;
   --cal-war:#FFC82B;--cal-war-bg:#FFC82B2E}
 `
@@ -392,15 +391,23 @@ function paletteCss(count: number): string {
 /**
  * Every category on the calendar, with the slot that colours it.
  *
- * Ranked by TITLE COUNT over the WHOLE row set, never over the filtered view.
- * Colour follows the category, not its rank in what happens to be on screen —
- * so narrowing to one genre must not repaint the categories that survive, which
- * is exactly what ranking the filtered set would do.
+ * Ranked by TITLE COUNT, and NEVER over the reader's filtered view: colour
+ * follows the category, not its rank in what happens to be selected, so
+ * narrowing to one genre must not repaint the categories that survive.
+ *
+ * It IS ranked over the month on screen, which is a different thing and not a
+ * filter — the card cannot be paged off that month, so the ranking is as fixed
+ * as the grid is. Ranked over the whole catalogue instead, the eight hues went
+ * to the eight biggest genres in the client's booking history and every
+ * category outside that top eight wore the neutral: a month holding MMA and
+ * Movies drew both of them grey, indistinguishable, with six hues unused.
+ *
+ * Takes the categories rather than the rows, so the caller decides which set is
+ * being coloured and this cannot silently be handed the wrong one.
  */
-function buildCategories(rows: AssetRow[]): Map<string, number> {
+function buildCategories(cats: string[]): Map<string, number> {
   const counts = new Map<string, number>()
-  for (const a of rows) {
-    const c = catOf(a)
+  for (const c of cats) {
     counts.set(c, (counts.get(c) ?? 0) + 1)
   }
   const ranked = Array.from(counts.entries())
@@ -453,21 +460,24 @@ export default function ProgramCalendar({ onLoadingChange }: {
 
   const [cat, setCat] = useState<string>('all')
   const [genre, setGenre] = useState<string>('all')
-  /* Narrowing to the War Room set. Held apart from `cat`/`genre` rather than
-     folded in as another category value, because it is a different question —
-     it can be asked WITH a genre, not instead of one. */
-  const [warOnly, setWarOnly] = useState(false)
   const [q, setQ] = useState('')
-  /* The month on screen. One at a time: a pair fit the "current and last month"
-     brief literally and read as two half-size calendars competing for the same
-     glance, with every cell too narrow to hold a title. One month at full width
-     is the month you are actually looking at, and ‹ › reaches last month in a
-     click — which is what the pair was really for. */
-  const [anchor, setAnchor] = useState<number | null>(null)
   const [day, setDay] = useState<number | null>(null)
   const [open, setOpen] = useState<Occ | null>(null)
 
   const today = useMemo(nowDay, [])
+
+  /* ── THE MONTH ON SCREEN, AND THERE IS ONLY ONE ─────────────────────
+
+     Held as state once, with a ‹ › pair and a Today button that reached any
+     month in the catalogue. It is not state now, and the difference is the
+     whole point of this card: it sits on the welcome page to answer what is
+     happening NOW, and a reader who paged forward to March 2031 and came back
+     to the tab an hour later was looking at a calendar that no longer answered
+     it — with nothing on screen to say so except a month name.
+
+     Derived from `today` rather than stored, so there is no month for the rest
+     of the card to get out of step with. */
+  const anchor = useMemo(() => startOfMonth(today), [today])
 
   /* The card sizes itself to what is left of the screen — see useFitHeight.
      `rows` is a dependency because the page above draws a loader until the
@@ -534,17 +544,6 @@ export default function ProgramCalendar({ onLoadingChange }: {
     return () => { live = false }
   }, [])
 
-  /* THE CURRENT MONTH, on the right, with last month on its left. Not the
-     newest month holding data, which is what this used to open on: that reads
-     as "here is the calendar" while showing 2032, and the question the page is
-     actually asked on arrival is what is happening now. Where those two months
-     are empty the grid says so and offers the jump — see the empty note below. */
-  useEffect(() => {
-    if (anchor === null) setAnchor(startOfMonth(today))
-  }, [anchor, today])
-
-  const slots = useMemo(() => buildCategories(rows ?? []), [rows])
-
   const all = useMemo(() => {
     if (!rows) return { occs: [] as Occ[], undated: [] as AssetRow[] }
     const occs: Occ[] = []
@@ -557,6 +556,30 @@ export default function ProgramCalendar({ onLoadingChange }: {
   }, [rows, today])
 
   /*
+    THIS MONTH'S occurrences, and nothing else.
+
+    The card shows one month and cannot be paged off it — see `anchor` — so
+    "what this calendar is about" is exactly the titles placed inside it: the
+    ones whose StartDate falls in the month, plus the ones with no StartDate
+    whose ReleaseDate does. occurrenceOf has already made that choice per title;
+    this is only the window.
+
+    Deliberately NOT filtered by the reader's own cat / genre / search
+    selections. The legend is built from this and every swatch in it is a
+    filter, so narrowing the source by the current selection would delete the
+    other swatches — and with them the way back.
+  */
+  const monthOccs = useMemo(() => {
+    const to = addMonths(anchor, 1)
+    return all.occs.filter(o => o.day >= anchor && o.day < to)
+  }, [all.occs, anchor])
+
+  /* The eight hues, allocated over the categories THIS MONTH actually draws —
+     see buildCategories. Declared after monthOccs because it reads it, and
+     before the varOf / tintOf helpers below, which read this. */
+  const slots = useMemo(() => buildCategories(monthOccs.map(o => o.cat)), [monthOccs])
+
+  /*
     ── THE LEGEND ──────────────────────────────────────────────────────────
 
     Genre, with its sub-genres beneath it. The COLOUR is on the sub-genre where
@@ -565,18 +588,27 @@ export default function ProgramCalendar({ onLoadingChange }: {
     a swatch in the legend always corresponds to marks that are actually on the
     calendar.
 
-    WHERE AN ASSET HAS SEVERAL GENRES its sub-genres are listed under each of
-    them, because the API returns the two as independent flat sets and there is
-    nothing in the payload saying which sub-genre hangs under which genre. That
-    is a real limit, not a rounding error; it is invisible on the current data,
-    where no asset carries more than one genre.
+    COUNTED OVER THE MONTH ON SCREEN, not the catalogue.
+
+    It read the whole of `rows`, so the figures beside the swatches described
+    the client's entire booking history while the grid under them drew one
+    month: "SPORTS 1,650" over a September holding a few dozen fixtures, and
+    "Sports 1,297 · Football 227 · Boxing 78 …" under a heading whose own total
+    no reader could reconcile with anything visible. It also counted the titles
+    that carry NO usable date at all — 487 of DAZN's catalogue when this was
+    measured — which can appear on no month's grid by definition.
+
+    A legend is a key to the marks beside it. A count in one that cannot be
+    arrived at by looking is not a smaller version of the truth, it is a
+    different subject, and the one number a reader will try to check first.
   */
   const legend = useMemo(() => {
-    if (!rows) return [] as Array<{ genre: string; titles: number; cats: Array<{ cat: string; titles: number }> }>
     const acc = new Map<string, { titles: number; cats: Map<string, number> }>()
-    for (const a of rows) {
-      const gs = splitSet(a.Genre)
-      const c = catOf(a)
+    for (const o of monthOccs) {
+      const gs = splitSet(o.a.Genre)
+      // The occurrence already carries the category it was placed under, so the
+      // legend and the chip can never disagree about which swatch a title wears.
+      const c = o.cat
       for (const g of gs.length > 0 ? gs : [UNTAGGED]) {
         let e = acc.get(g)
         if (!e) { e = { titles: 0, cats: new Map() }; acc.set(g, e) }
@@ -596,25 +628,21 @@ export default function ProgramCalendar({ onLoadingChange }: {
          gap in the data rather than a category, so it should not head a list of
          real ones just because it happens to be large. */
       .sort((x, y) => (x.genre === UNTAGGED ? 1 : y.genre === UNTAGGED ? -1 : y.titles - x.titles))
-  }, [rows])
+  }, [monthOccs])
 
   /* How many genre blocks are drawn: one grid row when collapsed, all of them
      when the reader opens it. Placed after `legend` because it is a fact about
      that list, not about the state above. */
   const legendShown = legendOpen ? legend.length : Math.min(legend.length, legendCols)
 
-  /** War Room titles in the whole catalogue — counted over rows, not marks. */
-  const warTitles = useMemo(() => (rows ?? []).filter(isWarRoom).length, [rows])
-
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase()
     return all.occs.filter(o =>
-      (!warOnly || o.war) &&
       (cat === 'all' || o.cat === cat) &&
       (genre === 'all' || splitSet(o.a.Genre).includes(genre) ||
         (genre === UNTAGGED && splitSet(o.a.Genre).length === 0)) &&
       (!needle || (o.a.AssetName || '').toLowerCase().includes(needle)))
-  }, [all.occs, cat, genre, q, warOnly])
+  }, [all.occs, cat, genre, q])
 
 
   /* Everything that STARTS on a given day, for every day either grid can show.
@@ -634,19 +662,9 @@ export default function ProgramCalendar({ onLoadingChange }: {
 
   /** How many of the shown titles start in the month on screen. */
   const inView = useMemo(() => {
-    if (anchor === null) return 0
     const to = addMonths(anchor, 1)
     return shown.filter(o => o.day >= anchor && o.day < to).length
   }, [shown, anchor])
-
-  /* The nearest month that actually holds something, for the empty state's
-     offer. Most of this data is historical, so a client opening on a quiet
-     fortnight would otherwise be looking at an empty grid with no way to tell
-     an empty month from a broken page. */
-  const busiest = useMemo(() => {
-    if (shown.length === 0) return null
-    return startOfMonth(shown.reduce((m, o) => (o.day > m ? o.day : m), shown[0].day))
-  }, [shown])
 
   const dayItems = day === null ? [] : (byDay.get(day) ?? [])
 
@@ -678,18 +696,21 @@ export default function ProgramCalendar({ onLoadingChange }: {
       {/* ── Header ───────────────────────────────────────────────────────── */}
       <div className="flex-shrink-0 px-5 sm:px-6 pt-4 pb-3 border-b border-gray-100 dark:border-white/10
         flex flex-wrap items-start justify-between gap-3">
+        {/* The name, and nothing under it.
+
+            The running total that used to sit here — catalogue size, this
+            month's count, the undated tail — was three figures about the DATA
+            SET on a card whose job is one month. The month's own count is
+            already in the grid, on the day it belongs to, and the month is
+            named at the head of the grid rather than twice. */}
         <div className="min-w-0">
           <h2 className="text-[15px] font-extrabold text-[#14254A] dark:text-white leading-none">
             Programme calendar
           </h2>
-          <p className="text-[11.5px] text-gray-500 dark:text-white/50 mt-2">
-            <b className="text-[#14254A] dark:text-white">{(rows?.length ?? 0).toLocaleString()}</b> titles
-            <Dot /> <b className="text-[#14254A] dark:text-white">{inView.toLocaleString()}</b> starting
-            {anchor !== null ? ` in ${monthLabel(anchor)}` : ' this month'}
-            {all.undated.length > 0 && <><Dot /> {all.undated.length.toLocaleString()} undated</>}
-          </p>
         </div>
 
+        {/* Search is all that is left on this side. The ‹ Today › group went
+            with the month state — see the note on `anchor`. */}
         <div className="flex items-center gap-2">
           <div className="relative">
             <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" width="12" height="12"
@@ -701,17 +722,6 @@ export default function ProgramCalendar({ onLoadingChange }: {
               className="h-8 w-[140px] focus:w-[210px] rounded-lg border border-gray-200 dark:border-white/15
                 bg-transparent pl-7 pr-2 text-[12px] text-[#14254A] dark:text-white placeholder:text-gray-400
                 outline-none focus:border-[#FC934C] transition-all" />
-          </div>
-          <div className="flex items-center gap-1">
-            <NavBtn onClick={() => { if (anchor !== null) { setAnchor(addMonths(anchor, -1)); setDay(null) } }}
-              label="Earlier months">‹</NavBtn>
-            <button onClick={() => { setAnchor(startOfMonth(today)); setDay(null) }}
-              className="h-8 px-3 rounded-lg border border-gray-200 dark:border-white/15 text-[12px]
-                font-bold text-[#14254A] dark:text-white hover:bg-gray-50 dark:hover:bg-white/5 transition">
-              Today
-            </button>
-            <NavBtn onClick={() => { if (anchor !== null) { setAnchor(addMonths(anchor, 1)); setDay(null) } }}
-              label="Later months">›</NavBtn>
           </div>
         </div>
       </div>
@@ -738,67 +748,14 @@ export default function ProgramCalendar({ onLoadingChange }: {
            takes the month down to bare numbers. */
         <div className="flex-shrink-0 px-5 sm:px-6 py-2.5 border-b border-gray-100 dark:border-white/10
           bg-gray-50/60 dark:bg-black/10 overflow-hidden">
-          {/* One ROW per genre, its name at the head of its own sub-genres.
+          {/* No "All" chip and no caption above the genres, and no War Room row
+              above them either.
 
-              Laid out as rows rather than as side-by-side columns, which is what
-              this was and what made it unreadable: a genre holding seven
-              sub-genres and one holding a single sub-genre became columns of
-              wildly different widths, so the genre names ended up strung across
-              the top of the block nowhere near the swatches they name. A row
-              keeps a genre and its colours on the same line as each other. */}
+              Nothing is lost with the chip: every genre heading and every
+              swatch below is a TOGGLE — clicking the active one clears it — so
+              the way back to the whole catalogue is the control that narrowed
+              it, which is where a reader looks for it anyway. */}
           <div className="space-y-1.5">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <button onClick={() => { setGenre('all'); setCat('all'); setWarOnly(false) }}
-                className={`text-[10px] font-extrabold uppercase tracking-[0.08em] px-2 py-1 rounded-md transition-colors
-                  ${genre === 'all' && cat === 'all' && !warOnly
-                    ? 'bg-[#14254A] text-white dark:bg-white/20'
-                    : 'text-gray-400 dark:text-white/40 hover:text-[#14254A] dark:hover:text-white'}`}>
-                All {(rows?.length ?? 0).toLocaleString()}
-              </button>
-              <span className="text-[10px] text-gray-400 dark:text-white/30">
-                colour is the sub-genre, or the genre where a title carries none
-              </span>
-            </div>
-
-            {/* War Room, on its own line above the genres.
-
-                ABOVE them, and separated, because it is not one of them: it is
-                a flag that any genre's title can carry, so listing it among
-                Sports and Movies would read as a fourth genre a title is filed
-                under instead of a second thing that is true of it.
-
-                Shown even at nought. The column was 0 on every row of the first
-                catalogue this was measured against, so "there are none" is a
-                real and useful answer here — and hiding the row would leave a
-                reader unable to tell it from a calendar that had never heard of
-                War Room. */}
-            {rows !== null && (
-              <div className="flex flex-wrap items-center gap-x-1 gap-y-1 pb-1.5 mb-0.5
-                border-b border-gray-200/70 dark:border-white/10">
-                <span className="w-[104px] flex-shrink-0 text-[10px] font-extrabold uppercase
-                  tracking-[0.08em] text-gray-400 dark:text-white/40">Tracking</span>
-                <button
-                  onClick={() => { if (warTitles > 0) setWarOnly(v => !v) }}
-                  disabled={warTitles === 0}
-                  title={warTitles === 0
-                    ? 'No title in this catalogue is flagged as a War Room asset (IsWarRoom).'
-                    : `${warTitles.toLocaleString()} War Room title${warTitles === 1 ? '' : 's'} — a mark on the chip, not a colour, so a title still shows its own genre`}
-                  className={`inline-flex items-center gap-1.5 rounded-md border px-1.5 py-[3px]
-                    text-[10.5px] leading-none transition-colors ${warTitles === 0
-                      ? 'border-transparent opacity-50 cursor-default'
-                      : warOnly
-                        ? 'border-[#14254A] dark:border-white/50'
-                        : 'border-transparent hover:border-gray-200 dark:hover:border-white/15'}`}
-                  style={{ background: warOnly ? 'var(--cal-war-bg)' : undefined }}>
-                  <WarMark />
-                  <span className="font-bold text-[#14254A] dark:text-white/85">{WAR_ROOM}</span>
-                  <span className="font-bold tabular-nums text-gray-400 dark:text-white/35">
-                    {warTitles.toLocaleString()}
-                  </span>
-                </button>
-              </div>
-            )}
-
             {/*
                 ── GENRES SIDE BY SIDE, NOT STACKED ────────────────────────
 
@@ -878,11 +835,9 @@ export default function ProgramCalendar({ onLoadingChange }: {
           under the grid below xl, where 320px of rail would leave the month too
           narrow to hold a title. */}
       <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px]">
-        {anchor !== null && (
-          <MonthGrid month={anchor} today={today} byDay={byDay} selected={day}
-            onPickDay={ts => setDay(day === ts ? null : ts)} onPickOcc={setOpen}
-            varOf={varOf} tintOf={tintOf} />
-        )}
+        <MonthGrid month={anchor} today={today} byDay={byDay} selected={day}
+          onPickDay={ts => setDay(day === ts ? null : ts)} onPickOcc={setOpen}
+          varOf={varOf} tintOf={tintOf} />
 
         {/* Beside the grid on a wide screen, UNDER it on a narrow one — and
             below xl it only exists once a day has been picked.
@@ -976,25 +931,28 @@ export default function ProgramCalendar({ onLoadingChange }: {
         </div>
       </div>
 
-      {/* Nothing in either month. Said, with the jump — an empty grid on a page
-          somebody just opened is indistinguishable from a page that failed. */}
+      {/* Nothing this month. Still said out loud — an empty grid on a page
+          somebody just opened is indistinguishable from a page that failed —
+          but with no jump under it: the card shows this month, and offering a
+          button out of it would be the month navigation coming back through a
+          side door.
+
+          The second line separates the two reasons a month can be empty, which
+          is the whole value of saying anything: a catalogue dated elsewhere is
+          a normal quiet month, a catalogue with no dates at all is something to
+          raise. Measured over the WHOLE occurrence set rather than the filtered
+          one, so a search with no hits does not report the catalogue as
+          undated. */}
       {inView === 0 && (
         <div className="px-5 sm:px-6 py-6 text-center border-t border-gray-100 dark:border-white/10">
           <p className="text-[12.5px] font-bold text-[#14254A] dark:text-white/80">
-            Nothing starts in {anchor === null ? 'this month' : monthLabel(anchor)}
+            Nothing starts in {monthLabel(anchor)}
           </p>
           <p className="text-[11.5px] text-gray-400 dark:text-white/40 mt-1">
-            {busiest !== null
+            {all.occs.length > 0
               ? 'Most of this catalogue is dated elsewhere.'
               : 'No title in this catalogue carries a start or release date.'}
           </p>
-          {busiest !== null && (
-            <button onClick={() => { setAnchor(busiest); setDay(null) }}
-              className="mt-2.5 h-8 px-3 rounded-lg border border-gray-200 dark:border-white/15 text-[12px]
-                font-bold text-[#14254A] dark:text-white hover:bg-gray-50 dark:hover:bg-white/5 transition">
-              Go to {monthLabel(busiest)}
-            </button>
-          )}
         </div>
       )}
 
@@ -1004,8 +962,6 @@ export default function ProgramCalendar({ onLoadingChange }: {
 }
 
 /* ── Pieces ───────────────────────────────────────────────────────────────── */
-
-const Dot = () => <span className="mx-1 text-gray-300 dark:text-white/20">·</span>
 
 /**
  * One month, as a Teams-style grid.
@@ -1188,16 +1144,6 @@ function MonthGrid({ month, today, byDay, selected, onPickDay, onPickOcc, varOf,
   )
 }
 
-function NavBtn({ children, onClick, label }: { children: React.ReactNode; onClick: () => void; label: string }) {
-  return (
-    <button onClick={onClick} aria-label={label}
-      className="w-8 h-8 rounded-lg border border-gray-200 dark:border-white/15 text-[17px] leading-none
-        text-[#14254A] dark:text-white hover:bg-gray-50 dark:hover:bg-white/5 transition flex-shrink-0">
-      {children}
-    </button>
-  )
-}
-
 /**
  * One category in the legend: its colour, its name, its count.
  *
@@ -1243,15 +1189,27 @@ function WarMark() {
   )
 }
 
+/**
+ * "Upcoming", on the titles that have not started yet — and nothing at all on
+ * the rest.
+ *
+ * It used to mark all three states: "Soon" ahead of a start, "Running" between
+ * a start and an end, nothing once past. Two of those three were noise. A title
+ * sitting on a day in the CURRENT month is running by definition, and one on a
+ * day already gone is past by definition — the cell the row is in has already
+ * said so, and repeating it on every row of every day turned the panel into a
+ * column of identical yellow chips saying what the date said.
+ *
+ * What is left is the one state the date cannot tell you on its own: this has
+ * not begun. `running` and `past` are still computed — the detail card and the
+ * coverage arrow both read them — they are simply no longer announced.
+ */
 function StatePill({ state }: { state: State }) {
-  if (state === 'past') return null
-  const on = state === 'running'
+  if (state !== 'upcoming') return null
   return (
     <span className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded flex-shrink-0"
-      style={on
-        ? { background: 'var(--cal-run-bg)', color: 'var(--cal-run-fg)' }
-        : { background: 'var(--cal-soon-bg)', color: 'var(--cal-soon-fg)' }}>
-      {on ? 'Running' : 'Soon'}
+      style={{ background: 'var(--cal-soon-bg)', color: 'var(--cal-soon-fg)' }}>
+      Upcoming
     </span>
   )
 }
@@ -1263,7 +1221,6 @@ function AssetModal({ occ, onClose, colour }: { occ: Occ; onClose: () => void; c
     truthy(a.IsGlobal) && 'Global',
     truthy(a.IsCountrySpecific) && 'Country-specific',
   ].filter(Boolean) as string[]
-  const stateWord = occ.state === 'upcoming' ? 'Upcoming' : occ.state === 'running' ? 'Running' : 'Past'
 
   return (
     <div onClick={onClose}
@@ -1280,8 +1237,13 @@ function AssetModal({ occ, onClose, colour }: { occ: Occ; onClose: () => void; c
                 <span className="w-2 h-2 rounded-[3px]" style={{ background: colour }} />
                 {occ.cat}
               </span>
-              <span className="text-[10.5px] font-extrabold px-2.5 py-0.5 rounded-full
-                bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-white/70">{stateWord}</span>
+              {/* Same rule as the list behind this card: only the state a date
+                  cannot tell you. "Running" and "Past" are restatements of the
+                  dates printed two rows below. */}
+              {occ.state === 'upcoming' && (
+                <span className="text-[10.5px] font-extrabold px-2.5 py-0.5 rounded-full
+                  bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-white/70">Upcoming</span>
+              )}
               {occ.war && (
                 <span className="inline-flex items-center gap-1.5 text-[10.5px] font-extrabold
                   px-2 py-0.5 rounded-full"

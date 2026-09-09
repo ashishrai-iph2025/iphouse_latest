@@ -1309,12 +1309,18 @@ export default function RealtimeCard({
      a report about one competition, where fourteen rows of nothing bury the
      three that moved.
 
-     A count of what was hidden goes under the grid, because a list that
-     silently changes length is the failure the war room's rule exists to avoid
-     — it is only acceptable here if the card says it happened. */
+     WHAT WAS HIDDEN IS NOT REPORTED. A count of it used to go under the grid,
+     on the reasoning that a list which silently changes length is the failure
+     the war room's rule exists to avoid, so hiding the empties was only
+     acceptable if the card said it happened. That line is gone by request, and
+     the reasoning it stood on goes with it rather than being left half-applied:
+     the sports card is read for what was found, and the roster of platforms
+     being watched is configuration rather than a finding of this window.
+
+     The war room still keeps its zeroes, which is the part that actually
+     mattered — there, "watched, found nothing" IS the finding. */
   const hidesEmpty = view === 'sports'
   const platforms = hidesEmpty ? allPlatforms.filter(p => p.count > 0) : allPlatforms
-  const hidden = allPlatforms.length - platforms.length
 
   /* EVERY platform, always, each in its own cell.
 
@@ -1329,9 +1335,14 @@ export default function RealtimeCard({
 
      Thirteen cells across a five-column grid is three short rows, so showing
      them all costs almost nothing in height. */
-  // Bars are relative to the busiest platform, not to the total: with one
-  // platform holding most of the volume, shares of the total would render every
-  // other bar as an invisible sliver.
+  /* The busiest platform, for the volume bars.
+
+     Only reached where the view does NOT count removals — see the bar itself
+     for why. Relative to the busiest platform rather than to the total, because
+     with one platform holding most of the volume a share of the total renders
+     every other bar as an invisible sliver. Which, it turned out, is what
+     happened to the removal split drawn inside these lengths, and is why the
+     two readings no longer share a bar. */
   const peak = Math.max(1, ...platforms.map(p => p.count))
 
   /* Whether this reading CARRIES removals at all.
@@ -1567,19 +1578,34 @@ export default function RealtimeCard({
             /* UNDER the identified total, not beside it, and DIRECTLY under it.
 
                Side by side they read as two independent figures a reader has to
-               relate themselves. Stacked, with the share bar between them, the
-               smaller number reads as what it is: a part of the one above it —
-               which is only true while nothing sits between them. The window
-               and the three slicers used to, so the pair the card exists to
-               show was split by half a column of controls; they are grouped
-               below now, and this is back against the figure it belongs to.
+               relate themselves. Stacked, with the share bar between them, this
+               number reads as what it is: a part of the one above it — which is
+               only true while nothing sits between them. The window and the
+               three slicers used to, so the pair the card exists to show was
+               split by half a column of controls; they are grouped below now,
+               and this is back against the figure it belongs to.
+
+               SET IN THE SAME TYPE AS THE IDENTIFIED TOTAL — same size, weight,
+               tracking and tabular figures. It was a step smaller, on the
+               reasoning that the subordinate figure should look subordinate;
+               the position and the rule above it already say that, and two
+               sizes made the pair read as a headline with a footnote rather
+               than as the two halves of one measure. Any change to the type
+               above belongs here too.
 
                Orange is removed and navy is identified throughout this product —
                the same two roles the report's own charts use — so the bar needs
                no words to be read the right way round. */
             <div className="mt-2.5 pt-2.5 border-t border-gray-100 dark:border-white/10">
-              <p className="flex items-baseline gap-2">
-                <span className="text-lg font-bold tabular-nums leading-none text-[#FC934C]">
+              {/* WRAPS AS A WHOLE, which matters now the figure is full size.
+                  In the card's 262px column "de-indexed / removed · 74%" no
+                  longer fits beside a text-3xl number, and without this it broke
+                  mid-phrase into a two-line sliver ("de-indexed /" over
+                  "removed · 74%"). Allowed to wrap, the label drops below the
+                  number and gets the full width; a short one ("removed") still
+                  sits on the baseline beside it. */}
+              <p className="flex items-baseline gap-2 flex-wrap">
+                <span className="text-3xl font-bold tabular-nums tracking-tight leading-none text-[#FC934C]">
                   {nf.format(removed)}
                 </span>
                 {/* The same word the bars below use, and for the same reason:
@@ -1664,13 +1690,22 @@ export default function RealtimeCard({
         <div className={`flex-1 min-w-0 px-5 py-4 transition-opacity duration-300 ${
           stale ? 'opacity-60' : busy ? 'opacity-40' : ''}`}>
           {platforms.length === 0 ? (
-            /* Nothing to draw, for one of two very different reasons. "Nothing
-               found yet" is a report about the window; "no platforms are
-               configured" is a report about the setup, and the reader can only
-               act on the second. */
+            /* Nothing to draw, for one of two very different reasons. An empty
+               RANGE is the ordinary one and says so in one line; NO PLATFORMS
+               CONFIGURED is a report about the setup, and it keeps its own
+               wording because it is the only one of the two a reader can act on
+               — folded into "no data" it would read as a quiet week and the
+               missing configuration would never be chased.
+
+               The empty-range line used to count the platforms it had looked at
+               ("Nothing found on any of the 15 platforms watched in this
+               range"), with a second line under the grid repeating the same
+               fifteen as "watched with nothing found — hidden". Both are gone;
+               neither the empty state nor a populated one reports the roster
+               now. */
             <p className="text-sm text-gray-400">
               {allPlatforms.length > 0
-                ? `Nothing found on any of the ${allPlatforms.length} platforms watched in this range.`
+                ? 'No data found for the selected date range.'
                 : 'No platforms are configured for this view.'}
             </p>
           ) : (
@@ -1687,6 +1722,17 @@ export default function RealtimeCard({
                    a full bar, which hides it. */
                 const rem = typeof p.removed === 'number' ? Math.min(p.removed, p.count) : null
                 const share = rem !== null && p.count > 0 ? Math.round((rem / p.count) * 100) : 0
+                /* The bar's own share, UNROUNDED and with a floor.
+
+                   Rounded, a platform with one removal out of twenty-six
+                   thousand draws a 0%-wide mark — nothing — under a caption
+                   that says one was removed. The floor is the standard
+                   minimum-mark convention: past a couple of pixels the eye
+                   cannot read the difference anyway, and "some came down" is
+                   the signal that must survive. The exact figure is printed
+                   underneath either way. */
+                const exact = rem !== null && p.count > 0 ? (rem / p.count) * 100 : 0
+                const fill = rem !== null && rem > 0 ? Math.max(2, exact) : exact
                 return (
                   <div key={p.key}
                     title={`${p.label} — ${nf.format(p.count)} identified${
@@ -1704,25 +1750,56 @@ export default function RealtimeCard({
                         {nf.format(p.count)}
                       </span>
                     </div>
-                    {/* The bar's LENGTH is still this platform's share of the
-                        busiest one — that is what makes the grid scannable — and
-                        removals are drawn INSIDE it rather than as a second bar,
-                        so the two are read as parts of one figure. Where nothing
-                        answered on removals the bar stays one colour, exactly as
-                        it was before this existed. */}
+                    {/* ── WHAT THE BAR MEASURES, AND WHY IT CHANGED ────────
+
+                        It used to be VOLUME — this platform's count against the
+                        busiest platform's — with the removal split drawn inside
+                        that length. On a real reading that made the split
+                        unreadable on every row but one. Open Web holds 26,613
+                        of 27,294; against that peak, Telegram's 240 is a bar
+                        nine tenths of one percent wide, and a 45% removal
+                        inside nine tenths of a percent is a fraction of a
+                        pixel. Every platform bar on the card except the biggest
+                        was a coloured speck, and the removal figures underneath
+                        them were the only place the reading existed at all.
+
+                        So where the view answers on removals, the bar measures
+                        THE REMOVAL SHARE and spans the whole cell. That is the
+                        one thing on this card that IS comparable between a
+                        platform with 26,613 and one with 15 — volume is not, and
+                        volume is already carried twice over: by the figure in
+                        bold beside the name, and by the order, which runs
+                        busiest first.
+
+                        Where the view does not count removals at all — the war
+                        room is one — there is no share to draw and the bar goes
+                        back to being volume against the peak, which is then the
+                        only thing it can honestly say. */}
                     <div className="mt-1 h-1 rounded-full bg-gray-100 dark:bg-white/10 overflow-hidden">
-                      <div className="h-full rounded-full flex overflow-hidden transition-[width] duration-500"
-                        style={{ width: `${Math.round((p.count / peak) * 100)}%` }}>
-                        {rem === null ? (
-                          <span className="h-full w-full bg-[#FC934C]" />
-                        ) : (
-                          <>
-                            <span className="h-full bg-[#FC934C]" style={{ width: `${share}%` }} />
-                            <span className="h-full bg-[#14254A]/25 dark:bg-white/30"
-                              style={{ width: `${100 - share}%` }} />
-                          </>
-                        )}
-                      </div>
+                      {!hasRemovals ? (
+                        /* Floored at 2%, for the same reason the removal fill
+                           is: against a peak of 26,613 a platform holding 240
+                           is nine tenths of one percent of the cell and draws
+                           as nothing, which reads as "found none" on a platform
+                           that found 240. Two percent is still visibly almost
+                           nothing, which is the truth. */
+                        <div className="h-full rounded-full bg-[#FC934C] transition-[width] duration-500"
+                          style={{ width: `${p.count > 0 ? Math.max(2, (p.count / peak) * 100) : 0}%` }} />
+                      ) : rem === null ? (
+                        /* This view counts removals and this platform did not
+                           answer on them. An empty track, because any fill here
+                           would be a claim: orange would read as removed and
+                           grey as active, and neither was measured. The
+                           caption below is absent for the same reason. */
+                        null
+                      ) : (
+                        <div className="h-full flex">
+                          <span className="h-full bg-[#FC934C] transition-[width] duration-500"
+                            style={{ width: `${fill}%` }} />
+                          <span className="h-full bg-[#14254A]/25 dark:bg-white/30"
+                            style={{ width: `${100 - fill}%` }} />
+                        </div>
+                      )}
                     </div>
                     {rem !== null && (
                       <p className="mt-0.5 text-[10px] tabular-nums text-gray-400 dark:text-white/40 truncate">
@@ -1739,15 +1816,19 @@ export default function RealtimeCard({
               are a colour scheme; with it they are a reading. Only where the
               view answered on removals — a legend for a series that is not on
               screen is worse than none. */}
-          {/* What the filter took. Without this the card is a list that quietly
-              changes length between refreshes — which is exactly the objection
-              the war room's keep-the-zeroes rule was written against, and the
-              one thing that makes hiding them safe here. */}
-          {hidden > 0 && (
-            <p className="mt-3 text-[10px] text-gray-400 dark:text-white/40">
-              {hidden} platform{hidden === 1 ? '' : 's'} watched with nothing found — hidden
-            </p>
-          )}
+          {/* NO "n platforms watched with nothing found — hidden" LINE.
+
+              It used to sit here, on the reasoning that a list which silently
+              changes length between refreshes is the thing the war room's
+              keep-the-zeroes rule exists to prevent, so hiding the empties was
+              only safe if the card admitted it. Removed by request: the card is
+              read for what was FOUND, and a reader watching one competition does
+              not need a running tally of the platforms that turned up nothing —
+              the platform roster is a matter of configuration, not of this
+              window's findings.
+
+              Nothing else depended on it, so the count itself is gone too rather
+              than left computed and unused — see the note beside `platforms`. */}
 
           {hasRemovals && platforms.length > 0 && (
             <p className="mt-2 flex items-center gap-3 text-[10px] text-gray-400 dark:text-white/40">
@@ -1755,7 +1836,7 @@ export default function RealtimeCard({
                 <span className="w-2.5 h-1 rounded-full bg-[#FC934C]" />{removedWords(platforms).join(' / ')}
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <span className="w-2.5 h-1 rounded-full bg-[#14254A]/25 dark:bg-white/30" />still live
+                <span className="w-2.5 h-1 rounded-full bg-[#14254A]/25 dark:bg-white/30" />active
               </span>
             </p>
           )}

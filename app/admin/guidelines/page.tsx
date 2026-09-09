@@ -55,7 +55,8 @@ const GUIDES: Guide[] = [
     icon: '🔑',
     title: 'Allow an API-based module',
     summary:
-      'Search Case List, Download Data, IP Tracking, War Room and the other MarkScan-backed pages. ' +
+      'Search Case List, Download Data, IP Tracking, War Room and the other pages backed by the ' +
+      'enforcement API. ' +
       'Each needs BOTH a working API credential on the company and the module granted to the login — ' +
       'either one alone shows nothing.',
     steps: [
@@ -70,7 +71,7 @@ const GUIDES: Guide[] = [
         href: '/admin/api-credentials',
         what: 'Set the API username and password for the client company.',
         why:
-          'These are the company’s MarkScan credentials. The portal exchanges them for a token on ' +
+          'These are the company’s enforcement API credentials. The portal exchanges them for a token on ' +
           'sign-in, and every API-backed page is hidden while that token cannot be obtained — for the ' +
           'whole company, not just this login.',
       },
@@ -98,7 +99,8 @@ const GUIDES: Guide[] = [
     icon: '📊',
     title: 'Enable Reports for a client',
     summary:
-      'Reports reads the analytics warehouse, not MarkScan, so it needs a different chain: a service ' +
+      'Reports reads the analytics warehouse rather than the enforcement platform, so it needs a ' +
+      'different chain: a service ' +
       'connection, a company mapped to a warehouse client, and the module granted.',
     steps: [
       {
@@ -135,7 +137,7 @@ const GUIDES: Guide[] = [
       { missing: 'The module grant', looks: 'No Reports item in the nav; the client lands on Dashboard instead.' },
     ],
     note:
-      'Reports does NOT need MarkScan API credentials — it is a different backend from the API-based ' +
+      'Reports does NOT need enforcement API credentials — it is a different backend from the API-based ' +
       'modules above. A client with no API credentials can still be given Reports.',
   },
   {

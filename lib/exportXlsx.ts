@@ -26,6 +26,10 @@
  */
 
 import { localStamp, safeFileName, type CsvColumn } from './exportCsv'
+import {
+  LOGO_XLSX_H, XLSX_DRAWING_RELS, XLSX_SHEET_DRAWING, colWidthPx, exportLogo,
+  xlsxLogoContentTypes, xlsxLogoDrawing, xlsxSheetRels,
+} from './exportBrand'
 
 /* ── CRC-32, which the ZIP central directory requires per entry ───────────── */
 
@@ -51,7 +55,11 @@ interface Entry { name: string; data: Uint8Array; crc: number; offset: number }
 
 const utf8 = (s: string) => new TextEncoder().encode(s)
 
-function zip(files: { name: string; text: string }[]): Blob {
+/** `text` is encoded as UTF-8; `bytes` goes in untouched — the mark is a PNG,
+ *  and a PNG run through TextEncoder is a corrupt PNG. */
+interface ZipEntry { name: string; text?: string; bytes?: Uint8Array }
+
+function zip(files: ZipEntry[]): Blob {
   const parts: Uint8Array[] = []
   const entries: Entry[] = []
   let offset = 0
@@ -67,7 +75,7 @@ function zip(files: { name: string; text: string }[]): Blob {
 
   for (const f of files) {
     const name = utf8(f.name)
-    const data = utf8(f.text)
+    const data = f.bytes ?? utf8(f.text ?? '')
     const crc = crc32(data)
     entries.push({ name: f.name, data, crc, offset })
 
@@ -168,7 +176,22 @@ function colRef(i: number): string {
    summed, which is most of what these exports are opened for. */
 const NUMERIC = /^-?\d+(\.\d+)?$/
 
-function sheetXml(header: string[], rows: string[][]): string {
+/**
+ * Column widths, in characters, from the widest cell in each.
+ *
+ * Only needed so the mark can be centred over the table — see brandFor in
+ * lib/xlsx.ts for the same reasoning. Capped, because one long URL would
+ * otherwise put the middle of the sheet a thousand pixels off screen.
+ */
+function widthsOf(header: string[], rows: string[][]): number[] {
+  return header.map((h, i) => {
+    let w = String(h ?? '').length
+    for (const r of rows) w = Math.max(w, String(r[i] ?? '').length)
+    return Math.min(58, Math.max(9, w + 2))
+  })
+}
+
+function sheetXml(header: string[], rows: string[][], brand: { w: number; h: number } | null): string {
   const cell = (text: string, ref: string) => {
     if (text === '') return ''
     if (NUMERIC.test(text) && Math.abs(Number(text)) < 1e15) {
@@ -179,11 +202,29 @@ function sheetXml(header: string[], rows: string[][]): string {
   const line = (cells: string[], rowNo: number) =>
     `<row r="${rowNo}">${cells.map((c, i) => cell(c, `${colRef(i)}${rowNo}`)).join('')}</row>`
 
+  /* An empty first row, tall enough to clear the mark floating over it. The
+     picture is anchored to the sheet rather than held in a cell — a spreadsheet
+     has no cell that holds an image — so without a row made room for it the
+     mark would sit on top of the header. Row heights are in points, three
+     quarters of a pixel each. */
+  const lead = brand ? 1 : 0
+  const brandRow = brand
+    ? `<row r="1" ht="${(brand.h + 10) * 0.75}" customHeight="1"/>`
+    : ''
+
+  /* `drawing` goes LAST inside <worksheet>, and that is the schema's order
+     rather than a preference: a part out of sequence is not a workbook that
+     opens oddly, it is one Excel refuses to open. The `r` namespace comes with
+     it, since the reference is an r:id. */
+  const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"' +
+    (brand ? ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"' : '')
+
   return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' +
-    line(header, 1) +
-    rows.map((r, i) => line(r, i + 2)).join('') +
-    '</sheetData></worksheet>'
+    `<worksheet ${ns}><sheetData>` +
+    brandRow +
+    line(header, 1 + lead) +
+    rows.map((r, i) => line(r, i + 2 + lead)).join('') +
+    '</sheetData>' + (brand ? XLSX_SHEET_DRAWING : '') + '</worksheet>'
 }
 
 /** A sheet name Excel will accept: 31 characters, none of []:*?/\ */
@@ -199,16 +240,34 @@ function safeSheetName(name: string): string {
  * Same signature as downloadCsv, so a caller chooses a format and nothing else
  * about the call changes.
  */
-export function downloadXlsx<T>(
+export async function downloadXlsx<T>(
   fileName: string, columns: CsvColumn<T>[], rows: T[], sheetName = 'Data',
-): void {
+): Promise<void> {
   const header = columns.map(c => String(c.label ?? c.key))
   const body = rows.map(row => columns.map(c => {
     const v = c.get ? c.get(row) : (row as any)?.[c.key]
     return v === null || v === undefined ? '' : String(v)
   }))
 
-  const blob = zip([
+  /* The IP House mark, at the top of the sheet. Async only because of this: it
+     is fetched and rasterised once per page (lib/exportBrand.ts) and memoised,
+     so a second export waits on nothing. Null where it would not load, and the
+     workbook is then exactly what it was before this existed — a download is
+     somebody's work leaving the building and a decorative image is not a reason
+     to withhold it. */
+  const logo = await exportLogo()
+  const brand = logo
+    ? (() => {
+      const h = LOGO_XLSX_H
+      const w = Math.round(h * logo.ratio)
+      // Centred over the TABLE: a sheet is as wide as the reader drags it, so
+      // the only stable middle is the middle of the columns it actually has.
+      const tableW = widthsOf(header, body).reduce((a, chars) => a + colWidthPx(chars), 0)
+      return { w, h, offsetX: Math.max(0, Math.round((tableW - w) / 2)) }
+    })()
+    : null
+
+  const files: ZipEntry[] = [
     {
       name: '[Content_Types].xml',
       text: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -217,6 +276,7 @@ export function downloadXlsx<T>(
         '<Default Extension="xml" ContentType="application/xml"/>' +
         '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
         '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+        (logo ? xlsxLogoContentTypes(1) : '') +
         '</Types>',
     },
     {
@@ -241,8 +301,19 @@ export function downloadXlsx<T>(
         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
         '</Relationships>',
     },
-    { name: 'xl/worksheets/sheet1.xml', text: sheetXml(header, body) },
-  ])
+    { name: 'xl/worksheets/sheet1.xml', text: sheetXml(header, body, brand) },
+  ]
+
+  if (logo && brand) {
+    files.push(
+      { name: 'xl/media/logo.png', bytes: logo.bytes },
+      { name: 'xl/worksheets/_rels/sheet1.xml.rels', text: xlsxSheetRels(0) },
+      { name: 'xl/drawings/drawing1.xml', text: xlsxLogoDrawing(brand.w, brand.h, brand.offsetX, 4) },
+      { name: 'xl/drawings/_rels/drawing1.xml.rels', text: XLSX_DRAWING_RELS },
+    )
+  }
+
+  const blob = zip(files)
 
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')

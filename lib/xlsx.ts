@@ -28,6 +28,11 @@
 // "the file format does not match its extension" warning, which is the thing
 // the HTML-table-named-.xls trick can never manage.
 
+import {
+  LOGO_XLSX_H, XLSX_DRAWING_RELS, XLSX_SHEET_DRAWING, colWidthPx, exportLogo,
+  xlsxLogoContentTypes, xlsxLogoDrawing, xlsxSheetRels,
+} from '@/lib/exportBrand'
+
 /** One cell. `null`/`undefined` are written as genuinely empty, NOT as "" or 0
  *  — a blank is a fact about the data and a zero is a different one. */
 export type Cell = string | number | null | undefined
@@ -97,14 +102,39 @@ function cellXml(ref: string, v: Cell, style: number): string {
   return `<c r="${ref}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${xml(String(v))}</t></is></c>`
 }
 
-function sheetXml(s: Sheet): string {
+/* Column widths from the widest thing in each column, in characters, with a
+   floor and a ceiling: narrower than the floor and the header is cut, wider
+   than the ceiling and one long URL pushes every other column off screen.
+
+   Lifted out of sheetXml because the mark is centred over them — see brandFor. */
+function sheetWidths(s: Sheet): number[] {
+  return s.head.map((h, i) => {
+    let w = String(h ?? '').length
+    for (const line of s.rows) {
+      const v = line[i]
+      if (v !== null && v !== undefined) w = Math.max(w, String(v).length)
+    }
+    return Math.min(58, Math.max(9, w + 2))
+  })
+}
+
+function sheetXml(s: Sheet, brand: SheetBrand | null): string {
   const rows: string[] = []
   let r = 0
 
-  const row = (cells: string[]) => {
+  const row = (cells: string[], attrs = '') => {
     r += 1
-    rows.push(`<row r="${r}">${cells.join('')}</row>`)
+    rows.push(`<row r="${r}"${attrs}>${cells.join('')}</row>`)
   }
+
+  /* An empty row, tall enough to clear the mark floating over it.
+
+     The picture is ANCHORED rather than in a cell — a spreadsheet has no cell
+     that holds an image — so nothing about the grid knows it is there, and
+     without a row made room for it the mark would sit on top of the title.
+     Height in POINTS, which is what a row is measured in; three quarters of a
+     pixel each. */
+  if (brand) row([], ` ht="${(brand.h + 10) * 0.75}" customHeight="1"`)
 
   if (s.title) row([cellXml(`A${r + 1}`, s.title, S_TITLE)])
   if (s.subtitle) row([cellXml(`A${r + 1}`, s.subtitle, S_SUB)])
@@ -118,17 +148,7 @@ function sheetXml(s: Sheet): string {
     row(s.head.map((_, i) => cellXml(`${colName(i)}${at}`, line[i], S_BODY)))
   }
 
-  /* Column widths from the widest thing in each column, in characters, with a
-     floor and a ceiling: narrower than the floor and the header is cut, wider
-     than the ceiling and one long URL pushes every other column off screen. */
-  const widths = s.head.map((h, i) => {
-    let w = String(h ?? '').length
-    for (const line of s.rows) {
-      const v = line[i]
-      if (v !== null && v !== undefined) w = Math.max(w, String(v).length)
-    }
-    return Math.min(58, Math.max(9, w + 2))
-  })
+  const widths = sheetWidths(s)
   const cols = widths.length
     ? `<cols>${widths.map((w, i) =>
         `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>`
@@ -146,8 +166,42 @@ function sheetXml(s: Sheet): string {
     ? `<autoFilter ref="A${headRow}:${colName(Math.max(0, s.head.length - 1))}${r}"/>`
     : ''
 
+  /* `drawing` LAST, and that is not a preference. The worksheet element has a
+     fixed child order in the schema — sheetViews, cols, sheetData, autoFilter,
+     then a long tail ending in drawing — and a part out of order is not a
+     workbook that opens oddly, it is one Excel refuses to open. The `r`
+     namespace comes with it, since the reference is an r:id. */
+  const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"' +
+    (brand ? ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"' : '')
+
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${freeze}${cols}<sheetData>${rows.join('')}</sheetData>${filter}</worksheet>`
+<worksheet ${ns}>${freeze}${cols}<sheetData>${rows.join('')}</sheetData>${filter}${
+    brand ? XLSX_SHEET_DRAWING : ''}</worksheet>`
+}
+
+/** What one sheet needs to know about the mark floating over it: how big it is
+ *  drawn, and how far in it sits to be centred over that sheet's own columns. */
+interface SheetBrand { w: number; h: number; offsetX: number }
+
+/**
+ * Where the mark goes on one sheet.
+ *
+ * Centred over THE TABLE, not over the window: a sheet is as wide as the reader
+ * drags it and there is no page to centre on, so the only stable middle is the
+ * middle of the columns the sheet actually has. Those are set in characters a
+ * few lines above; Excel renders a character of Calibri 11 as seven pixels plus
+ * five of padding, which is what colWidthPx converts.
+ *
+ * A single narrow column would put the mark off the right of it, so the offset
+ * never goes below zero — on a two-column sheet it starts at the left edge,
+ * which is the closest thing to centred that fits.
+ */
+function brandFor(s: Sheet, logo: { ratio: number } | null): SheetBrand | null {
+  if (!logo) return null
+  const h = LOGO_XLSX_H
+  const w = Math.round(h * logo.ratio)
+  const tableW = sheetWidths(s).reduce((a, chars) => a + colWidthPx(chars), 0)
+  return { w, h, offsetX: Math.max(0, Math.round((tableW - w) / 2)) }
 }
 
 const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -225,7 +279,11 @@ function dosStamp(d: Date): { date: number; time: number } {
   }
 }
 
-function zip(files: { name: string; text: string }[]): Blob {
+/** One entry. `text` is encoded as UTF-8; `bytes` goes in as it is — the mark
+ *  is a PNG, and a PNG run through TextEncoder is a corrupt PNG. */
+interface ZipEntry { name: string; text?: string; bytes?: Uint8Array }
+
+function zip(files: ZipEntry[]): Blob {
   const enc = new TextEncoder()
   const { date, time } = dosStamp(new Date())
   const parts: Uint8Array[] = []
@@ -234,7 +292,7 @@ function zip(files: { name: string; text: string }[]): Blob {
 
   for (const f of files) {
     const nameBytes = enc.encode(f.name)
-    const data = enc.encode(f.text)
+    const data = f.bytes ?? enc.encode(f.text ?? '')
     const crc = crc32(data)
 
     const local = new Uint8Array(30 + nameBytes.length)
@@ -298,10 +356,20 @@ function zip(files: { name: string; text: string }[]): Blob {
 
 /* ── The workbook ─────────────────────────────────────────────────────────── */
 
-export function buildWorkbook(sheets: Sheet[]): Blob {
+/**
+ * The workbook, with the IP House mark at the top of every sheet.
+ *
+ * Async only because of the mark: it is fetched, rasterised once and memoised
+ * (lib/exportBrand.ts), so the second export of a session waits on nothing. A
+ * mark that will not load resolves to null and the workbook is built exactly as
+ * it was before this existed — the numbers are what the reader asked for.
+ */
+export async function buildWorkbook(sheets: Sheet[]): Promise<Blob> {
   const names = tabNames(sheets)
+  const logo = await exportLogo()
+  const brands = sheets.map(s => brandFor(s, logo))
 
-  const files: { name: string; text: string }[] = [
+  const files: ZipEntry[] = [
     {
       name: '[Content_Types].xml',
       text: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -312,6 +380,7 @@ export function buildWorkbook(sheets: Sheet[]): Blob {
 <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
 ${sheets.map((_, i) =>
   `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('\n')}
+${logo ? xlsxLogoContentTypes(sheets.length) : ''}
 </Types>`,
     },
     {
@@ -339,8 +408,27 @@ ${sheets.map((_, i) =>
 </Relationships>`,
     },
     { name: 'xl/styles.xml', text: STYLES },
-    ...sheets.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, text: sheetXml(s) })),
+    ...sheets.map((s, i) => ({
+      name: `xl/worksheets/sheet${i + 1}.xml`, text: sheetXml(s, brands[i]),
+    })),
   ]
+
+  /* The picture, once, plus a drawing part per sheet pointing at it. One media
+     entry however many tabs there are; a drawing part cannot be shared between
+     sheets, so those are per-sheet even though every one of them says the same
+     thing. */
+  if (logo) {
+    files.push({ name: 'xl/media/logo.png', bytes: logo.bytes })
+    for (let i = 0; i < sheets.length; i++) {
+      const b = brands[i]
+      if (!b) continue
+      files.push(
+        { name: `xl/worksheets/_rels/sheet${i + 1}.xml.rels`, text: xlsxSheetRels(i) },
+        { name: `xl/drawings/drawing${i + 1}.xml`, text: xlsxLogoDrawing(b.w, b.h, b.offsetX, 4) },
+        { name: `xl/drawings/_rels/drawing${i + 1}.xml.rels`, text: XLSX_DRAWING_RELS },
+      )
+    }
+  }
 
   return zip(files)
 }
@@ -365,6 +453,6 @@ export function saveBlob(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 30_000)
 }
 
-export function downloadWorkbook(filename: string, sheets: Sheet[]): void {
-  saveBlob(buildWorkbook(sheets), `${safeFilename(filename)}.xlsx`)
+export async function downloadWorkbook(filename: string, sheets: Sheet[]): Promise<void> {
+  saveBlob(await buildWorkbook(sheets), `${safeFilename(filename)}.xlsx`)
 }

@@ -46,6 +46,9 @@
 // utility added to the page next year is carried over without anyone
 // remembering to add it here.
 
+import { flattenCanvases } from '@/lib/flattenCanvas'
+import { exportLogo, LOGO_PDF_H } from '@/lib/exportBrand'
+
 /** Marks a node as this application's chrome: present on screen, never in the
     PDF. Read by the clone below, and by nothing else. */
 export const PRINT_HIDE_ATTR = 'data-print-hide'
@@ -190,6 +193,11 @@ html, body {
 .pr-doc .grid > *, .pr-filters { break-inside: avoid; page-break-inside: avoid; }
 
 /* ── The document's own furniture ──────────────────────────────────────── */
+/* The mark, above everything, centred on the page. Its own band rather than a
+   corner of the title row: this is the first thing on a document somebody is
+   going to forward, and a letterhead is centred. */
+.pr-brand { text-align: center; margin: 0 0 14px; }
+.pr-brand img { height: ${LOGO_PDF_H}px; width: auto; display: inline-block; }
 .pr-head {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
   padding: 0 0 12px; margin: 0 0 14px; border-bottom: 2px solid #14254A;
@@ -229,7 +237,7 @@ html, body {
 `
 }
 
-function headerMarkup(o: PrintReportOptions, taken: string): string {
+function headerMarkup(o: PrintReportOptions, taken: string, logoDataUrl?: string): string {
   const sub = [
     o.client && `<span class="pr-client">${esc(o.client)}</span>`,
     o.window && esc(o.window),
@@ -242,6 +250,7 @@ function headerMarkup(o: PrintReportOptions, taken: string): string {
     : '<p class="pr-none">No filters were applied — this report covers everything in the window above.</p>'
 
   return `
+${logoDataUrl ? `<div class="pr-brand"><img src="${logoDataUrl}" alt="IP House"></div>` : ''}
 <header class="pr-head">
   <div>
     <h1>${esc(o.title)}</h1>
@@ -265,7 +274,9 @@ function headerMarkup(o: PrintReportOptions, taken: string): string {
  * that gets cloned, so recolouring the page around them on the way to paper
  * would put dark-theme marks on a light card. What is on screen is what prints.
  */
-export function buildPrintDocument(node: HTMLElement, o: PrintReportOptions): string {
+export function buildPrintDocument(
+  node: HTMLElement, o: PrintReportOptions, logoDataUrl?: string,
+): string {
   const measured = Math.round(
     (o.measureFrom ?? node).getBoundingClientRect().width)
   const pageW = Math.max(MIN_PAGE_WIDTH, measured) + PAGE_MARGIN * 2
@@ -279,6 +290,11 @@ export function buildPrintDocument(node: HTMLElement, o: PrintReportOptions): st
      — a `display: none` pane is still a pane somebody can pull back out of the
      PDF's structure tree, and this one is a client's report. */
   const clone = node.cloneNode(true) as HTMLElement
+  /* Canvas-drawn panels — the Toast UI chart engine — become <img> of the same
+     pixels first. `clone.outerHTML` below writes a <canvas> out as an empty
+     element, so without this the PDF has a correctly sized blank where each of
+     those charts was. See lib/flattenCanvas.ts. */
+  flattenCanvases(node, clone)
   clone.querySelectorAll(`[${PRINT_HIDE_ATTR}]`).forEach(el => el.remove())
 
   const taken = new Date().toLocaleString()
@@ -293,7 +309,7 @@ ${styleMarkup()}
 </head>
 <body>
 <div class="pr-doc">
-${headerMarkup(o, taken)}
+${headerMarkup(o, taken, logoDataUrl)}
 ${clone.outerHTML}
 <footer class="pr-foot">${esc(o.title)}${o.client ? ` · ${esc(o.client)}` : ''} · generated ${esc(taken)}</footer>
 </div>
@@ -304,8 +320,8 @@ ${clone.outerHTML}
 /**
  * Print `node` as a PDF, without the chrome around it.
  *
- * Returns null when the print dialog was reached, or a sentence for the reader
- * when it was not. The only way it is not reached is a blocked pop-up, which is
+ * Resolves to null when the print dialog was reached, or to a sentence for the
+ * reader when it was not. The only way it is not reached is a blocked pop-up, which is
  * a thing they can fix and therefore a thing worth saying out loud rather than
  * failing silently under a button that appeared to do nothing.
  *
@@ -314,7 +330,9 @@ ${clone.outerHTML}
  * cloned, so recolouring the page around them on the way to paper would put
  * dark-theme marks on a light card. What is on screen is what prints.
  */
-export function printReport(node: HTMLElement, o: PrintReportOptions): string | null {
+export async function printReport(
+  node: HTMLElement, o: PrintReportOptions,
+): Promise<string | null> {
   // Opened FIRST, synchronously, while the click that asked for it is still on
   // the stack — a pop-up blocker judges by that, and any work done before this
   // call is enough to lose the window.
@@ -323,7 +341,12 @@ export function printReport(node: HTMLElement, o: PrintReportOptions): string | 
     return 'Your browser blocked the print window. Allow pop-ups for this site, then try again.'
   }
 
-  const html = buildPrintDocument(node, o)
+  /* AFTER the window is open, never before. The pop-up blocker judges by
+     whether a click is still on the stack, and an await here before window.open
+     would lose the window on every export. Undefined where the mark would not
+     load: the document is still produced, headed by its title alone. */
+  const logo = await exportLogo()
+  const html = buildPrintDocument(node, o, logo?.dataUrl)
 
   win.document.open()
   win.document.write(html)

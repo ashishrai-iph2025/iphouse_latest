@@ -131,7 +131,9 @@ var summaryDims = []struct {
 	// How the enforcement went: what came off entirely, and how fast the rest
 	// came down.
 	{"bySuspensionPlatform", "Channel Suspension - Platform", "value", 6},
-	{"byTAT", "Overall Removal Turn Around Time (TAT - In Hours)", "ordinal", 6},
+	// Not "(TAT - In Hours)" any more: the bands are quarter-hours and hours,
+	// and the card said the wrong unit for four of its five rows.
+	{"byTAT", "Overall Removal Turn Around Time", "ordinal", 6},
 	// What was sent, and to whom. Two cards because they are two audiences: the
 	// platforms that host the content, and the engines that index it.
 	{"byNoticePlatform", "Enforcement Notification across Social sites", "value", 7},

@@ -704,7 +704,7 @@ function PlatformLoader({ progress }: { progress: Record<string, PlatformProgres
               ? 'Aggregating cross-platform intelligence…'
               : active.length > 0
                 ? <>Scanning <b className="text-gray-500">{active.map(a => a.label).join(', ')}</b></>
-                : 'Contacting MarkScan endpoints…'}
+                : 'Contacting enforcement endpoints…'}
             {rowsSoFar > 0 && <> · {rowsSoFar.toLocaleString()} rows collected</>}
           </p>
           <div className="relative h-1 rounded-full bg-gray-100 overflow-hidden mt-2.5">

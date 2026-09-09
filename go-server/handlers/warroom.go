@@ -524,7 +524,7 @@ func WarRoomClientToken(w http.ResponseWriter, r *http.Request) {
 	rawAssets, err := markscan.GetAllWarRoomAssets(token)
 	if err != nil {
 		log.Printf("[warroom client-token] fetching assets failed for clientUserId=%d: %v", body.ClientUserID, err)
-		Fail(w, 502, "Token generated, but fetching assets from MarkScan failed. Please try again.")
+		Fail(w, 502, "Token generated, but fetching assets from the enforcement platform failed. Please try again.")
 		return
 	}
 	log.Printf("[warroom client-token] clientUserId=%d rawAssets=%d item[0]=%v", body.ClientUserID, len(rawAssets), firstAny(rawAssets))
@@ -548,7 +548,7 @@ func WarRoomAssets(w http.ResponseWriter, r *http.Request) {
 	raw, err := markscan.GetAllWarRoomAssets(token)
 	if err != nil {
 		log.Printf("[warroom assets] loginId=%d fetch failed: %v", claims.LoginID, err)
-		Fail(w, 502, "Fetching War Room assets from MarkScan failed. Please try again.")
+		Fail(w, 502, "Fetching War Room assets from the enforcement platform failed. Please try again.")
 		return
 	}
 	log.Printf("[warroom assets] loginId=%d rawAssets=%d item[0]=%v", claims.LoginID, len(raw), firstAny(raw))

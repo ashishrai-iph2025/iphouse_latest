@@ -94,7 +94,24 @@ func sortTATRows(rows []map[string]any) {
 	}
 	cells := make([]cell, len(rows))
 	for i, r := range rows {
-		k, ok := tatSortKey(strFromAny(r["label"]))
+		label := strFromAny(r["label"])
+		/* One of our own five: keyed on its band's LOWER EDGE rather than on
+		   parsing the label back.
+
+		   Two of the band labels lead with the same quantity — tatSortKey reads
+		   both "15-30 min" and "30 min-1 hr" as 30, because it takes the first
+		   number that carries a unit — so the parse alone leaves their order to
+		   whatever the caller happened to build first.
+
+		   The lower edge and not the band's INDEX, which is the mistake this
+		   replaces: an index is 0-4 and a parsed label is a count of minutes, so
+		   a list holding both kinds put "2 hr+" (index 4) ahead of "15 - 30 min"
+		   (30 minutes). Both scales have to be minutes or neither is. */
+		if b := canonicalTATIndex(label); b >= 0 {
+			cells[i] = cell{row: r, key: sportsTATBands[b].lo, known: true}
+			continue
+		}
+		k, ok := tatSortKey(label)
 		cells[i] = cell{row: r, key: k, known: ok}
 	}
 	sort.SliceStable(cells, func(a, b int) bool {
@@ -115,6 +132,22 @@ func sortTATRows(rows []map[string]any) {
 }
 
 /*
+canonicalTATIndex is the position of one of our own band labels, or -1.
+
+Matched on the exact label rather than by parsing, because these strings are
+this file's own output and an exact match cannot be fooled by a coincidence of
+spelling the way tatSortKey can.
+*/
+func canonicalTATIndex(label string) int {
+	for i, b := range sportsTATBands {
+		if b.label == label {
+			return i
+		}
+	}
+	return -1
+}
+
+/*
 dimTAT is the turnaround panel's key. A constant because the registry, both
 query paths and the summary all have to agree on it, and a typo in any one of
 them is a panel that silently keeps the wrong order.
@@ -131,7 +164,12 @@ this one — a distribution over an ordered axis is read along the axis.
 func sortedDimRows(key string, rows []map[string]any) []map[string]any {
 	out := mapRows(rows, "label", "value", "urls", "removed")
 	if key == dimTAT {
-		sortTATRows(out)
+		// The same fold the API path applies, for the same reason: one set of
+		// bands across every platform, whichever road the panel came down. nil
+		// only where the breakdown was empty, and an empty panel needs no order.
+		if folded := foldTATRows(out); folded != nil {
+			return folded
+		}
 	}
 	return out
 }
@@ -164,13 +202,27 @@ type tatBand struct {
 }
 
 /*
-sportsTATBands are the bands a live event is judged on.
+sportsTATBands are the bands a live event is judged on, and they are the ONLY
+bands any turnaround panel draws.
 
 Fixed, not adaptive. The equivalent in the War Room (lib/warroom.ts) collapses
 its bands against the data so no band renders under a threshold — right for a
 panel someone is exploring, wrong here, where the same five bands have to mean
 the same thing on every client and every platform so two reports can be read
 against each other.
+
+Every panel now reaches them by one of two roads:
+
+	· the table carries both timestamps → bandTATRows counts real minutes into
+	  them, which is the answer worth having;
+	· it does not → foldTATRows folds whatever the stored TATBucket column says
+	  into them.
+
+Before the second road existed, the summary of one client's sports report drew
+TEN rows — "00 - 30min", "Pending", "1hr - 2hr", "2 hr+", "2 hrs and above",
+"30min - 1hr", "1-2 hr", "30 min-1 hr", "15-30 min", "0-15 min" — because each
+platform's table had been banded by whoever wrote it and the summary merged the
+spellings verbatim. Four of those ten are the same two bands said differently.
 */
 var sportsTATBands = []tatBand{
 	{"0-15 min", -1, 15},
@@ -178,6 +230,187 @@ var sportsTATBands = []tatBand{
 	{"30 min-1 hr", 30, 60},
 	{"1-2 hr", 60, 120},
 	{"2 hr+", 120, math.Inf(1)},
+}
+
+/*
+── Folding somebody else's bands into ours ───────────────────────────────────
+
+	For the tables that cannot be measured, the stored TATBucket column is all
+	there is — and every table was banded by a different hand. Rather than draw
+	those spellings, each one is READ and folded into the band it belongs to.
+
+	PLACED BY ITS UPPER EDGE, and that is the one judgement call in this file.
+	"00 - 30min" spans two of our bands and there is no way to know how its
+	1,011 rows divide between them. Its upper edge is 30 minutes, so the
+	strongest thing the data supports is "no later than 15-30 min" — and that is
+	where it goes. The other direction would have claimed those rows came down
+	inside a quarter of an hour, which is a claim about enforcement performance
+	that nothing in the row supports. A fold never flatters the number.
+
+	A label that is not a duration at all — "Pending", "Unknown", a blank — is
+	DROPPED. The panel's own description says it covers the URLs that have come
+	down; a row still waiting has not, and it was only ever in the panel because
+	the stored column had nowhere else to put it.
+*/
+
+// Every quantity in a label, not just the first: a range has two.
+var tatQuantity = regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)\s*(sec|second|min|minute|hr|hour|day|week|month)s?`)
+
+// "2 hr+", "2 hrs and above", "60 min or more" — a band with no upper edge.
+var tatOpenEnded = regexp.MustCompile(`(?i)(\+|\babove\b|\bplus\b|\bmore\b|\bover\b|\bonward)`)
+
+// What separates the two edges of a range, as against the parts of one
+// duration: "30 min - 1 hr" is a range, "1 hr 30 min" is ninety minutes.
+var tatRangeSep = regexp.MustCompile(`(?i)(-|–|—|\bto\b|\bupto\b|\bup to\b)`)
+
+/*
+tatBandFor is the band a stored label belongs to, or -1 for a label that is not
+a duration.
+
+Lenient about spelling on purpose. This reads a column three different systems
+write into, and the alternative to being lenient is a bucket silently vanishing
+from the report the day somebody adds a space.
+*/
+func tatBandFor(label string) int {
+	s := strings.ToLower(strings.TrimSpace(label))
+	if s == "" {
+		return -1
+	}
+	matches := tatQuantity.FindAllStringSubmatch(s, -1)
+	if len(matches) == 0 {
+		return -1
+	}
+	mins := make([]float64, 0, len(matches))
+	for _, m := range matches {
+		n, err := strconv.ParseFloat(m[1], 64)
+		if err != nil {
+			continue
+		}
+		if mult, ok := tatUnitMinutes[strings.TrimSuffix(m[2], "s")]; ok {
+			mins = append(mins, n*mult)
+		}
+	}
+	if len(mins) == 0 {
+		return -1
+	}
+
+	var upper float64
+	if tatRangeSep.MatchString(s) {
+		// A range: the last quantity is its upper edge.
+		upper = mins[len(mins)-1]
+	} else {
+		// One duration, possibly spelled in two units. "1 hr 30 min" is 90.
+		for _, m := range mins {
+			upper += m
+		}
+	}
+	if tatOpenEnded.MatchString(s) {
+		/* Open-ended: the edge is the FLOOR, not the ceiling, so nudge past it.
+		   Without this "2 hr+" lands on 120 exactly, which the band below it
+		   closes on (mins <= 120) — and the slowest bucket would be filed as
+		   the second slowest. */
+		upper = mins[len(mins)-1] + 0.001
+	}
+
+	for i, b := range sportsTATBands {
+		if upper > b.lo && upper <= b.hi {
+			return i
+		}
+	}
+	// Past the last edge, which the open-ended band should already have caught.
+	return len(sportsTATBands) - 1
+}
+
+/*
+foldTATRows rebuilds a stored-label breakdown as the five bands.
+
+── The case this got wrong first time ────────────────────────────────────────
+
+	It used to return nil when NOTHING in the breakdown parsed as a duration, so
+	the caller could "leave the panel as it found it" rather than assert that
+	every band was empty. That reasoning was about a table storing statuses
+	instead of turnarounds — a table that does not exist.
+
+	What does exist is dashboards.SportsSourceURLRawData, whose TATBucket column
+	for a live window holds exactly one value: "Pending", 4,676 rows. Nothing
+	parsed, so the fold declined, the raw row passed straight through, and the
+	summary merged a "Pending" band into a panel every other platform had already
+	had it removed from. It was the only Pending left on the page and it looked
+	like the fold had never run.
+
+	So the fold no longer declines on its own account. A breakdown is folded into
+	the five bands and anything that is not a duration is dropped — 4,676 rows of
+	"Pending" leave nothing behind, which is the correct reading: nothing came
+	down, so nothing has a turnaround, and the removal-rate card is where the
+	outstanding work is reported.
+
+	Where that leaves every band at zero, tatBandRows returns nil and the panel
+	says "no data for this period" rather than drawing an empty ring under a
+	legend of five noughts.
+*/
+func foldTATRows(rows []map[string]any) []map[string]any {
+	if len(rows) == 0 {
+		return nil
+	}
+	urls := make([]int64, len(sportsTATBands))
+	removed := make([]int64, len(sportsTATBands))
+
+	for _, r := range rows {
+		i := tatBandFor(strFromAny(r["label"]))
+		if i < 0 {
+			// "Pending", "Unknown", a blank. Found, but not a turnaround.
+			continue
+		}
+		urls[i] += numOf(r["urls"])
+		removed[i] += numOf(r["removed"])
+	}
+	return tatBandRows(urls, removed)
+}
+
+/*
+tatBandRows is the five bands as panel rows, always all five and always in
+order.
+
+An empty band is DRAWN. "Nothing took more than two hours" is a finding, and a
+panel that simply omits the band says instead that the question was not asked —
+which on a page comparing two platforms is the difference between a clean result
+and a missing measurement. It is also what makes the summary's merge work: five
+rows with the same five labels on every platform add up; a variable set does not.
+
+── Except when every one of them is empty ───────────────────────────────────
+
+	Then there is no panel. A window in which nothing has come down has no
+	turnaround to distribute, and five zeroes drawn as a ring is a ring with no
+	arc in it under a legend of five noughts — which reads as a broken chart
+	rather than as a finding. "No data for this period" is what the card says
+	instead, and it is true.
+
+	This costs the summary nothing: a platform contributing five zeroes and one
+	contributing nothing add up the same.
+*/
+func tatBandRows(urls, removed []int64) []map[string]any {
+	empty := true
+	for i := range urls {
+		if urls[i] != 0 || removed[i] != 0 {
+			empty = false
+			break
+		}
+	}
+	if empty {
+		return nil
+	}
+
+	out := make([]map[string]any, 0, len(sportsTATBands))
+	for i, b := range sportsTATBands {
+		out = append(out, map[string]any{
+			/* No `value`. A band is computed rather than stored, so there is
+			   nothing in the warehouse a click could narrow to — see the note on
+			   the turnaround filter in reportplatforms.go. */
+			"label": b.label,
+			"urls":  urls[i], "removed": removed[i],
+		})
+	}
+	return out
 }
 
 /*
@@ -203,7 +436,20 @@ var sportsTATBands = []tatBand{
 // a table carrying one of them can say when something happened but not how long
 // it took.
 var tatFoundCols = []string{"DiscoveryDoneAt", "URLUploadDate"}
-var tatRemovedCols = []string{"RemovalTime", "RemovalDate", "RemovedAt"}
+
+/*
+The removal timestamp, in the spellings the sports tables use.
+
+InfringingRemovalTime and SourceRemovalTime are the mobile-apps pair, and they
+are why that report's turnaround panel was empty rather than wrong: the table
+carries DiscoveryDoneAt and both of those, has no TATBucket column at all, so
+the panel fell through to a dimension the dataset does not offer and drew
+nothing. The infringing lane is preferred — a download link is the thing the
+listing exists to serve, and it is the removal the rest of that report counts.
+*/
+var tatRemovedCols = []string{
+	"RemovalTime", "InfringingRemovalTime", "SourceRemovalTime", "RemovalDate", "RemovedAt",
+}
 
 /*
 tatTimeCols picks the pair a dataset carries, if it carries one.
@@ -287,12 +533,23 @@ pair means here.
 */
 func bandTATRows(rows []map[string]any, foundCol, removedCol string) []map[string]any {
 	counts := make([]int64, len(sportsTATBands))
-	var pending int64
 
 	for _, r := range rows {
 		mins, ok := tatMinutes(r, foundCol, removedCol)
 		if !ok {
-			pending++
+			/* Not removed yet, or removed before it was found. Neither is a
+			   turnaround, and neither is in this panel.
+
+			   "Pending" used to be a sixth row here, on the reasoning that a
+			   chart of only the successes reports the fastest numbers the data
+			   can produce. That reasoning still holds and the row is still gone,
+			   for two better ones: this panel's own description says it covers
+			   the URLs that HAVE come down, so the row contradicted the card it
+			   was on; and a "Pending" that exists on the two tables carrying
+			   timestamps and not on the six that do not made the summary's
+			   pending figure a fact about which tables have a RemovalTime
+			   column. What is outstanding is the removal-rate card's subject,
+			   and it answers it over the whole report rather than over one. */
 			continue
 		}
 		for i, b := range sportsTATBands {
@@ -303,23 +560,7 @@ func bandTATRows(rows []map[string]any, foundCol, removedCol string) []map[strin
 		}
 	}
 
-	out := make([]map[string]any, 0, len(sportsTATBands)+1)
-	for i, b := range sportsTATBands {
-		out = append(out, map[string]any{
-			// value is what a click filters on. A band is computed, not stored,
-			// so it filters on its own label — this panel is a distribution to
-			// read rather than a slicer into the warehouse.
-			"label": b.label, "value": b.label,
-			"urls": counts[i], "removed": counts[i],
-		})
-	}
-	/* Kept, and kept LAST. A stream nobody has taken down yet is the most
-	   important row on this panel, and a turnaround chart covering only the
-	   successes would report the fastest numbers the data can produce. */
-	if pending > 0 {
-		out = append(out, map[string]any{
-			"label": "Pending", "value": "Pending", "urls": pending, "removed": int64(0),
-		})
-	}
-	return out
+	// Every row in a measured band has, by definition, come down, so the two
+	// series carry the same count.
+	return tatBandRows(counts, counts)
 }

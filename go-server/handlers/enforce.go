@@ -53,7 +53,7 @@ func Enforce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if status >= 400 {
-		Fail(w, 502, upstreamMsg("Markscan", status, data))
+		Fail(w, 502, upstreamMsg("The enforcement API", status, data))
 		return
 	}
 

@@ -1639,7 +1639,21 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		   tatbuckets.go — so the sequence the shading asserts is the sequence
 		   the labels read. */
 		if d.Key == dimTAT {
-			sortTATRows(out)
+			/* This panel got here on the stored TATBucket column, which means
+			   the table carries no timestamp pair — see the note above. Whatever
+			   spellings that column holds are folded into the same five bands
+			   the measured tables use, so the summary can add two platforms
+			   together and a reader moving between them is reading one scale.
+
+			   The fold declines only for an EMPTY breakdown, where there is
+			   nothing to band and the panel says so. A breakdown holding
+			   nothing but "Pending" — which is what the source-URL table's
+			   column holds for a live window — comes back as five empty bands
+			   rather than as a Pending row, which is what put the last one on
+			   the page. */
+			if folded := foldTATRows(out); folded != nil {
+				return folded
+			}
 		}
 		return out
 	}

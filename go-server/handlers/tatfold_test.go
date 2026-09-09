@@ -92,13 +92,23 @@ func TestBandBoundariesCloseAtTheTop(t *testing.T) {
 }
 
 /*
-A row with no removal time is Pending, and Pending is kept — last.
+A row with no removal time is not in this panel at all.
 
-A stream nobody has taken down is the most important row on this panel. Dropping
-it would make the chart a distribution over the successes only, which reports the
-fastest numbers the data can produce and is wrong in the flattering direction.
+It used to be, as a sixth "Pending" row, on the reasoning that a chart of only
+the successes reports the fastest numbers the data can produce. Two things
+overtook that:
+
+  - the panel's own description says it covers the URLs that HAVE come down, so
+    the row contradicted the card it was drawn on; and
+  - only two of the eight sports tables carry a removal timestamp, so "Pending"
+    appeared on those two and on none of the others. On the summary, which adds
+    the platforms together, the pending figure was therefore a fact about which
+    tables have a RemovalTime column rather than about enforcement.
+
+What is outstanding is the removal-rate card's subject, and that card answers it
+over the whole report instead of over one panel of it.
 */
-func TestPendingIsKeptAndTrails(t *testing.T) {
+func TestUnmeasurableRowsAreNotInThePanel(t *testing.T) {
 	rows := []map[string]any{
 		{"DiscoveryDoneAt": "2025-06-03T10:00:00Z", "RemovalTime": "2025-06-03T10:05:00Z"},
 		{"DiscoveryDoneAt": "2025-06-03T10:00:00Z", "RemovalTime": ""},
@@ -107,36 +117,41 @@ func TestPendingIsKeptAndTrails(t *testing.T) {
 	}
 	out := bandTATRows(rows, "DiscoveryDoneAt", "RemovalTime")
 
-	last := out[len(out)-1]
-	if strFromAny(last["label"]) != "Pending" || numOf(last["urls"]) != 3 {
-		t.Errorf("last row = %v, want Pending/3", last)
+	// The five bands and nothing else, on every platform, always.
+	if len(out) != len(sportsTATBands) {
+		t.Errorf("got %d rows, want exactly the %d bands", len(out), len(sportsTATBands))
 	}
-	// Every band is still present, so a band with nothing in it reads as empty
-	// rather than as missing.
-	if len(out) != len(sportsTATBands)+1 {
-		t.Errorf("got %d rows, want %d bands plus Pending", len(out), len(sportsTATBands))
+	for _, r := range out {
+		if strFromAny(r["label"]) == "Pending" {
+			t.Error("Pending is still a row on the turnaround panel")
+		}
 	}
 	// A removed row counts as removed — every row in a measured band came down
 	// by definition, which is what the panel's Identified/Removed pair means.
 	if numOf(out[0]["urls"]) != 1 || numOf(out[0]["removed"]) != 1 {
 		t.Errorf("first band = %v/%v, want 1/1", out[0]["urls"], out[0]["removed"])
 	}
-	if numOf(last["removed"]) != 0 {
-		t.Errorf("Pending reported %v removed", last["removed"])
+	// And the three unmeasurable rows went nowhere rather than into a band.
+	var total int64
+	for _, r := range out {
+		total += numOf(r["urls"])
+	}
+	if total != 1 {
+		t.Errorf("counted %d rows into bands, want 1", total)
 	}
 }
 
 // Removed before it was found is a clock or a backfill upstream, not an instant
-// takedown. Counting it in the fastest band would flatter the number.
+// takedown. Counting it in the fastest band would flatter the number, so it is
+// not counted at all — the same treatment as a row that has not come down.
 func TestRemovedBeforeFoundIsNotInstant(t *testing.T) {
 	out := bandTATRows([]map[string]any{{
 		"DiscoveryDoneAt": "2025-06-03T11:00:00Z", "RemovalTime": "2025-06-03T10:00:00Z",
 	}}, "DiscoveryDoneAt", "RemovalTime")
-	if numOf(out[0]["urls"]) != 0 {
-		t.Errorf("a negative turnaround was counted into %v", out[0]["label"])
-	}
-	if strFromAny(out[len(out)-1]["label"]) != "Pending" {
-		t.Error("a negative turnaround was not carried into Pending")
+	// The one row went nowhere, so every band is empty — and an all-empty
+	// turnaround panel is no panel. See tatBandRows.
+	if out != nil {
+		t.Errorf("a negative turnaround produced %v", labelsOf(out))
 	}
 }
 

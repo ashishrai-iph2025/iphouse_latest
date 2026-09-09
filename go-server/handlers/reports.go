@@ -492,6 +492,11 @@ func ReportsData(w http.ResponseWriter, r *http.Request) {
 	addEq("LanguageName", q.Get("language"))
 	addEq("CountryName", q.Get("country"))
 	addEq("SearchEngineName", q.Get("searchEngine"))
+	/* Still honoured where one is passed, though nothing offers it any more:
+	   the turnaround panel's bands are folded rather than stored (tatbuckets.go)
+	   so no click produces one. A filter the endpoint quietly ignored would be
+	   the worse failure — a bookmarked URL carrying a chip would show unnarrowed
+	   numbers under it. */
 	addEq("TATBucket", q.Get("tatBucket"))
 	addEq("Note2", q.Get("note2"))
 

@@ -211,7 +211,7 @@ const (
 // markscanError pulls the message out of an upstream error body, whatever key it
 // chose to put it under.
 func markscanError(status int, raw any) string {
-	msg := fmt.Sprintf("Markscan API returned %d", status)
+	msg := fmt.Sprintf("The enforcement API returned %d", status)
 	switch v := raw.(type) {
 	case string:
 		if v != "" {

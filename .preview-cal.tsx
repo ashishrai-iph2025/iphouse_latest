@@ -55,6 +55,24 @@ window.fetch = ((input: any, init?: any) => {
 }) as typeof window.fetch
 
 // Mirrors /welcome: a greeting above the card, so the measured top edge is real.
+/* ?pick=N opens day N in the side panel, so a headless screenshot can catch a
+   state the panel only shows once a day has been chosen. */
+const PICK = new URLSearchParams(location.search).get('pick')
+if (PICK) {
+  setTimeout(() => {
+    const cells = Array.from(document.querySelectorAll<HTMLElement>('[role="button"]'))
+    const hit = cells.find(c => c.firstElementChild?.firstElementChild?.textContent?.trim() === PICK)
+    hit?.click()
+    // ?open=1 goes one step further and opens the first title's detail card.
+    if (new URLSearchParams(location.search).get('open') === '1') {
+      setTimeout(() => {
+        const rows = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+        rows.find(b => b.className.includes('border-b') && b.className.includes('items-start'))?.click()
+      }, 300)
+    }
+  }, 900)
+}
+
 createRoot(document.getElementById('root')!).render(
   <div className="bg-[#eef2f7] min-h-[100dvh]">
     <div className="w-full mx-auto px-3 sm:px-5 lg:px-10 py-4 sm:py-6 max-w-screen-2xl space-y-5">

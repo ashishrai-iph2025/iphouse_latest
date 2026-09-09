@@ -443,7 +443,7 @@ var (
 			LookupTable: "mediascan.InfringmentType", LookupID: "Id", Name: "Name"},
 		{Key: "byGroupType", Column: "GroupType", Label: "Group Type", Viz: "bars"},
 		// Turnaround buckets are ordered and every row in one has, by
-		// definition, already been removed — so "removed vs still live" says
+		// definition, already been removed — so "removed vs active" says
 		// nothing here. What the reader wants is the share that landed in each
 		// bucket, on a ramp that shows the ordering.
 		{Key: "byTAT", Column: "TATBucket", Label: "Turnaround", Viz: "share"},
@@ -1133,7 +1133,18 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 		   backend will not answer is a control that renders empty forever, which
 		   is worse than an absent one: the reader cannot tell it from a filter
 		   whose values happen to be missing today. */
-		if param := DIMFilterParam(d.Key); param != "" && apiCanGroupBy(table, col) {
+		/* Turnaround is the exception, and it has to be.
+
+		   Every band this report draws is now COMPUTED — from the row's two
+		   timestamps where the table has them, and folded out of whatever
+		   spellings the stored column holds where it does not (see
+		   tatbuckets.go). Neither is a value the warehouse can be asked for.
+		   Registering it as a filter would leave a panel whose every click
+		   narrows the report to a string no row carries, and empties it.
+
+		   It is a distribution to READ, which is what the panel's own
+		   description has always said it was. */
+		if param := DIMFilterParam(d.Key); param != "" && d.Key != dimTAT && apiCanGroupBy(table, col) {
 			if _, taken := s.Filters[param]; !taken {
 				s.Filters[param] = col
 			}

@@ -510,7 +510,7 @@ export default function WelcomePage() {
 
           {/* TWO tiles, and the grid says two.
 
-              Still live, Websites affected and Assets targeted were dropped from
+              Active, Websites affected and Assets targeted were dropped from
               this page: the landing page answers "how much was found and how much
               came down", and the rest of the breakdown is a click away behind
               Open full report. Removal rate — the third figure kept — stays in

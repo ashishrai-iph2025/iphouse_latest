@@ -200,7 +200,7 @@ export default function LoginClientAdmin({ loginIds }: {
                 portal empty, because the data screens need that token. */}
             {r.isClientAdmin && !r.hasApi && (
               <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-300 flex-shrink-0"
-                title="This company has no MarkScan API credentials, so its data pages will be empty">
+                title="This company has no enforcement API credentials, so its data pages will be empty">
                 No API access
               </span>
             )}

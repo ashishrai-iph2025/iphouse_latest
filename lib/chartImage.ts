@@ -41,6 +41,8 @@
 // renderer's default happens to be.
 
 import { safeFilename, saveBlob } from '@/lib/xlsx'
+import { canvasOverlays, type CanvasOverlay } from '@/lib/flattenCanvas'
+import { exportLogo, LOGO_PNG_H } from '@/lib/exportBrand'
 
 const FONT = '"Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
 
@@ -118,8 +120,19 @@ function inlineStyles(src: Element, dst: Element): void {
   }
 }
 
-/** The panel body, as an image the canvas can draw. */
-async function bodyToImage(root: HTMLElement): Promise<{ img: HTMLImageElement; w: number; h: number }> {
+/**
+ * The panel body, as an image the canvas can draw — plus the canvases it could
+ * not carry.
+ *
+ * A canvas-drawn chart (the Toast UI engine) clones as an empty element and
+ * cannot be substituted with a data-URI <img>, because this SVG is loaded
+ * through an <img> and may not fetch anything. It survives as a transparent box
+ * of the right size, and the caller paints the real pixels into that box
+ * afterwards. See lib/flattenCanvas.ts.
+ */
+async function bodyToImage(root: HTMLElement): Promise<{
+  img: HTMLImageElement; w: number; h: number; overlays: CanvasOverlay[]
+}> {
   const box = root.getBoundingClientRect()
   const w = Math.max(1, Math.ceil(box.width))
   const h = Math.max(1, Math.ceil(box.height))
@@ -149,7 +162,7 @@ async function bodyToImage(root: HTMLElement): Promise<{ img: HTMLImageElement; 
   /* decode(), not onload: it settles once the image is ready to PAINT rather
      than merely loaded, so the first drawImage cannot land on a blank. */
   await img.decode()
-  return { img, w, h }
+  return { img, w, h, overlays: canvasOverlays(root) }
 }
 
 /**
@@ -161,7 +174,11 @@ async function bodyToImage(root: HTMLElement): Promise<{ img: HTMLImageElement; 
  * chrome and not part of the picture.
  */
 export async function chartToPng(root: HTMLElement, opts: ChartImageOptions): Promise<Blob> {
-  const { img, w, h } = await bodyToImage(root)
+  const { img, w, h, overlays } = await bodyToImage(root)
+  /* Null where the mark would not load. The picture is still produced — a
+     download is somebody's work leaving the building, and a decorative image
+     is not a reason to withhold it. */
+  const logo = await exportLogo()
 
   const scale = opts.scale ?? 2
   const dark = !!opts.dark
@@ -173,9 +190,15 @@ export async function chartToPng(root: HTMLElement, opts: ChartImageOptions): Pr
   const PAD = 24
   const titleH = 26
   const subH = opts.subtitle ? 18 : 0
-  const headH = PAD + titleH + subH + 8
+  /* The mark's own band, above the title. Centred on the SHEET rather than over
+     the panel, which is the same thing here — the panel is the sheet less two
+     equal margins — and stays right if those margins ever differ. */
+  const logoH = logo ? LOGO_PNG_H : 0
+  const logoW = logo ? Math.round(LOGO_PNG_H * logo.ratio) : 0
+  const brandH = logo ? logoH + 14 : 0
   const footH = opts.footer ? 26 : 0
   const totalW = w + PAD * 2
+  const headH = PAD + brandH + titleH + subH + 8
   const totalH = headH + h + footH + PAD
 
   const canvas = document.createElement('canvas')
@@ -190,18 +213,52 @@ export async function chartToPng(root: HTMLElement, opts: ChartImageOptions): Pr
   ctx.fillStyle = paper
   ctx.fillRect(0, 0, totalW, totalH)
 
+  /* The mark first, top and centre, and everything the header held before it
+     moves down by its band.
+
+     ON A DARK EXPORT IT IS DRAWN WHITE. The wordmark is navy ink — it is the
+     same file the navy sidebar renders with `brightness-0 invert` — and a navy
+     mark on this export's #1A2D55 paper is a mark nobody can see. Recoloured
+     rather than swapped for a second asset: `source-in` fills the shape the
+     mark already has, so the two stay one file and cannot drift apart. */
+  if (logo) {
+    const x = Math.round((totalW - logoW) / 2)
+    if (dark) {
+      const tint = document.createElement('canvas')
+      tint.width = Math.max(1, logoW)
+      tint.height = Math.max(1, logoH)
+      const tctx = tint.getContext('2d')
+      if (tctx) {
+        tctx.drawImage(logo.img, 0, 0, logoW, logoH)
+        tctx.globalCompositeOperation = 'source-in'
+        tctx.fillStyle = '#FFFFFF'
+        tctx.fillRect(0, 0, logoW, logoH)
+        ctx.drawImage(tint, x, PAD, logoW, logoH)
+      }
+    } else {
+      ctx.drawImage(logo.img, x, PAD, logoW, logoH)
+    }
+  }
+
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = ink
   ctx.font = `700 16px ${FONT}`
-  ctx.fillText(opts.title, PAD, PAD + 16)
+  ctx.fillText(opts.title, PAD, PAD + brandH + 16)
 
   if (opts.subtitle) {
     ctx.fillStyle = muted
     ctx.font = `400 11.5px ${FONT}`
-    ctx.fillText(opts.subtitle, PAD, PAD + titleH + 10)
+    ctx.fillText(opts.subtitle, PAD, PAD + brandH + titleH + 10)
   }
 
   ctx.drawImage(img, PAD, headH, w, h)
+
+  /* The canvas-drawn charts, into the transparent boxes the panel left for
+     them. Guarded individually: one chart that will not composite must not cost
+     the reader the whole picture. */
+  for (const o of overlays) {
+    try { ctx.drawImage(o.canvas, PAD + o.x, headH + o.y, o.w, o.h) } catch { /* skip it */ }
+  }
 
   if (opts.footer) {
     ctx.fillStyle = faint

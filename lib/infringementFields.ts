@@ -100,7 +100,7 @@ export function resolveFields(row: InfringementRow, platform = '') {
 }
 
 /**
- * Whether a record should read as still live.
+ * Whether a record should read as active.
  *
  * An empty status counts as active on purpose: these rows are enforcement
  * targets, and a record with no removal recorded has not been removed. Reading

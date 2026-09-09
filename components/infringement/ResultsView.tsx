@@ -1325,12 +1325,14 @@ export function DownloadMenu({ rows, label, openWeb, request }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rows, openWeb])
 
-  function saveLoaded(format: Format) {
+  async function saveLoaded(format: Format) {
     setOpen(false)
     if (rows.length === 0) return
     const name = `${label}_infringements_loaded`
+    // CSV is a text format and cannot carry the IP House mark the workbook and
+    // the PDF do. Nothing to do about that here; it is what CSV is.
     if (format === 'csv') downloadCsv(name, columns, rows)
-    else downloadXlsx(name, columns, rows, label)
+    else await downloadXlsx(name, columns, rows, label)
   }
 
   async function requestComplete() {

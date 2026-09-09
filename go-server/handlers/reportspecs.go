@@ -179,9 +179,14 @@ var reportSpecs = map[string]reportSpec{
 			{Key: "byCountry", Column: "CountryName", Label: "Countries", Limit: 15},
 			{Key: "byTAT", Column: "TATBucket", Label: "Turnaround", Limit: 0},
 		},
+		/* No `tatBucket`. Every turnaround band this report draws is now folded
+		   out of the stored column into one fixed set (see tatbuckets.go), so a
+		   band is a computed label rather than a value any row carries —
+		   filtering on one would empty the report. The panel is a distribution
+		   to read, which is what its own description has always said. */
 		Filters: map[string]string{
 			"assetId": "AssetId", "language": "LanguageName",
-			"country": "CountryName", "tatBucket": "TATBucket",
+			"country": "CountryName",
 		},
 	},
 
@@ -202,7 +207,8 @@ var reportSpecs = map[string]reportSpec{
 			{Key: "byAsset", Column: "AssetId", Label: "Assets", Limit: 15},
 			{Key: "byTAT", Column: "TATBucket", Label: "Turnaround", Limit: 0},
 		},
-		Filters: map[string]string{"assetId": "AssetId", "tatBucket": "TATBucket"},
+		// No `tatBucket` — see the note on the infringing-URL spec above.
+		Filters: map[string]string{"assetId": "AssetId"},
 	},
 
 	// ── Search Engine discovery (pre-aggregated daily) ───────────────────────
@@ -269,9 +275,10 @@ var reportSpecs = map[string]reportSpec{
 			{Key: "byQuality", Column: "QualityOfPrint", Label: "Print Quality", Limit: 0},
 			{Key: "byTAT", Column: "TATBucket", Label: "Turnaround", Limit: 0},
 		},
+		// No `tatBucket` — see the note on the infringing-URL spec above.
 		Filters: map[string]string{
 			"assetId": "AssetId", "channel": "ChannelName",
-			"groupType": "GroupType", "quality": "QualityOfPrint", "tatBucket": "TATBucket",
+			"groupType": "GroupType", "quality": "QualityOfPrint",
 		},
 	},
 

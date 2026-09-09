@@ -398,7 +398,7 @@ func IPTracking(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 	rawBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		Fail(w, 502, "Markscan API error "+string(rawBody[:min(len(rawBody), 200)]))
+		Fail(w, 502, "Enforcement API error "+string(rawBody[:min(len(rawBody), 200)]))
 		return
 	}
 	var data map[string]any
@@ -446,7 +446,7 @@ func IPTrackingClientDetails(w http.ResponseWriter, r *http.Request) {
 	tlsClient := &http.Client{Timeout: 20 * time.Second}
 	resp, err := tlsClient.Do(req)
 	if err != nil {
-		Fail(w, 502, "Markscan request failed")
+		Fail(w, 502, "The enforcement API could not be reached")
 		return
 	}
 	defer resp.Body.Close()

@@ -28,7 +28,7 @@ var kpiTileDescriptions = map[string]string{
 	"identified": "Every infringing URL found in this window, across all the sources this report reads.",
 	"removed":    "How many of the URLs identified in this window have since come down.",
 	"removalPct": "Removed as a share of identified — the enforcement rate for this window, not an all-time figure.",
-	"pending":    "Identified URLs that are still live: found, and not yet removed.",
+	"pending":    "Identified URLs that are still active: found, and not yet removed.",
 
 	"totalAssets":   "Distinct titles the identified URLs were matched against.",
 	"totalDomains":  "Distinct websites the identified URLs were found on — one site however many URLs it carried.",
@@ -57,7 +57,7 @@ var kpiTileDescriptions = map[string]string{
 
 	"googleDelisted": "Links Google has dropped from its search results.",
 	"bingDelisted":   "Links Bing has dropped from its search results.",
-	"delisted":       "Links search engines have dropped from their results. Not the same as removal — a de-indexed page is still live, just harder to find.",
+	"delisted":       "Links search engines have dropped from their results. Not the same as removal — a de-indexed page is still active, just harder to find.",
 
 	"totalApps":         "Distinct app titles found across the stores this report reads.",
 	"totalCategories":   "Distinct store categories the infringing apps were listed under.",

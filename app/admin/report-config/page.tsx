@@ -18,6 +18,7 @@ import BackToConfiguration from '@/components/admin/BackToConfiguration'
 import ReportsApiConnectionPanel from '@/components/admin/ReportsApiConnectionPanel'
 import ReportCachePanel from '@/components/admin/ReportCachePanel'
 import SportsPeriodPanel from '@/components/admin/SportsPeriodPanel'
+import ReportAppearancePanel from '@/components/admin/ReportAppearancePanel'
 import AdminPageHeader from '@/components/admin/AdminPageHeader'
 import SearchableSelect from '@/components/ui/SearchableSelect'
 import MultiSearchableSelect from '@/components/ui/MultiSearchableSelect'
@@ -33,7 +34,7 @@ import LayoutPreview, { packRows } from '@/components/reports/LayoutPreview'
 const NAVY   = '#14254A'
 const ORANGE = '#FC934C'
 
-type Tab = 'warehouse' | 'sources' | 'layout' | 'inventory' | 'access' | 'clients' | 'sports' | 'connection' | 'cache'
+type Tab = 'warehouse' | 'sources' | 'layout' | 'appearance' | 'inventory' | 'access' | 'clients' | 'sports' | 'connection' | 'cache'
 
 /** One portal client and the warehouse client it reads. */
 interface ClientMapRow {
@@ -1516,6 +1517,11 @@ export default function ReportConfigPage() {
         ? 'Which table feeds which platform report'
         : 'Which source feeds which platform report' },
     { key: 'layout',    label: 'Page layout',     hint: 'Where each visual sits on a report, and how wide it is' },
+    /* Straight after Page layout, because they are the same kind of decision
+       about the same thing: that one says WHERE each visual goes, this one says
+       what draws it and what colour it comes out. Both are per client with a
+       shared default underneath. */
+    { key: 'appearance', label: 'Appearance',      hint: 'Which charting engine draws a report, and the palette it is drawn in' },
     // The Database report is the fullest disclosure on this screen — every
     // mapped table, its columns and its row counts — so it is not offered at
     // all to a login that may not see them.
@@ -2832,6 +2838,8 @@ export default function ReportConfigPage() {
       )}
 
       {/* ── User access ─────────────────────────────────────────────────────── */}
+      {tab === 'appearance' && <ReportAppearancePanel />}
+
       {tab === 'sports' && <SportsPeriodPanel />}
 
       {tab === 'connection' && <ReportsApiConnectionPanel />}

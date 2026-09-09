@@ -457,6 +457,15 @@ func main() {
 	mux.Handle("PUT /api/admin/report-layout", cfg("report-config", handlers.ReportLayoutSave))
 	mux.Handle("DELETE /api/admin/report-layout", cfg("report-config", handlers.ReportLayoutReset))
 	mux.Handle("GET /api/admin/report-layout/clients", cfg("report-config", handlers.ReportLayoutClients))
+
+	/* What a report is drawn WITH and IN — the chart engine and the palette, per
+	   client with a shared default. Behind the same `report-config` grant as the
+	   layout beside it, and deliberately not exposed as a reader preference: see
+	   the note at the top of handlers/reportappearance.go. Readers get the
+	   resolved answer with their sections, not an endpoint of their own. */
+	mux.Handle("GET /api/admin/report-appearance", cfg("report-config", handlers.ReportAppearanceGet))
+	mux.Handle("PUT /api/admin/report-appearance", cfg("report-config", handlers.ReportAppearanceSave))
+	mux.Handle("DELETE /api/admin/report-appearance", cfg("report-config", handlers.ReportAppearanceReset))
 	/* The sports reporting period: one window, governing every sports report.
 	   Same grant as the rest of Report Configuration — it decides what a report
 	   covers, which is what that grant is for, and it names no warehouse table
