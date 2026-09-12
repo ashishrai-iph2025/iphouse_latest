@@ -226,6 +226,10 @@ var (
 		// that counts something else needs to say which — otherwise it silently
 		// draws the section's identified count under a title promising notices.
 		APIMeasure string
+		// A third figure beside identified and removed — see dimension.APIExtra.
+		APIExtra, ExtraLabel string
+		// A second one, for the host-provider card — see dimension.APIExtra2.
+		APIExtra2, ExtraLabel2 string
 		/* The table SIDE this panel belongs to — "host" or "linking" — for the
 		   columns that exist on BOTH halves of a two-table report.
 
@@ -275,8 +279,20 @@ var (
 		   about sport shows no such panel rather than an empty one. They sit
 		   beside the asset panels because they answer the next question a reader
 		   asks of one — this title, and then the fixture it belongs to. */
+		/* A TOP TEN rather than the closed list it was.
+
+		   Closed made sense while the panel was read as a distribution — a
+		   franchise missing from a complete list is a hole the reader cannot see.
+		   It is read as a ranking instead: which competitions are being pirated
+		   most. The cut is configurable per client in Report Configuration like
+		   every other top-N, and the heading restates whatever it is set to, so a
+		   client with eleven franchises is told the eleventh was cut rather than
+		   left to count.
+
+		   Most clients sit under the cut anyway — DAZN carries seven — so for
+		   them this changes the title and not the rows. */
 		{Key: "byFranchise", Column: "FranchiseName",
-			Label: "Franchise - Identification & Removal", Viz: "column"},
+			Label: "Top 10 Franchise - Identification & Removal", Viz: "column"},
 		{Key: "byMatchDay", Column: "MatchDay",
 			Label: "Match Day - Identification & Removal", Viz: "column"},
 		/* ── The OPERATOR, before the hostnames it runs ───────────────────────
@@ -418,10 +434,42 @@ var (
 		   Only the two sports raw tables carry these columns, so `Needs` is what
 		   keeps the panels off every other report — a table without the id
 		   matches no candidate and simply has no such card. */
-		{Key: dimHSPNotices, Column: "HSPName", Viz: "value",
-			Label: "Enforcement Notices - Hosting Provider",
-			Ident: "COUNT(DISTINCT %s)", Removed: "0",
-			Needs: colSourceNoticeID, APIMeasure: "notices", Role: "host"},
+		/* WHAT EACH PROVIDER ANSWERS FOR, on the host side: how many sites, how
+		   much was found on them, how much came down.
+
+		   It counted NOTICES SENT, one bar per provider, and was renamed by at
+		   least one client to "Top HSPs - Host Websites" — a title promising
+		   websites over a figure counting notices. The rename is the report of
+		   the bug: what a reader wants from a provider ranking is the size of
+		   the estate and what enforcement achieved on it, which is three
+		   numbers, and the panel had a different one.
+
+		   Identification and removal are the section's own measures now — no
+		   APIMeasure — so the bars mean what they mean everywhere else on the
+		   page, navy against orange. The site count rides along as APIExtra.
+
+		   `Needs` is the grouping column itself: the panel no longer requires a
+		   notice id to have anything to say. Notices per provider are not lost —
+		   they are the day-wise enforcement panels, which count the same action
+		   asked "when" instead of "to whom". */
+		/* Drawn on the MIRROR shape, not plain bars.
+
+		   The site count was already on the row and the hbar shape had nowhere
+		   to put it, so it ended up in the `<title>` of an axis tick — present,
+		   correct, and invisible. The mirror shape exists for exactly this:
+		   two volume bars and a small count on its OWN gauge, because 9.9K URLs
+		   beside 19 websites cannot share an axis and a third bar would be a
+		   third of a pixel wide. */
+		{Key: dimHSPNotices, Column: "HSPName", Viz: "mirror",
+			Label:    "Hosting Providers - Host Websites",
+			APIExtra: "totalDomains", ExtraLabel: "Host domains",
+			/* NOTICES, back on this card as a fourth figure rather than as the
+			   measure the bars draw. It was the ranking once, which is why the
+			   card promised websites over a count of notices; now identification
+			   and removal are the bars, the estate is one gauge and the notices
+			   are the other. All four are what a reader wants from a provider. */
+			APIExtra2: "notices", ExtraLabel2: "Notices",
+			Needs: "HSPName", Role: "host"},
 		/* The same counterparty on the LINKING half, which carries HSPName on
 		   every row — 680 distinct providers against the host side's 469.
 
@@ -436,10 +484,25 @@ var (
 
 		   Declared HERE rather than at the end so dimensionRank lands it beside
 		   the host panel, which is the comparison it exists for. */
-		{Key: dimHSPDelisting, Column: "HSPName", Viz: "value",
-			Label: "De-Indexing - Hosting Provider",
-			Ident: "COUNT(DISTINCT %s)", Removed: "0",
-			Needs: colDelistingBatchID, APIMeasure: "delistingBatches", Role: "linking"},
+		// The same three figures on the LINKING half — the sites that point at the
+		// content rather than the ones holding it. Paired with the host panel
+		// above, which is the comparison both exist for.
+		{Key: dimHSPDelisting, Column: "HSPName", Viz: "mirror",
+			Label:    "Hosting Providers - Linking Websites",
+			APIExtra: "totalDomains", ExtraLabel: "Linking domains",
+			/* No notices on this side, and that is the point of the pair. A
+			   notice goes to a HOST; the linking half sends de-indexing
+			   submissions to search engines instead, which the enforcement
+			   panels count. A fourth gauge here would either be empty or be the
+			   other side's figure. */
+			Needs: "HSPName", Role: "linking"},
+		/* Reach, against the repeat panel's persistence. Same grouping column,
+		   opposite question — see topprofiles.go. Needs the subscriber column,
+		   so it appears only on a source that records an audience. */
+		{Key: dimTopProfiles, Column: colProfileURL, Viz: "hbar",
+			Label:    "Top 10 Profiles by Subscribers - Identification & Removal",
+			APIExtra: "totalSubscribers", ExtraLabel: "Subscribers",
+			Needs: colSubscriberCnt},
 		{Key: dimEngineDelistingBatches, Column: "SearchEngineName", Alts: []string{"SearchEngine"},
 			Viz: "value", Label: "De-Indexing - Search Engine",
 			Ident: "COUNT(DISTINCT %s)", Removed: "0",
@@ -451,6 +514,27 @@ var (
 		   because they are the same measure asked "when" instead of "to whom";
 		   the timestamps fold to their calendar day and the bars run in date
 		   order. These replaced the Day-on-Day action trend cards. */
+		/* ── OVERALL PIRACY, day by day ──────────────────────────────────────
+
+		   What was found and what came down, per upload day, across BOTH sides of
+		   the report added together.
+
+		   The gap it fills is specific to a two-sided report. Open Web already
+		   draws a trend per side — the linking pages on one card, the hosts on
+		   the other — and nothing showed the two as one movement. A reader
+		   wanting the overall shape had to read two charts and add them by eye,
+		   which is exactly the sum this panel does.
+
+		   NO ROLE, and that is the whole mechanism: both specs produce the panel,
+		   and runPlatform merges breakdowns by label — the label here being the
+		   day — so the two sides sum per date without anything else being told
+		   about it.
+
+		   A CLOSED SET (see closedSetDims): every day in the window is drawn,
+		   including the quiet ones. Cut to a top ten it would be the ten busiest
+		   days in date order, which reads as a timeline and is not one. */
+		{Key: dimOverallByDay, Column: "URLUploadDate", Viz: "column",
+			Label: "Overall Piracy - Day-wise Identification & Removal"},
 		{Key: dimNoticesByDay, Column: "URLUploadDate", Viz: "value",
 			Label: "Day-wise Enforcement Notices",
 			Ident: "COUNT(DISTINCT %s)", Removed: "0",
@@ -537,6 +621,13 @@ var (
 		{"views", "SUM(Views)", "Views"},
 		{"viewsSaved", "SUM(ViewsSaved)", "ViewsSaved"},
 		{"impactedSubscribers", "SUM(Subscribers)", "Subscribers"},
+		/* The WHOLE audience, against impactedSubscribers' "audience we took
+		   down". Same column, different question, and both are wrong as a plain
+		   SUM: an account appears on every post it made, so summing the column
+		   counts one profile's followers once per post. The expression here only
+		   makes the tile OFFERED — the figure is replaced from the raw rows with
+		   one max per profile. See rowMetrics. */
+		{"totalSubscribers", "SUM(Subscribers)", "Subscribers"},
 		{"likes", "SUM(TotalLikes)", "TotalLikes"},
 		{"crawled", "SUM(CrawledCount)", "CrawledCount"},
 		{"crawled", "SUM(URLCrawledCount)", "URLCrawledCount"},
@@ -641,7 +732,12 @@ counts and it is the tile the sports reports were asked for.
 */
 func channelKPIs(shape tableShape) map[string]string {
 	out := map[string]string{}
-	if ch := shape.firstOf([]string{colChannelURL, colChannelName}); ch != "" {
+	/* ProfileURL last, and it is what gives the social tables a channel count at
+	   all: they record the account as a PROFILE and carry neither ChannelURL nor
+	   ChannelName, so this figure simply did not exist for them. Last in the
+	   list because a table carrying both means the two by different names, and
+	   the channel columns are the ones the other reports are read against. */
+	if ch := shape.firstOf([]string{colChannelURL, colChannelName, colProfileURL}); ch != "" {
 		out["totalChannels"] = fmt.Sprintf("COUNT(DISTINCT %s)", ch)
 	}
 	if col := tvChannelColumn(shape.has); col != "" {
@@ -871,6 +967,29 @@ func (t tableShape) firstOf(cands []string) string {
 	return ""
 }
 
+/*
+domainColumnsForRole is which domain column a panel on this side may count.
+
+PINNED, not preferred. The generic lookup asks for InfringingDomain, then
+SourceDomain, then Domain, and takes the first the table has — which is right
+for a KPI tile describing the whole table and wrong for a panel that exists to
+describe one side of a pair. A host-side card counting infringing domains is the
+linking side's figure under the host's heading, and nothing about the number
+says so.
+
+A table with neither gets no figure, which is the honest answer for a source
+that cannot tell the two apart.
+*/
+func domainColumnsForRole(role string) []string {
+	switch role {
+	case "host":
+		return []string{"SourceDomain", "SourceHost"}
+	case "linking":
+		return []string{"InfringingDomain", "InfringingHost"}
+	}
+	return []string{"InfringingDomain", "SourceDomain", "Domain"}
+}
+
 // inferRole names what a table describes, so a platform reading several of them
 // can keep them apart instead of adding them into one undifferentiated total.
 //
@@ -939,7 +1058,10 @@ tell a bucket with no rows from a bucket that was truncated.
 */
 var closedSetDims = map[string]bool{
 	"byTAT": true, "byGroupType": true, "byQuality": true,
-	"byFranchise": true, "byMatchDay": true,
+	"byMatchDay": true,
+	/* Every day in the window, including the quiet ones — a day-wise panel cut
+	   to its ten busiest days reads as a timeline and is not one. */
+	dimOverallByDay: true,
 	// One row per channel the platform reads — four of them, and the point is
 	// the comparison, so none may be cut.
 	dimSourcePlatform: true,
@@ -1043,6 +1165,27 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 		}
 	}
 
+	/* The hostname column this side counts, pinned to the role — see
+	   domainColumnsForRole and the note on reportSpec.DomainCol. Resolved once
+	   here so the brand fold in the API bridge and the panels below read the
+	   same column rather than each asking the shape again. */
+	s.DomainCol = shape.firstOf(domainColumnsForRole(s.Role))
+
+	/* The PIRATE BRAND slicer, on the LINKING side only.
+
+	   Declared as a filter so specHonoursFilters recognises it — which is what
+	   makes choosing a brand drop the host spec rather than run it unfiltered.
+	   The host table carries SourceDomain and no InfringingDomain, so it cannot
+	   answer a question about linking brands at all; a report that narrowed one
+	   half and not the other would add the two into one Total Infringements.
+	   See piratebrand.go.
+
+	   The value is mapped to the linking domain column because that is what the
+	   brand resolves BACK to: the portal sends hostnames, not a brand. */
+	if s.Role == "linking" && s.DomainCol != "" {
+		s.Filters[pirateBrandParam] = s.DomainCol
+	}
+
 	// Distinct-count KPIs that only make sense when the column is there.
 	if dom := shape.firstOf([]string{"InfringingDomain", "SourceDomain", "Domain"}); dom != "" {
 		s.ExtraKPI["totalDomains"] = fmt.Sprintf("COUNT(DISTINCT %s)", dom)
@@ -1100,6 +1243,24 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 		if col == "" {
 			continue
 		}
+		/* The two extra figures, as SQL, for the direct path — see
+		   dimension.ExtraExpr. Resolved HERE because this is where the table's
+		   columns are known: the host table counts its source domains and the
+		   linking table its infringing ones, and a panel pinned to one side must
+		   never be handed the other's column. A column the table does not have
+		   yields no expression and the panel simply has no such figure. */
+		extraExpr, extraExpr2 := "", ""
+		if d.APIExtra == "totalDomains" {
+			if dom := shape.firstOf(domainColumnsForRole(s.Role)); dom != "" {
+				extraExpr = "COUNT(DISTINCT " + dom + ")"
+			}
+		}
+		if d.APIExtra2 == "notices" {
+			if id := shape.firstOf([]string{colSourceNoticeID}); id != "" {
+				extraExpr2 = "COUNT(DISTINCT " + id + ")"
+			}
+		}
+
 		/* The column this panel MEASURES, as opposed to the one it groups by.
 		   Where the candidate declares alternates, Ident is a template and the
 		   spelling this table happens to use is filled into it — so the panel
@@ -1144,10 +1305,13 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 			// Day-wise action counts show every day of the chosen window; a
 			// top-N here would silently drop days off the calendar.
 			dimNoticesByDay, dimBatchesByDay,
-			// A season's fixtures and a league's franchises are both closed
-			// lists, and a report asked for "removal per match day" means every
-			// match day — a top 15 would silently drop the rest of the season.
-			"byFranchise", "byMatchDay":
+			/* A season's fixtures are a closed list: a report asked for "removal
+			   per match day" means every match day, and a top 15 would silently
+			   drop the rest of the season. Franchise used to be here and is a
+			   ranking now — see its candidate. */
+			"byMatchDay",
+			// Every day in the window, quiet ones included.
+			dimOverallByDay:
 			limit = 0
 		// A long tail where the head is the report: the panels say "Top 10" and
 		// mean it.
@@ -1157,6 +1321,10 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 			// says "Top 10" by being one.
 			"byDomainRoot", "byDomainRootMirrors",
 			"byDomainRootAll", "byDomainRootSource",
+			// A ranking of competitions, not a distribution — see the candidate.
+			"byFranchise",
+			// The ten loudest accounts by audience — the title says ten.
+			dimTopProfiles,
 			// Accounts are the longest tail of the lot, and this panel keeps
 			// only the ten most persistent of them.
 			dimRepeatOffender:
@@ -1167,6 +1335,12 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 			LookupTable: lkTable, LookupIDCol: lkID, LookupName: lkName,
 			IdentOverride: ident, RemovedOverride: d.Removed,
 			APIMeasure: d.APIMeasure,
+			// The third figure, where the panel carries one — see dimension.APIExtra.
+			APIExtra: d.APIExtra, ExtraLabel: d.ExtraLabel,
+			// And the fourth, which only the host-provider card has.
+			APIExtra2: d.APIExtra2, ExtraLabel2: d.ExtraLabel2,
+			// The same two as SQL, for the path with no reports_api behind it.
+			ExtraExpr: extraExpr, ExtraExpr2: extraExpr2,
 			// The id this panel counts distinct values of, where it counts one at
 			// all — carried through so the API path can walk the raw rows for it.
 			CountDistinctCol: needed,
@@ -1755,6 +1929,8 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	prevFrom, prevTo := "", ""
 	daily := map[string]map[string]int64{}
 	breakdowns := map[string]map[string]map[string]int64{}
+	// The non-numeric half of the same fold — see breakdownSets.
+	bdSets := breakdownSets{}
 	// Lookup dimensions carry the id a click filters on alongside the name shown.
 	// Merging is by name — two tables spell the same asset the same way — but the
 	// id has to survive it or the panel's cross-filter has nothing to send.
@@ -1936,6 +2112,10 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 						breakdowns[key][label] = map[string]int64{}
 					}
 					accumulateBreakdown(breakdowns[key][label], row)
+					/* And the LISTS, which the totals map above cannot hold —
+					   see accumulateBreakdownSet in reportplatforms.go. Called
+					   from both merges for the same reason its numeric twin is. */
+					accumulateBreakdownSet(bdSets, key, label, row)
 					if v := strFromAny(row["value"]); v != "" {
 						if dimValues[key] == nil {
 							dimValues[key] = map[string]string{}
@@ -2033,6 +2213,7 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 		rows := make([]map[string]any, 0, len(byLabel))
 		for label, m := range byLabel {
 			row := mergedBreakdownRow(label, m, dimValues[key][label])
+			applyBreakdownSets(bdSets, key, label, row)
 			rows = append(rows, row)
 		}
 		/* Ranked by RECURRENCE, then cut to ten — the order and the cut this one
@@ -2138,6 +2319,46 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 		merged["dailyBySource"] = dailyBySource
 	}
 
+	/* ── THE PER-SIDE TILES ──────────────────────────────────────────────────
+
+	   Six figures the KPI band can show as cards of their own: identification,
+	   distinct websites and distinct pirate brands, each split into the side
+	   that LINKS to the content and the side that HOSTS it.
+
+	   Already computed. roleKPI merges every figure each spec returned, keyed by
+	   role, and the two open-web specs are one role each — so identification and
+	   totalDomains have been sitting here since the trends were built, and
+	   `brands` arrives beside them from the fold in the API bridge. Nothing new
+	   is queried; this is the last hop, from a map the merge already had to the
+	   tiles Report Configuration can place.
+
+	   ONLY ON A TWO-SIDED PLATFORM, and the guard is the same `platformRoles`
+	   one the per-side trends use. On a report with a single side each of these
+	   is the headline figure under a second name, and a band showing "Total
+	   Infringements 26,613" beside "Total Linking Identification 26,613" invites
+	   the reading that they are different measures that happen to agree.
+
+	   A figure a side did not report is LEFT OUT rather than written as zero:
+	   the tile then has no value, and tileFor draws no card at all, which is the
+	   honest answer for a table that does not record hostnames. Written as 0 it
+	   would read as "no pirate brands found". */
+	if len(platformRoles) > 1 {
+		for _, t := range []struct{ tile, role, figure string }{
+			{"linkingIdentified", "linking", "identified"},
+			{"hostIdentified", "host", "identified"},
+			{"linkingDomains", "linking", "totalDomains"},
+			{"hostDomains", "host", "totalDomains"},
+			{"linkingBrands", "linking", "brands"},
+			{"hostBrands", "host", "brands"},
+		} {
+			if rk, has := roleKPI[t.role]; has {
+				if v, reported := rk[t.figure]; reported {
+					kpiOut[t.tile] = v
+				}
+			}
+		}
+	}
+
 	/* ── Synthetic panel: search-engine delisting ─────────────────────────────
 	   Three figures the KPI query already returned, drawn side by side — how many
 	   infringing links were found against how many each engine dropped. There is
@@ -2167,6 +2388,11 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 		merged["kpiPrev"] = kpiPrevOut
 	}
 	merged["daily"] = dailyOut
+	/* The host panel's compliance column, resolved now that the rows are
+	   final — after every merge that rebuilds a row and after the top-N cut,
+	   so ten domains are looked up rather than every hostname in the window.
+	   See domaincompliance.go. */
+	annotateHostCompliance(bdOut)
 	merged["breakdowns"] = bdOut
 	merged["tables"] = tableNamesOf(specs)
 	// How many of this platform's tables actually answered. Zero means every one
@@ -2423,6 +2649,15 @@ func accumulateBreakdown(dst map[string]int64, row map[string]any) {
 	   hostnames of one brand and adding them is what the figure means. */
 	dst["mirrors"] += numOf(row["mirrors"])
 
+	/* A panel's own extra figures — the provider cards' distinct domains and
+	   notices. SUMMED, and safe to sum because these panels are pinned to one
+	   SIDE: only the linking table answers the linking card and only the host
+	   table the host one, so the other contributes nothing and the sum is the
+	   one table's figure. Two sides both answering would double-count a distinct
+	   count, which is why the pinning and this addition belong together. */
+	dst["extra"] += numOf(row["extra"])
+	dst["extra2"] += numOf(row["extra2"])
+
 	/* Recurrence is a DAY COUNT, so it is merged by taking the largest rather
 	   than by adding. Two tables that both saw an account on the same Saturday
 	   saw it on one day, not two, and summing them can hand the panel more days
@@ -2432,6 +2667,182 @@ func accumulateBreakdown(dst map[string]int64, row map[string]any) {
 	if v := numOf(row["repeats"]); v > dst["repeats"] {
 		dst["repeats"] = v
 	}
+}
+
+/*
+── The LISTS a row carries, which the totals map cannot hold ────────────────
+
+	accumulateBreakdown folds numbers, and a merged row is rebuilt from them. A
+	row also carries one thing that is not a number: the mirror-domain list on
+	the root-domain cards — WHICH hostnames make up the count beside it.
+
+	Constructing the merged row would drop it, exactly as it dropped `mirrors`
+	and `extra` before it (see breakdownmerge_test.go). So the lists are folded
+	alongside the totals, by these two functions, and BOTH merges call both —
+	the same rule, and for the same reason, as the one implementation the numbers
+	share.
+
+	A SET rather than a list, because the merge is the one place a hostname can
+	arrive twice.
+*/
+type breakdownSets map[string]*breakdownSet
+
+/*
+breakdownSet is one row's union, and whether it can be trusted to be the whole of
+what the count beside it counted.
+
+`partial` is the second half, and it exists because two different things can make
+a set smaller than the summed count:
+
+  - OVERLAP. Every source carried a list and two of them held the same value. The
+    union is then RIGHT and the sum double-counted — a brand's mirror domains
+    across two platforms.
+
+  - A MISSING LIST. One source carried a count with no list at all, because the
+    figure came from the service rather than from the row walk that produces the
+    names. The count is then right and the list is a fragment.
+
+The two look identical once the sets are merged, and guessing wrong either
+overstates a gauge or prints a drawer that does not add up to it. So the rows
+say which case it is on the way in.
+*/
+type breakdownSet struct {
+	members map[string]bool
+	partial bool
+}
+
+/*
+breakdownSetKeys are the row fields folded as sets, each named beside the COUNT
+it has to agree with.
+
+A set field with no count field would be carried and never reconciled, which is
+the state the mirror list was almost shipped in — so the pairing is the
+declaration rather than a switch further down.
+*/
+var breakdownSetKeys = map[string]string{
+	// The hostnames behind a brand's mirror count — see foldDomainRows.
+	"mirrorDomains": "mirrors",
+	// The domains behind a hosting provider's domain count — see the row walk in
+	// reportsapi_bridge.go, which carries the list only where it also supplied
+	// the count.
+	"extraDomains": "extra",
+}
+
+// Iterated in a fixed order, because map order is not one and a merged row
+// should not depend on it.
+var breakdownSetFields = []string{"mirrorDomains", "extraDomains"}
+
+// One flat map rather than four nested ones. The set belongs to a panel, a row
+// and a field together, and a NUL cannot occur in any of the three — a panel key
+// and a field name are source constants, and a label is a hostname or a brand.
+var breakdownSetSep = string(rune(0))
+
+func breakdownSetKey(key, label, field string) string {
+	return key + breakdownSetSep + label + breakdownSetSep + field
+}
+
+/*
+accumulateBreakdownSet unions one row's lists into the totals for its label.
+
+Keyed by panel and label the same way the numbers are, so a row assembled from
+two tables ends with the union of what each of them saw under it.
+
+A row carrying the COUNT but not the LIST marks the set partial — see
+breakdownSet. A row carrying neither says nothing either way: a panel that has
+no such measure at all must not be reported as having lost its list.
+*/
+func accumulateBreakdownSet(dst breakdownSets, key, label string, row map[string]any) {
+	for _, field := range breakdownSetFields {
+		vals := stringListOf(row[field])
+		hasCount := numOf(row[breakdownSetKeys[field]]) > 0
+		if len(vals) == 0 && !hasCount {
+			continue
+		}
+		k := breakdownSetKey(key, label, field)
+		set := dst[k]
+		if set == nil {
+			set = &breakdownSet{members: map[string]bool{}}
+			dst[k] = set
+		}
+		if len(vals) == 0 {
+			set.partial = true
+			continue
+		}
+		for _, v := range vals {
+			if v = strings.TrimSpace(v); v != "" {
+				set.members[v] = true
+			}
+		}
+	}
+}
+
+/*
+applyBreakdownSets puts the lists back on the rebuilt row — and RE-DERIVES the
+count from each, except where it cannot.
+
+The count is the reason for the re-derivation. These figures are SUMMED across
+sources, which is exactly right while each source holds different values: within
+one platform it does, because the linking card reads InfringingDomain and the
+host card SourceDomain and no row is in both. Across PLATFORMS that guarantee is
+gone — two platforms reading tables that both carry a source domain would each
+count the same hostname, and the sum would say 14 mirrors over a list of 12.
+
+A count a reader can now check against a list has to agree with it. So where the
+whole list is in hand the count is its size; on the disjoint case — every case
+measured so far — that is the same number it already was.
+
+AND WHERE IT IS NOT IN HAND, THE LIST GOES rather than the count. A partial list
+under a larger count is the failure this whole mechanism exists to prevent, just
+with the two halves the other way round: the count stands, the drawer is not
+offered, and the card is exactly what it was before it had one.
+
+Sorted, so a report run twice over one window lists a row's values in the same
+order both times. Volume order does not survive a union; alphabetical is the
+order somebody scanning for one particular name wants anyway.
+*/
+func applyBreakdownSets(sets breakdownSets, key, label string, row map[string]any) {
+	for _, field := range breakdownSetFields {
+		set := sets[breakdownSetKey(key, label, field)]
+		if set == nil || len(set.members) == 0 {
+			continue
+		}
+		if set.partial {
+			delete(row, field)
+			continue
+		}
+		out := make([]string, 0, len(set.members))
+		for v := range set.members {
+			out = append(out, v)
+		}
+		sort.Strings(out)
+		row[field] = out
+		row[breakdownSetKeys[field]] = int64(len(out))
+	}
+}
+
+/*
+stringListOf reads a row field that holds a list of strings.
+
+Both shapes reach here: []string straight from the fold inside one process, and
+[]any once the same row has been through JSON — which is the road every cached
+platform report takes on its way into the summary merge. A field that is neither
+is no list, and reads as absent rather than as a one-item list of its own
+formatting.
+*/
+func stringListOf(v any) []string {
+	switch t := v.(type) {
+	case []string:
+		return t
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, x := range t {
+			if s := strFromAny(x); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 /*
@@ -2447,7 +2858,7 @@ func mergedBreakdownRow(label string, m map[string]int64, value string) map[stri
 	if value != "" {
 		row["value"] = value
 	}
-	for _, k := range []string{"repeats", "mirrors"} {
+	for _, k := range []string{"repeats", "mirrors", "extra", "extra2"} {
 		if v := m[k]; v != 0 {
 			row[k] = v
 		}

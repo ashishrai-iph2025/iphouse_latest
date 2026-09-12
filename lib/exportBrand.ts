@@ -180,7 +180,14 @@ export function xlsxLogoContentTypes(sheetCount: number): string {
 
 /**
  * One sheet's drawing part: the mark, floating over the top-left cell, offset
- * to sit centred over the table.
+ * to sit at the LEFT of the table.
+
+ * Left rather than centred, and that is a property of the artefact rather than
+ * a taste: a spreadsheet has no page width to be centred on. Its "middle" is
+ * the middle of whatever columns it happens to have, so the same mark lands in
+ * a different place on every sheet, and moves when a column is widened. Column
+ * A's left edge is the one fixed point every sheet shares — and it is where a
+ * reader's eye starts, which is the other half of the argument.
  *
  * `oneCellAnchor` rather than `twoCellAnchor`, deliberately: the picture keeps
  * the size given here whatever the reader does to the column widths, where a

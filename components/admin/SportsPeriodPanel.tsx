@@ -170,7 +170,7 @@ function EndPicker({ label, mode, value, edge, disabled, onMode, onValue }: {
         </div>
       ) : (
         <DatePicker value={value} onChange={onValue} disabled={disabled}
-          accentColor={BRAND_NAVY} placeholder="Pick a day" />
+          accentColor={BRAND_NAVY} placeholder="Today's Releases" />
       )}
 
       {/* The resolved day, always. A month picker hides which day it means, and

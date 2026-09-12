@@ -90,6 +90,28 @@ func TestAPanelWithoutTheseMeasuresDoesNotGrowThem(t *testing.T) {
 	}
 }
 
+/*
+EVERY measure a panel puts on a row survives the merge.
+
+Enumerated rather than spot-checked, because the failure repeats: `mirrors` was
+lost this way once, and `extra`/`extra2` — the provider cards' distinct domains
+and notices — were lost the same way weeks later, by the same mechanism. The
+merged row is CONSTRUCTED, so any key the construction does not name is gone,
+and the panel draws a heading over an empty column with nothing logged.
+
+If you add a measure to a breakdown row, add it here and it will be carried.
+*/
+func TestEveryPanelMeasureSurvivesTheMerge(t *testing.T) {
+	for _, k := range []string{"mirrors", "repeats", "extra", "extra2"} {
+		m := map[string]int64{}
+		accumulateBreakdown(m, map[string]any{"urls": 10, "removed": 4, k: 7})
+		row := mergedBreakdownRow("acme.example", m, "")
+		if got := numOf(row[k]); got == 0 {
+			t.Errorf("%q was dropped by the merge — a panel using it draws an empty column", k)
+		}
+	}
+}
+
 // And a panel that does carry them keeps them — the regression itself.
 func TestTheMergedRowKeepsEveryMeasureItWasGiven(t *testing.T) {
 	m := map[string]int64{}
@@ -123,7 +145,17 @@ func TestBothMergesUseTheOneFold(t *testing.T) {
 		}
 		s := string(src)
 
-		for _, call := range []string{"accumulateBreakdown(breakdowns[key][label], row)", "mergedBreakdownRow(label, m,"} {
+		for _, call := range []string{
+			"accumulateBreakdown(breakdowns[key][label], row)",
+			"mergedBreakdownRow(label, m,",
+			/* The non-numeric half of the same fold. A row's LISTS — the mirror
+			   domains on the root cards — cannot live in a map of int64, so they
+			   are folded beside it, and they come apart exactly the way the
+			   numbers did: one merge keeps calling these and the other quietly
+			   stops, and a card prints a count with an empty drawer under it. */
+			"accumulateBreakdownSet(bdSets, key, label, row)",
+			"applyBreakdownSets(bdSets, key, label, row)",
+		} {
 			if !strings.Contains(s, call) {
 				t.Errorf("%s no longer calls %s — the two merges have come apart, "+
 					"and a measure added to one will read 0 in the other", file, call)

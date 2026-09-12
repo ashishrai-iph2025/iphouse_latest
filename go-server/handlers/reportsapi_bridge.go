@@ -249,7 +249,12 @@ var apiMeasure = map[string][]string{
 	"likes":               {"likes"},
 	"comments":            {"comments"},
 	"crawled":             {"crawled"},
-	"notices":             {"noticesSent", "enforcements"},
+	/* The DMCA notices a host was sent. `dmcaNotices` is what the sports host
+	   dataset declares, verified against the live catalogue; the other two are
+	   what other datasets call it. Its absence here is why the provider card's
+	   notice count was empty — apiMeasureFor found no match, so the figure was
+	   never asked for, and nothing anywhere said so. */
+	"notices": {"dmcaNotices", "noticesSent", "enforcements"},
 	/* Delisting SUBMISSIONS, not delisted URLs. `delisted` above is how many
 	   links an engine dropped; this is how many batches we sent it, and the two
 	   sit on the same report — so they are never allowed to share a name. */
@@ -688,6 +693,50 @@ func apiScope(s reportSpec, ds reportsapi.Dataset, q map[string]string, except s
 	   ahead of the service degrades to exactly the behaviour it has today. */
 	if s.SportsAssetsOnly {
 		v.Set(sportsGenreParam, sportsGenreName)
+	}
+
+	/* ── How far into the takedown workflow to read ──────────────────────────
+
+	   Applied to the SCOPE, beside the genre above and for the identical reason:
+	   everything a section draws is built from this url.Values, so narrowing it
+	   narrows the KPI band, the trend, every breakdown, the raw rows and the
+	   cross-platform Summary at once — and cannot narrow some and miss others.
+
+	   SENT ONLY WHEN IT NARROWS. monitoringScopeValue returns the end-to-end
+	   value as empty, so the whole-engagement report goes to reports_api with no
+	   such parameter at all — which keeps it byte-identical to the report served
+	   before this slicer existed, cache key included. An unsent filter cannot
+	   change a figure, and that is the property that makes this safe to switch
+	   on for a client mid-season.
+
+	   The stage lives on mediascan.Asset and no fact table repeats it, so the
+	   portal cannot do this itself — the same wall the genre narrowing hits. The
+	   predicate is reports_api's; see monitoringScopeFilter in its assetattrs.go.
+	   An older service that does not declare the parameter ignores it, so a
+	   portal ahead of it degrades to the unnarrowed report rather than erroring. */
+	if scope := monitoringScopeValue(q); scope != "" {
+		v.Set(monitoringScopeParam, scope)
+	}
+
+	/* ── The pirate brand, as the hostnames it actually is ───────────────────
+
+	   The page sends a BRAND; the service is sent DOMAINS. Resolving the one to
+	   the other is the whole design — see piratebrand.go — and it happens here
+	   because this is the one place every query a section runs is scoped from.
+
+	   `except` is honoured: listing the brand slicer's own values must not be
+	   narrowed by the brand already chosen, or the dropdown holds exactly one
+	   option and there is no way to change your mind.
+
+	   An unresolved brand sends nothing at all. A stale bookmark naming an
+	   operator that has since gone quiet then returns the unfiltered report
+	   rather than an empty one — which is the direction every slicer in this
+	   product fails in, because an empty report cannot be told apart from a
+	   genuinely quiet window. */
+	if pirateBrandParam != except && s.Role == "linking" {
+		if list := brandDomainList(context.Background(), ds, q, s.DomainCol); list != "" {
+			v.Set(brandDomainsParam, list)
+		}
 	}
 	return v
 }
@@ -1194,6 +1243,10 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		if haveRowMx && hasProfileColumns(ds) {
 			kpi["profilesSuspended"] = rowMx.profilesSuspended
 			kpi["impactedSubscribers"] = rowMx.impactedSubscribers
+			/* The whole audience, counted the same way and for the same reason —
+			   the service's SUM would report one profile's followers once per
+			   post it made. Replaced rather than added, like the two above. */
+			kpi["totalSubscribers"] = rowMx.totalSubscribers
 		}
 
 		/* ── Titles in scope, on a report that may only name some of them ──
@@ -1528,7 +1581,7 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			   and the ranking under-reports it. */
 			if capped {
 				notice("Repeat offenders were counted over the first %d rows of this window, "+
-					"so an account's day count can be lower than its true one.", len(rows))
+					"so a profile's repeat count can be lower than its true one.", len(rows))
 			}
 			/* A pre-aggregated table counts with its own columns rather than
 			   with rows — Agg_Daily_Youtube_MasterNew carries ChannelURL, so it
@@ -1536,7 +1589,50 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			   TotalCount. Resolved from the same measurePairs inferSpec uses,
 			   so this panel and the KPI band count the same way. */
 			identCol, removedCol := repeatMeasureColumns(ds.Columns)
-			return computeRepeatOffenders(rows, d.Column, dateColOf(ds), identCol, removedCol, d.Limit)
+			/* The removal STAMP, which the repeat count is measured from. A
+			   dataset without one cannot say when anything came down, so it
+			   cannot say what came after — reported rather than drawn as a
+			   panel of zeroes. */
+			removalTimeCol := repeatRemovalTimeColumn(ds.Columns)
+			if removalTimeCol == "" {
+				notice("Repeat offenders needs a removal timestamp, which this source does not carry.")
+				return []map[string]any{}
+			}
+			/* The one PANEL-SCOPED slicer on the page. Applied to the raw rows
+			   here rather than to the scope, so the rest of the report stays on
+			   every platform it covers — see repeatPlatformParam. */
+			return computeRepeatOffenders(
+				filterRowsByPlatform(rows, q[repeatPlatformParam]),
+				d.Column, dateColOf(ds), identCol, removedCol, removalTimeCol, d.Limit)
+		}
+
+		/* ── The accounts with the biggest AUDIENCE ───────────────────────
+		   Ranked by followers rather than by volume, and counted here for the
+		   same reason the repeat panel is: the audience is a MAX per profile and
+		   a breakdown has already aggregated it away. See topprofiles.go. */
+		if d.Key == dimTopProfiles {
+			rows, capped, err := allRows()
+			if err != nil {
+				note(err)
+				return []map[string]any{}
+			}
+			/* The same caveat the repeat panel carries, and it bites the same
+			   way: the cap takes the OLDEST rows, so an account whose follower
+			   count was only crawled late in the window can be ranked on a
+			   reading it has since outgrown. */
+			if capped {
+				notice("%s was ranked over the first %d rows of this window, so an "+
+					"account's audience can be lower than its true one.", d.Label, len(rows))
+			}
+			identCol, removedCol := repeatMeasureColumns(ds.Columns)
+			subsCol := firstColumnOf(ds.Columns, []string{colSubscriberCnt})
+			if subsCol == "" {
+				notice("%s needs a subscriber count, which this source does not carry.", d.Label)
+				return []map[string]any{}
+			}
+			return computeTopProfiles(rows, d.Column, subsCol,
+				firstColumnOf(ds.Columns, []string{colProfileStatus}),
+				identCol, removedCol, d.Limit)
 		}
 
 		/* ── Turnaround, computed from the timestamps ─────────────────────
@@ -1614,7 +1710,117 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			identKey, removedKey = m, ""
 		}
 
+		/* The THIRD figure, where the panel asks for one.
+
+		   Free: a breakdown returns every measure the dataset declares, so this
+		   is a key already on the row rather than a second request. Resolved
+		   through apiMeasureFor like every other named figure, so a dataset that
+		   cannot answer for it leaves the number absent rather than filled with
+		   a plausible wrong one — see the note on identKey above. */
+		extraKey := ""
+		if d.APIExtra != "" {
+			if m, ok := apiMeasureFor(d.APIExtra, ds); ok {
+				extraKey = m
+			}
+		}
+		// The second, where a panel declares one — see dimension.APIExtra2.
+		extraKey2 := ""
+		if d.APIExtra2 != "" {
+			if m, ok := apiMeasureFor(d.APIExtra2, ds); ok {
+				extraKey2 = m
+			}
+		}
+
+		/*
+			── AND WHERE THE SERVICE DECLARES NO SUCH MEASURE ────────────────
+
+			Counted off the RAW ROWS instead, which this bridge already pages for
+			these datasets.
+
+			The declaration-only version was wrong in the one way that leaves no
+			trace. `apiMeasureFor` answers "does this dataset declare `domains`",
+			and where it does not, extraKey stays empty, the figure never lands on
+			a row, and the panel draws a heading over nothing. No query fails, no
+			notice is raised, and the column simply is not there — which looks
+			exactly like a panel that was never asked to show one. Two provider
+			cards sat like that through several rounds of me changing labels above
+			an empty column.
+
+			So the count no longer depends on the far side having thought of it.
+			A distinct count over a column IS the definition — enforcementByGroup
+			is the same helper the notice panels use, and the rows are in hand.
+		*/
+		extraFromRows := map[string]int64{}
+		extraFromRows2 := map[string]int64{}
+		/* WHICH values, not just how many.
+
+		   The provider cards draw the domain count on its own gauge, and a
+		   reader looking at "29 linking domains" wants the twenty-nine. They are
+		   already in hand — the walk below builds the distinct set per group and
+		   the count is its size — so the list costs nothing beyond carrying it.
+
+		   Only the FIRST extra gets one. The second is a count of notice ids,
+		   and a list of GUIDs is not something a reader can act on. */
+		extraListFromRows := map[string][]string{}
+		extraRowsCapped, extraRowsScanned := false, 0
+		setsPerGroup := func(col string) map[string][]string {
+			if col == "" {
+				return nil
+			}
+			raw, capped, err := allRows()
+			if err != nil {
+				note(err)
+				return nil
+			}
+			if capped {
+				extraRowsCapped, extraRowsScanned = true, len(raw)
+			}
+			return enforcementSetsByGroup(raw, d.Column, col)
+		}
+		countDistinctPerGroup := func(col string) map[string]int64 {
+			out := map[string]int64{}
+			/* Counted as the SIZE of the same set the list comes from — see
+			   enforcementSetsByGroup. Computing the two separately is how a
+			   gauge ends up reading 29 over a drawer holding 27. */
+			for label, list := range setsPerGroup(col) {
+				out[label] = int64(len(list))
+			}
+			return out
+		}
+		/* Resolved OR NOT — the row walk is prepared either way, because a
+		   measure the catalogue declares is not the same as a measure the
+		   BREAKDOWN returns.
+
+		   That distinction was learned the hard way. Both sports datasets
+		   declared `domains`, apiMeasureFor resolved it, the panel asked for
+		   nothing more — and the breakdown answered per group with identified
+		   and removed only, so the key was not on the row. numOf read the
+		   absence as 0, every gauge was empty, and the column dropped out,
+		   indistinguishable from a measure that does not exist.
+
+		   So the fallback below is keyed on the ANSWER rather than on the
+		   declaration: a figure that comes back zero for every group was not
+		   really answered, and the rows in hand can answer it exactly.
+
+		   MEASURED 12 September 2026: the breakdown now DOES return `domains`
+		   and `dmcaNotices`, so the service branch is the live one and the walk
+		   is what supplies the domain LIST beside it. Both roads are kept, and
+		   the count/list reconciliation below is what makes it safe not to know
+		   which one a given deployment is on. */
+		if d.ExtraExpr != "" {
+			extraListFromRows = setsPerGroup(distinctColOf(d.ExtraExpr))
+			for label, list := range extraListFromRows {
+				extraFromRows[label] = int64(len(list))
+			}
+		}
+		if d.ExtraExpr2 != "" {
+			extraFromRows2 = countDistinctPerGroup(distinctColOf(d.ExtraExpr2))
+		}
+
 		out := make([]map[string]any, 0, len(rows))
+		// How many rows ended up with a domain list — which is what decides
+		// WHICH caveat the cap deserves. See the notice below.
+		listsCarried := 0
 		for _, r := range rows {
 			row := map[string]any{
 				// label is what the reader sees, value is what a click filters
@@ -1627,8 +1833,78 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			if removedKey != "" {
 				row["removed"] = numOf(r[removedKey])
 			}
+			/* The service's answer where it gave one, the row walk where it did
+			   not. A zero is treated as "did not answer": a provider with no
+			   distinct domains at all is not a row this panel would have. */
+			if v := numOf(r[extraKey2]); extraKey2 != "" && v != 0 {
+				row["extra2"] = v
+			} else if v, ok := extraFromRows2[strFromAny(r["label"])]; ok {
+				row["extra2"] = v
+			}
+			if v := numOf(r[extraKey]); extraKey != "" && v != 0 {
+				/* ── THE SERVICE'S COUNT, AND THE WALK'S LIST BESIDE IT ────
+
+				   Both halves exist here and they come from different places.
+				   The count is the service's exact COUNT(DISTINCT) over the
+				   whole window; the list is this bridge's walk over the raw
+				   rows, which is capped at a hundred thousand of them.
+
+				   Uncapped, the two are the same set by construction and the
+				   list is simply the names behind the number. Capped, the walk
+				   saw a subset — and a drawer of eleven under a gauge reading
+				   seventeen is a card contradicting itself.
+
+				   So they are checked against each other rather than assumed to
+				   agree: the list is carried only when its length IS the count.
+				   The gauge keeps the exact figure either way; what varies is
+				   whether it opens. */
+				row["extra"] = v
+				if list := reconciledList(extraListFromRows[strFromAny(r["label"])], v); list != nil {
+					row["extraDomains"] = list
+					listsCarried++
+				}
+			} else if v, ok := extraFromRows[strFromAny(r["label"])]; ok {
+				/* No service answer, so the walk supplies both — and here they
+				   are the same set by definition: the count is len() of the list
+				   (see setsPerGroup). Nothing to reconcile. */
+				row["extra"] = v
+				if list := reconciledList(extraListFromRows[strFromAny(r["label"])], v); list != nil {
+					row["extraDomains"] = list
+					listsCarried++
+				}
+			} else if extraKey != "" {
+				row["extra"] = numOf(r[extraKey])
+			}
 			out = append(out, row)
 		}
+		/* A CAVEAT THE DRAWERS MAKE NECESSARY — and it is two different caveats.
+
+		   The row walk has always been capped. What that costs depends on which
+		   road supplied the count:
+
+		     · the SERVICE answered, so the count is exact over the whole window
+		       and only the LISTS fell short. reconciledList then withheld every
+		       one of them and the gauges do not open. Silence here would leave a
+		       reader who saw the domains yesterday wondering where they went.
+
+		     · nothing answered, so the walk supplied both and both understate.
+		       That was already true before these drawers existed; it is only
+		       sayable now, because a reader can finally see a domain missing.
+
+		   Raised only where this panel has domain lists at all. Every other panel
+		   the walk feeds is untouched. */
+		if extraRowsCapped && len(extraListFromRows) > 0 {
+			if listsCarried > 0 {
+				notice("%s was counted over the first %d rows of this window, so a "+
+					"provider's domain list can be short of domains it genuinely carries.",
+					d.Label, extraRowsScanned)
+			} else {
+				notice("%s covers more than the %d rows its domain lists are read over, "+
+					"so the counts are exact but the gauges do not open in this window.",
+					d.Label, extraRowsScanned)
+			}
+		}
+
 		// Where the dataset carries no name beside the id — or carries the column
 		// and leaves it null — the names come from the master. See dimMaster.
 		apiNameRows(out, lookupForDim(d), strings.TrimSpace(q["clientId"]))
@@ -1732,6 +2008,36 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		}(i, d)
 	}
 	panelWG.Wait()
+
+	/* ── How many PIRATE BRANDS this side is carrying ────────────────────────
+
+	   A brand is a site and all its mirrors counted once — livetv.sx,
+	   livetv901.me and cdn.livetv872.me are one operator — and the fold that
+	   decides it is domainRootBrand, which lives in this codebase rather than in
+	   the warehouse because it knows about multi-label suffixes that SQL string
+	   surgery does not.
+
+	   FREE, which is why it is computed here and nowhere else. domainRows
+	   fetches EVERY domain group for the three derived panels — not a top-N,
+	   deliberately, since a brand total folded from a truncated hostname list is
+	   short by whatever was cut and nothing about the number says so — and caches
+	   it per column for the request. AFTER panelWG.Wait() so that on a report
+	   drawing those panels this is a map read rather than a second fetch; on one
+	   that draws none, it is the only caller and pays once.
+
+	   Guarded on the spec having a domain column at all: a table with no
+	   hostname has no brands, and a zero would read as "no pirates" rather than
+	   "this side does not record them".
+
+	   Role-pinned through s.DomainCol, so the host half counts host brands and
+	   the linking half counts linking ones — the two figures the report shows
+	   side by side, and the pair that would silently become one number if this
+	   asked the table for whichever domain column it happened to have. */
+	if s.DomainCol != "" {
+		if rows, ok := domainRows(s.DomainCol); ok {
+			kpi["brands"] = int64(len(foldDomainRows(rows, domainRootBrand)))
+		}
+	}
 
 	for i, rows := range built {
 		if rows != nil {

@@ -87,6 +87,36 @@ func ensureLayoutSchema() {
 				log.Printf("[layout] add viz: %v", err)
 			}
 		}
+		/* ── The two provider panels stopped being single-measure ────────────
+
+		   They counted ONE thing — notices sent to a provider, de-indexing
+		   submissions made about its links — and `value` was the registry's own
+		   chart type for them: single-series bars, which is the right picture
+		   for one number.
+
+		   They now report three: how many sites the provider answers for, how
+		   much was identified on them, how much came down. `value` draws the
+		   first series and silently discards the other two, so a client who had
+		   ever saved a layout for these panels kept a card that looked exactly
+		   as before — the stored chart type overrides the registry (see
+		   applyLayout), and the stored one was chosen when one series was all
+		   there was.
+
+		   Cleared rather than rewritten, so the registry's choice applies and an
+		   admin can still pick anything they like afterwards. NARROW on purpose:
+		   only these two panel keys, and only where the stored value is the
+		   stale `value` — a deliberate `table` or `donut` is someone's decision
+		   about a panel they were looking at, and this is not entitled to it. */
+		if portalColumnExists(layoutTable, "viz") {
+			if _, n, err := db.Exec(
+				"UPDATE "+layoutTable+" SET viz = '' WHERE panel_key IN (?, ?) AND viz = 'value'",
+				dimHSPNotices, dimHSPDelisting); err != nil {
+				log.Printf("[layout] clear the stale provider-panel chart type: %v", err)
+			} else if n > 0 {
+				log.Printf("[layout] cleared a stale 'value' chart type on %d provider panel(s) — "+
+					"they carry three measures now and value draws one", n)
+			}
+		}
 		// A custom title and a description joined later still. Empty means "the
 		// registry's own name" and "no info icon" respectively, which is what
 		// every existing row means.
@@ -164,7 +194,7 @@ var vizChoices = []struct{ Key, Label string }{
 	   combined root-domain card is the only breakdown whose rows carry a
 	   `mirrors` figure — and a panel without that figure simply draws the pair
 	   of volume bars and says underneath that it has no mirror counts. */
-	{"mirror", "Volume & mirrors"},
+	{"mirror", "Volume & count"},
 	{"donut", "Donut"},
 	{"share", "Donut, ordered"},
 	{"table", "Ranked table"},
@@ -276,7 +306,10 @@ var kpiTileLabels = map[string]string{
 	"channelsSuspended": "Website / Channel Suspended",
 	// The social equivalent, and deliberately its own key: a suspended ACCOUNT
 	// is not a suspended channel, and one report shows both.
-	"profilesSuspended":   "Profiles Suspended",
+	"profilesSuspended": "Profiles Suspended",
+	// The account count and the audience behind it, on the social reports. A
+	// "channel" here is the PROFILE — see channelKPIs.
+	"totalSubscribers":    "Total Subscribers",
 	"suspendedWebsites":   "Suspended Websites",
 	"impactedSubscribers": "Impacted Subscribers",
 	"impactedTraffic":     "Impacted Traffic",
@@ -309,6 +342,18 @@ var kpiTileLabels = map[string]string{
 	"delisted":         "De-Indexed",
 
 	// ── Mobile apps ──────────────────────────────────────────────────────────
+	/* ── The two-sided open-web split ────────────────────────────────────────
+	   Each is one HALF of a figure the band already shows whole, so each says
+	   which half in its own name. "Linking" is the page that points at the
+	   content; "Host" is the machine holding it. A PIRATE BRAND is a site and
+	   all its mirrors counted once — see domainroot.go. */
+	"linkingIdentified": "Total Linking Identification",
+	"hostIdentified":    "Total Host Identification",
+	"linkingDomains":    "Total Linking Domains",
+	"hostDomains":       "Total Host Domains",
+	"linkingBrands":     "Pirate Brands",
+	"hostBrands":        "Host Pirate Brands",
+
 	"totalApps":         "Total Apps",
 	"totalCategories":   "Categories",
 	"totalDevelopers":   "Developers",
@@ -441,7 +486,21 @@ func (p panelDef) asMap() map[string]any {
 	if desc != "" {
 		out["desc"] = desc
 	}
-	if p.Sub != "" {
+	/* The SUBTITLE under a section heading.
+
+	   `Sub` is the built-in wording; an admin's own text wins, and it arrives in
+	   `Desc` because that is the field the layout editor offers on every panel.
+	   A heading has no ⓘ — it is a rule across the page with a line of guidance
+	   under it — so its description had nowhere to go and the grey line beneath
+	   "Volume and enforcement" was the one piece of copy on the report nobody
+	   could change.
+
+	   Mapped rather than given a field of its own, so the editor needs no
+	   special case: whatever is typed into a heading's description is what the
+	   reader sees under its title. */
+	if p.Kind == panelHeading && p.Desc != "" {
+		out["sub"] = p.Desc
+	} else if p.Sub != "" {
 		out["sub"] = p.Sub
 	}
 	if p.Viz != "" {
@@ -761,12 +820,36 @@ ways nobody asked for. So the fallback is all-or-nothing: a client either has a
 layout of its own or takes the default.
 */
 func layoutFor(platformKey, clientID string) map[string]layoutRow {
+	rows, _ := layoutForScoped(platformKey, clientID)
+	return rows
+}
+
+/*
+layoutForScoped is layoutFor, plus WHOSE layout came back.
+
+`own` is true only where the rows are this CLIENT'S — not the all-clients
+fallback, and not the shared layout read for itself. It is the difference
+between "somebody designed this page for this company" and "this company follows
+the default", and applyLayout needs to know which, because a panel missing from
+those two states means opposite things:
+
+  - missing from a client's OWN layout means it did not exist when that layout
+    was designed. Every save writes a row for every panel on the page, so the
+    only way to be absent is to have been added since.
+  - missing from the shared layout means the same thing, but the shared layout
+    is where an admin arranges the default for everyone — a new panel has to
+    surface there or nobody would ever know it existed.
+*/
+func layoutForScoped(platformKey, clientID string) (map[string]layoutRow, bool) {
 	ensureLayoutSchema()
 	out := readLayoutRows(platformKey, clientID)
-	if len(out) == 0 && clientID != layoutAllClients {
-		out = readLayoutRows(platformKey, layoutAllClients)
+	if len(out) > 0 {
+		return out, clientID != layoutAllClients
 	}
-	return out
+	if clientID != layoutAllClients {
+		return readLayoutRows(platformKey, layoutAllClients), false
+	}
+	return out, false
 }
 
 func readLayoutRows(platformKey, clientID string) map[string]layoutRow {
@@ -876,7 +959,19 @@ const maxRowLimit = 100
 // at position zero. So an unconfigured panel sorts on its default index, and a
 // configured one on its stored order, in the same sequence.
 func applyLayout(platformKey, clientID string, panels []panelDef) []panelDef {
-	stored := layoutFor(platformKey, clientID)
+	stored, own := layoutForScoped(platformKey, clientID)
+	return overlayLayout(panels, stored, own)
+}
+
+/*
+overlayLayout applies a stored layout to the registry's panels.
+
+Split from the lookup so the decision can be tested without a database — the
+same reason sportsPeriodScope takes its period rather than fetching it. `own`
+says whether `stored` is this client's own design or the shared default; see
+layoutForScoped, and the branch below that turns on it.
+*/
+func overlayLayout(panels []panelDef, stored map[string]layoutRow, own bool) []panelDef {
 	if len(stored) == 0 {
 		return panels
 	}
@@ -916,6 +1011,30 @@ func applyLayout(platformKey, clientID string, panels []panelDef) []panelDef {
 			if p.Kind == panelRealtime {
 				p.Rollup = row.Rollup
 			}
+		} else if own {
+			/* ── A PANEL THIS CLIENT'S LAYOUT HAS NEVER SEEN ─────────────────
+
+			   Hidden, rather than dropped into the page at its registry
+			   position.
+
+			   A save writes a row for EVERY panel on the page, so the only way
+			   to be missing from a client's own layout is to have been added
+			   since it was designed. Placed by the registry, a new card lands
+			   in the middle of a page somebody arranged deliberately — the one
+			   thing a bespoke layout exists to prevent, and it happens without
+			   anyone choosing it.
+
+			   Hidden is not lost. The layout editor lists these under its
+			   Hidden section, toggled off, so an admin with the grant sees
+			   exactly what is new and switches on the ones that belong. The
+			   decision moves from the registry to the person who designed the
+			   page.
+
+			   ONLY for a client's OWN layout. The shared one is where an admin
+			   arranges the default for everyone, and a new panel has to surface
+			   there or it would be invisible to every report at once — see
+			   layoutForScoped. */
+			p.Hidden = true
 		}
 		list = append(list, ranked{p, rank})
 	}
@@ -1092,6 +1211,19 @@ var filterParamLabels = map[string]string{
 	// Which SIDE of the open web to read — the only slicer here that selects a
 	// table rather than a value in one. See sourcetype.go.
 	"sourceType": "Source Type",
+
+	// How far into the takedown workflow to read — monitoring alone, or the
+	// whole engagement. Offered only to clients configured for it. See
+	// monitoringscope.go.
+	"monitoringScope": "Monitoring Scope",
+
+	// One pirate operator, however many hostnames it runs. Linking side only —
+	// the host table has no linking-domain column. See piratebrand.go.
+	"pirateBrand": "Pirate Brand",
+
+	// The only slicer that narrows ONE PANEL rather than the page — the platform
+	// behind the repeat-offender ranking. See repeatoffenders.go.
+	"repeatPlatform": "Platform (Repeat Offenders)",
 }
 
 func filterParamLabel(param string) string {
@@ -1147,7 +1279,7 @@ var unlistedFilterParams = map[string]bool{"channelUrl": true}
 
 // filterParamsFor is every slicer parameter a platform's tables can serve, in a
 // stable order — the candidates the filter pane is arranged from.
-func filterParamsFor(p platformDef) []string {
+func filterParamsFor(p platformDef, clientID string) []string {
 	specs, _ := specsForPlatform(p)
 	seen := map[string]bool{}
 	for _, sp := range specs {
@@ -1170,7 +1302,48 @@ func filterParamsFor(p platformDef) []string {
 	if platformOffersSourceType(specs) {
 		out = append(out, sourceTypeParam)
 	}
+	/* And the other slicer that is not a column — how far into the takedown
+	   workflow to read. Appended after the sort for the same reason as the one
+	   above, and offered only where the client is configured for it: most
+	   clients buy one engagement or the other, and for them this is a dropdown
+	   with a single meaningful setting. See monitoringscope.go.
+
+	   `clientID` is empty on the all-clients layout editor, where a per-client
+	   control has nothing to answer to — the per-client overlay is applied by
+	   the caller, and the slicer appears there once the client has it on. */
+	if clientID != "" && monitoringScopeEnabled(clientID) {
+		out = append(out, monitoringScopeParam)
+	}
+	/* And the one slicer that narrows a single PANEL rather than the page — the
+	   platform behind the repeat-offender ranking. Offered only where that panel
+	   exists and the source records a platform to pick from; see
+	   repeatPlatformParam for why it is deliberately not a scope filter. */
+	for _, sp := range specs {
+		if sp.Filters[repeatPlatformParam] != "" {
+			continue
+		}
+		if hasDim(sp, dimRepeatOffender) && specHasColumn(sp, colPlatform) {
+			out = append(out, repeatPlatformParam)
+			break
+		}
+	}
 	return out
+}
+
+// hasDim reports whether a spec draws a given panel.
+func hasDim(s reportSpec, key string) bool {
+	for _, d := range s.Dimensions {
+		if d.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// specHasColumn reports whether the spec's table carries a column, by the same
+// shape lookup inferSpec used to build it.
+func specHasColumn(s reportSpec, col string) bool {
+	return tableShapeOf(s.Table).has(col)
 }
 
 // filterParamOf reads the slicer parameter back off a filter panel's key.
@@ -1249,11 +1422,43 @@ func filterPanels(platformKey, clientID string, params []string, stillShown map[
 func sectionSlicers(platformKey, clientID string, params []string, stillShown map[string]bool) []string {
 	out := make([]string, 0, len(params))
 	for _, p := range filterPanels(platformKey, clientID, params, stillShown) {
-		if !p.Hidden {
-			out = append(out, p.Param)
+		if p.Hidden {
+			continue
 		}
+		/* THE PANEL-SCOPED ONES ARE NOT RAIL SLICERS.
+
+		   The rail is where a reader changes the SCOPE — every control in it
+		   moves the KPI band, the trends and all twenty panels together. The
+		   repeat-offender platform does not: it narrows one card and leaves the
+		   rest of the report alone, which is the whole point of it.
+
+		   Sitting in the rail it read as a scope control that was quietly
+		   failing, because that is what every other control there is. A reader
+		   picking TikTok from the pane has every reason to expect the page to
+		   follow, and nothing on screen explained why it did not. So the control
+		   moves onto the card it acts on, where its reach is obvious from where
+		   it is.
+
+		   It stays in `filters` — the section still UNDERSTANDS the parameter,
+		   the options endpoint still serves its values, and the card draws its
+		   own dropdown from them. Only the rail stops offering it. */
+		if panelScopedParams[p.Param] {
+			continue
+		}
+		out = append(out, p.Param)
 	}
 	return out
+}
+
+/*
+panelScopedParams narrow ONE panel rather than the page.
+
+A list rather than a flag on the parameter because it is read from two places
+that have no other reason to know about each other — the rail, which must not
+draw them, and the page, which draws them on their own cards.
+*/
+var panelScopedParams = map[string]bool{
+	repeatPlatformParam: true,
 }
 
 /*
@@ -1326,7 +1531,9 @@ on which charts survived.
 */
 func adminHiddenPanels(platformKey string) map[string]bool {
 	out := map[string]bool{}
-	in, ok := layoutInputsFor(platformKey)
+	// The all-clients layer: no client, so a per-client slicer has nothing to
+	// answer to here — see filterParamsFor.
+	in, ok := layoutInputsFor(platformKey, "")
 	if !ok {
 		return out
 	}
@@ -1377,7 +1584,7 @@ func ReportLayoutGet(w http.ResponseWriter, r *http.Request) {
 	}
 	clientID := strings.TrimSpace(r.URL.Query().Get("clientId"))
 
-	in, ok := layoutInputsFor(key)
+	in, ok := layoutInputsFor(key, clientID)
 	if !ok {
 		Fail(w, 404, "Unknown platform: "+key)
 		return
@@ -1452,9 +1659,16 @@ func ReportLayoutGet(w http.ResponseWriter, r *http.Request) {
 		   editor can show the default as a placeholder and still tell whether
 		   this panel has been described by hand. */
 		row["desc"] = p.Desc
-		if p.DefaultDesc != "" {
+		switch {
+		/* A heading's "description" IS its subtitle — see asMap — so the
+		   placeholder is the built-in one rather than a panel note it will never
+		   show. Without this the editor invited an admin to write an ⓘ note for
+		   a card that has no ⓘ. */
+		case p.Kind == panelHeading:
+			row["defaultDesc"] = p.Sub
+		case p.DefaultDesc != "":
 			row["defaultDesc"] = p.DefaultDesc
-		} else {
+		default:
 			row["defaultDesc"] = defaultPanelDesc(p)
 		}
 		// A heading is a rule across the page; letting it be half a row wide
@@ -1575,13 +1789,13 @@ type layoutInputs struct {
 	FollowPanels bool
 }
 
-func layoutInputsFor(key string) (layoutInputs, bool) {
+func layoutInputsFor(key, clientID string) (layoutInputs, bool) {
 	if p, found := platformByKey(key); found {
 		return layoutInputs{
 			Dims: sectionDimensions(p), Roles: rolesForPlatform(p),
 			Actions:   actionsForPlatform(p),
 			Delisting: delistingForPlatform(p),
-			Tiles:     kpiTilesFor(platformExtraKPIs(p)), Params: filterParamsFor(p),
+			Tiles:     kpiTilesFor(platformExtraKPIs(p)), Params: filterParamsFor(p, clientID),
 			Label: p.Label, FollowPanels: true,
 		}, true
 	}
@@ -1611,8 +1825,28 @@ func layoutInputsFor(key string) (layoutInputs, bool) {
 func platformExtraKPIs(p platformDef) []string {
 	specs, _ := specsForPlatform(p)
 	seen := map[string]bool{}
+	roles := map[string]bool{}
 	for _, sp := range specs {
 		for k := range sp.ExtraKPI {
+			seen[k] = true
+		}
+		if sp.Role != "" {
+			roles[sp.Role] = true
+		}
+	}
+	/* The per-side tiles, offered only on a platform that HAS two sides.
+
+	   They are not ExtraKPI entries — no spec computes them, because each is one
+	   side's figure and a spec only ever knows its own. runPlatform assembles
+	   them from roleKPI once both have answered, so this is where the layout
+	   editor is told they exist. Same guard as there: on a single-sided report
+	   each would be the headline figure under a second name.
+
+	   `brands` is offered with them and is the reason this cannot key off
+	   ExtraKPI at all — it is folded in the API bridge from the full hostname
+	   list, not summed from a column. */
+	if len(roles) > 1 {
+		for _, k := range perSideKPIs {
 			seen[k] = true
 		}
 	}
@@ -1622,6 +1856,22 @@ func platformExtraKPIs(p platformDef) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+/*
+perSideKPIs are the tiles that split a two-sided report into its halves.
+
+Listed once, in the order they read on the band: what was found, on how many
+sites, run by how many operators — linking first and host second, which is the
+order the page puts the two trends in and the order a link is followed.
+
+Assembled in runPlatform from roleKPI; see the note there for why each is left
+ABSENT rather than zero when a side does not report it.
+*/
+var perSideKPIs = []string{
+	"linkingIdentified", "hostIdentified",
+	"linkingDomains", "hostDomains",
+	"linkingBrands", "hostBrands",
 }
 
 // enabledPlatforms is every platform that is switched on, ignoring per-login
@@ -1684,7 +1934,7 @@ func ReportLayoutSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clientID := strings.TrimSpace(body.ClientID)
-	if _, ok := layoutInputsFor(key); !ok {
+	if _, ok := layoutInputsFor(key, clientID); !ok {
 		Fail(w, 404, "Unknown platform: "+key)
 		return
 	}

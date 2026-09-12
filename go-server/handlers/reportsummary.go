@@ -72,6 +72,26 @@ var knownFilterParams = []string{
 	// The hosting provider a DMCA notice was sent to — see
 	// enforcementactions.go.
 	"hspName",
+	/* The pirate brand, and the ONE slicer here that is not a plain column.
+
+	   It belongs in this list precisely BECAUSE it cannot be honoured
+	   everywhere: the host table has no linking-domain column, so choosing a
+	   brand must drop that spec rather than run it unfiltered and add an
+	   all-hosts figure to a brand-scoped one. See piratebrand.go. */
+	pirateBrandParam,
+
+	/* DELIBERATELY ABSENT: sourceType and monitoringScope.
+
+	   Both are slicers that do not name a value in a column — one selects a
+	   TABLE, the other a ceiling on the takedown workflow — so no spec declares
+	   them in Filters and every spec would fail specHonoursFilters the moment
+	   either was set. Which would not read as a bug: it reads as a report that
+	   empties itself when you use one of its own controls.
+
+	   They are honoured elsewhere and by construction. sourceType drops specs
+	   (specsForSourceType); monitoringScope rides on the scope to reports_api,
+	   which holds the predicate (see monitoringscope.go). Adding either to this
+	   list would break both. */
 }
 
 /* ── Panels ───────────────────────────────────────────────────────────────────
@@ -270,6 +290,138 @@ func summaryIsBuiltIn() bool {
 	return !real
 }
 
+/*
+narrowSummaryToAttached trims a CONFIGURED summary to the platforms this reader
+actually has.
+
+── THE BUG THIS FIXES ───────────────────────────────────────────────────────
+
+The built-in summary is a fan-out over summaryPlatforms, so it covers exactly
+what the reader can open and cannot drift. A CONFIGURED summary is an ordinary
+platform with a hand-maintained list of source tables, and that list answers to
+nobody: it stays as an admin typed it however the client's platforms change.
+
+On the sports report that showed up as a fourth bar. The section's sources
+included dashboards.UnifiedMobileAppsDashboardTable, so sourceChannelsFor saw a
+Mobile Apps channel and bySourcePlatform drew it — at zero, because
+bySourcePlatform keeps channels that contributed nothing on purpose (a silent
+platform is an answer). Meanwhile no Mobile Apps platform was enabled for the
+client, so the navigation had no such section. A reader saw a platform in the
+breakdown that the report did not otherwise admit existed.
+
+The bar was the visible half. The other half is that the table was QUERIED, and
+its rows went into Total Infringements, Removed and every merged breakdown
+beside them. It read zero here, which is why nobody had noticed; a client with
+real app data and no Mobile Apps section would have had it silently folded into
+their totals.
+
+── THE RULE ─────────────────────────────────────────────────────────────────
+
+A summary may only read a channel that at least one ATTACHED platform reads.
+"Attached" is summaryPlatforms' answer — enabled, and allowed for this reader —
+so the guarantee matches the one the module gate gives elsewhere: what the
+summary totals up is what the navigation offers, and nothing else.
+
+Compared by CHANNEL rather than by table, because the summary's tables are
+deliberately not the section's tables — a sports summary reads
+SportsURLRawData where the Open Web section may read the same table under a
+different platform row. Channel is the common denominator, and both sides
+derive it through the same sourceChannelName, so there is no label matching to
+get wrong.
+
+Filtering the TABLE LIST rather than the finished rows is what makes this one
+change fix both halves: every downstream figure — the channels in
+sourceChannelsFor, the specs in specsForPlatform, the KPI totals, the merged
+breakdowns and the cache key in platformShape, which is built from p.Tables —
+is derived from this list.
+
+Leaves every other platform untouched, and leaves a summary whose sources are
+already a subset exactly as it was.
+*/
+func narrowSummaryToAttached(p platformDef, claims *ipauth.Claims) platformDef {
+	// Checked before the lookup: summaryPlatforms is a database read, and every
+	// other platform must not pay for it. This runs inside the loop over every
+	// platform in ReportsSections, so the early return is what keeps that one
+	// query rather than one per section.
+	if p.Key != summaryKey || len(p.Tables) == 0 {
+		return p
+	}
+	return narrowToChannels(p, attachedChannels(summaryPlatforms(claims)), loginIDOf(claims))
+}
+
+// attachedChannels is the set of channels a reader's platforms cover, derived
+// the same way the summary's own are — see sourceChannelName.
+func attachedChannels(plats []platformDef) map[string]bool {
+	out := map[string]bool{}
+	for _, sub := range plats {
+		for _, ch := range sourceChannelsFor(sub) {
+			out[ch] = true
+		}
+	}
+	return out
+}
+
+/*
+narrowToChannels is the decision, taking the attached set rather than looking it
+up — so it can be tested without a database, the same split sportsPeriodScope is
+on and for the same reason.
+
+`loginID` is only for the log line.
+*/
+func narrowToChannels(p platformDef, attached map[string]bool, loginID int64) platformDef {
+	/* No attached platform at all: leave the summary alone rather than empty it.
+	   That state is a reader with no reports, which the callers already refuse
+	   with a 403 — reducing it to a table-less platform here would turn a clear
+	   refusal into a report of zeroes, which is the same wrong answer the rest
+	   of this file goes to some trouble to avoid giving. */
+	if len(attached) == 0 {
+		return p
+	}
+
+	kept := make([]string, 0, len(p.Tables))
+	dropped := []string{}
+	for _, t := range p.Tables {
+		if attached[sourceChannelName(t)] {
+			kept = append(kept, t)
+			continue
+		}
+		if ch := sourceChannelName(t); !containsString(dropped, ch) {
+			dropped = append(dropped, ch)
+		}
+	}
+	if len(dropped) == 0 {
+		return p
+	}
+	/* Every table gone means the configured summary and the reader's platforms
+	   have no channel in common at all — a configuration that is wrong in some
+	   other way. Left whole for the same reason as the empty set above: this
+	   guard trims a summary, it does not delete one. */
+	if len(kept) == 0 {
+		log.Printf("[summary] loginId=%d: every source table belongs to an unattached "+
+			"channel %v — left as configured, because narrowing to nothing would "+
+			"report zeroes instead of the misconfiguration", loginID, dropped)
+		return p
+	}
+	/* Logged, because this is configuration drifting rather than a reader doing
+	   anything unusual: the admin who added the source is the person who can
+	   remove it from Report Configuration, and until they do this fires on
+	   every request. */
+	log.Printf("[summary] loginId=%d: dropped %d source table(s) for unattached channel(s) %v — "+
+		"the summary reads only channels an attached platform covers",
+		loginID, len(p.Tables)-len(kept), dropped)
+
+	p.Tables = kept
+	return p
+}
+
+// loginIDOf is nil-safe, so the log line above cannot be the thing that panics.
+func loginIDOf(claims *ipauth.Claims) int64 {
+	if claims == nil {
+		return 0
+	}
+	return claims.LoginID
+}
+
 /* ── GET /api/reports/sections — the summary's descriptor ─────────────────── */
 
 // summarySection describes the summary to the page: which panels to draw, in
@@ -444,6 +596,8 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 	prevFrom, prevTo := "", ""
 	daily := map[string]map[string]int64{}
 	breakdowns := map[string]map[string]map[string]int64{}
+	// The non-numeric half of the same fold — see breakdownSets.
+	bdSets := breakdownSets{}
 	dimValues := map[string]map[string]string{}
 	platformRows := []map[string]any{}
 	suspensionRows := []map[string]any{}
@@ -572,6 +726,10 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 					// accumulateBreakdown in reportplatforms.go for why these two
 					// share one implementation.
 					accumulateBreakdown(breakdowns[key][label], row)
+					/* And the LISTS, which the totals map above cannot hold —
+					   see accumulateBreakdownSet in reportplatforms.go. Called
+					   from both merges for the same reason its numeric twin is. */
+					accumulateBreakdownSet(bdSets, key, label, row)
 					if v := strFromAny(row["value"]); v != "" {
 						if dimValues[key] == nil {
 							dimValues[key] = map[string]string{}
@@ -697,6 +855,7 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 		rows := make([]map[string]any, 0, len(byLabel))
 		for label, m := range byLabel {
 			row := mergedBreakdownRow(label, m, dimValues[key][label])
+			applyBreakdownSets(bdSets, key, label, row)
 			rows = append(rows, row)
 		}
 		sort.Slice(rows, func(i, j int) bool { return numOf(rows[i]["urls"]) > numOf(rows[j]["urls"]) })
@@ -728,6 +887,12 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 	if len(noticeRows) > 0 {
 		bdOut["byNoticePlatform"] = noticeRows
 	}
+
+	/* The same host-compliance column the platform reports carry. Resolved
+	   here too rather than inherited: the merge above rebuilds every row out
+	   of its numbers, so the status each platform resolved is already gone by
+	   this point. See domaincompliance.go. */
+	annotateHostCompliance(bdOut)
 
 	out := map[string]any{
 		"ok": true, "available": true, "type": summaryKey, "label": summaryLabel,

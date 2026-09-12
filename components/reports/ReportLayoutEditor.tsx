@@ -338,11 +338,18 @@ export default function ReportLayoutEditor({ platform, sections, open, onClose, 
           </span>
 
           <span className="flex items-center gap-0.5 flex-shrink-0">
-            {/* Everything but a section rule can be renamed and described —
-                slicers included, since the rail is where a reader most often
-                needs telling what a control narrows. A rule already IS a title
-                and carries its own subtitle, so it has nothing to add. */}
-            {p.kind !== 'heading' && (
+            {/* EVERY panel can be renamed and described, section rules
+                included — slicers too, since the rail is where a reader most
+                often needs telling what a control narrows.
+
+                A rule was excluded on the reasoning that it already IS a title
+                and carries its own subtitle, so it had nothing to add. That
+                left the two lines heading each section — "Volume and
+                enforcement", "Breakdowns" and the grey sentences under them —
+                as the only copy on the report nobody could change. A heading's
+                description IS its subtitle now; see asMap in
+                go-server/handlers/reportlayout.go. */}
+            {(
               <button type="button"
                 onClick={() => setEditKey(k => k === p.key ? null : p.key)}
                 aria-expanded={editKey === p.key}
@@ -423,7 +430,7 @@ export default function ReportLayoutEditor({ platform, sections, open, onClose, 
         {/* Rename and describe. Local until Save, like every other edit here —
             the report keeps its current wording until the whole layout is
             written, so a half-typed title never reaches a reader. */}
-        {editKey === p.key && p.kind !== 'heading' && (
+        {editKey === p.key && (
           <div className="mt-2.5 pt-2.5 border-t border-gray-100 dark:border-white/10 space-y-2.5">
             <label className="block">
               <span className="text-[9px] font-bold uppercase tracking-widest text-gray-400 block mb-1">
@@ -442,20 +449,26 @@ export default function ReportLayoutEditor({ platform, sections, open, onClose, 
             </label>
             <label className="block">
               <span className="text-[9px] font-bold uppercase tracking-widest text-gray-400 block mb-1">
-                Description
+                {/* A section rule has no ⓘ — the field IS the grey line under
+                    its title, so it is named for what the reader will see. */}
+                {p.kind === 'heading' ? 'Subtitle' : 'Description'}
               </span>
-              <textarea value={p.desc} maxLength={1000} rows={3}
+              <textarea value={p.desc} maxLength={1000} rows={p.kind === 'heading' ? 2 : 3}
                 onChange={e => patch(p.key, { desc: e.target.value })}
                 placeholder={p.defaultDesc
-                  || 'What this figure means, how it is counted, or what to read it against…'}
+                  || (p.kind === 'heading'
+                    ? 'The line under this heading…'
+                    : 'What this figure means, how it is counted, or what to read it against…')}
                 className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-white/15
                   bg-white dark:bg-white/[0.06] text-[12px] text-[#14254A] dark:text-white resize-y
                   placeholder:text-gray-300 dark:placeholder:text-white/25
                   focus:outline-none focus:border-[#FC934C]" />
               <span className="text-[10px] text-gray-400 block mt-0.5">
-                {p.defaultDesc
-                  ? 'Appears behind an ⓘ on the card. Leave empty to keep the note shown in grey.'
-                  : 'Appears behind an ⓘ on the card. Leave empty for no icon.'}
+                {p.kind === 'heading'
+                  ? 'Shown under the heading on the report. Leave empty to keep the line shown in grey.'
+                  : p.defaultDesc
+                    ? 'Appears behind an ⓘ on the card. Leave empty to keep the note shown in grey.'
+                    : 'Appears behind an ⓘ on the card. Leave empty for no icon.'}
               </span>
             </label>
           </div>

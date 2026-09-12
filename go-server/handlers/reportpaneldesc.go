@@ -39,7 +39,8 @@ var kpiTileDescriptions = map[string]string{
 	"profilesSuspended": "Social accounts taken down in full, rather than a single post removed from them.",
 	"suspendedWebsites": "Websites taken down in full, rather than a single URL removed from them.",
 
-	"impactedSubscribers": "Combined subscriber count of the channels carrying infringements — the audience they could reach, not the audience they did.",
+	"impactedSubscribers": "Combined subscriber count of the channels carrying infringements — the audience they could reach, not the audience they did. Counted only on accounts that have been SUSPENDED, so it is the reach enforcement has taken off the table; Total Subscribers is the whole of it.",
+	"totalSubscribers":    "The combined audience of every profile found infringing in this window — one figure per account, taken as its highest reading, however many posts it made. NOT a sum of the column: an account appears on every post, so adding it up counts the same followers over and over. Total Channels is how many accounts that audience is spread across.",
 	"impactedTraffic":     "Estimated traffic to the pages carrying infringing content.",
 	"views":               "Total views on the infringing content found in this window.",
 	"viewsImpacted":       "Views on the infringing content that is now DOWN — the share of the audience above that the takedowns removed. Counted where the removal status is Dead.",
@@ -58,6 +59,22 @@ var kpiTileDescriptions = map[string]string{
 	"googleDelisted": "Links Google has dropped from its search results.",
 	"bingDelisted":   "Links Bing has dropped from its search results.",
 	"delisted":       "Links search engines have dropped from their results. Not the same as removal — a de-indexed page is still active, just harder to find.",
+
+	/* ── The two-sided open-web split ────────────────────────────────────────
+
+	   Each of these is one HALF of a figure the band already carries whole, so
+	   each note says which half — and the linking/host distinction is the one
+	   thing about this report a reader cannot infer from a number. */
+	"linkingIdentified": "Infringing URLs found on the LINKING side — the pages that point at the content. The host side has its own tile; Total Infringements is the two added together.",
+	"hostIdentified":    "Infringing URLs found on the HOST side — the machines actually holding the content. The linking side has its own tile; Total Infringements is the two added together.",
+	"linkingDomains":    "Distinct websites on the linking side — one site however many links were found on it.",
+	"hostDomains":       "Distinct websites on the host side — one site however many files were found on it.",
+	/* The pair most likely to be misread as a domain count, so both say what a
+	   brand IS. The figure is deliberately far smaller than the domain count
+	   beside it, and that gap is the finding: it is how many hosts each operator
+	   is running. */
+	"linkingBrands": "Distinct pirate BRANDS on the linking side — a site and all its mirrors counted once, so livetv.sx, livetv901.me and cdn.livetv872.me are one operator. Always lower than Total Linking Domains, and the gap between the two is how many mirrors the operators are running.",
+	"hostBrands":    "Distinct pirate BRANDS on the host side — a site and all its mirrors counted once. Always lower than Total Host Domains; the gap is the mirror count.",
 
 	"totalApps":         "Distinct app titles found across the stores this report reads.",
 	"totalCategories":   "Distinct store categories the infringing apps were listed under.",
@@ -79,11 +96,13 @@ var dimDescriptions = map[string]string{
 	dimSourcePlatform: "Each channel this report covers — the open web, social media, Telegram, the app stores — with its own identified and removed figures. The panel the rest of the page is read through.",
 
 	"byDomain":            "The websites LINKING to infringing content, ranked by how many links were found on each.",
-	"byDomainSource":      "The websites HOSTING infringing content, ranked by how many were found on each.",
+	"byDomainSource":      "The websites HOSTING infringing content, ranked by how many were found on each. Each one carries whether it has honoured a notice before — Compliant, Non-Compliant, Unknown where the routing table records the domain without saying, and Not recorded where no notice route has been set up for it at all. That is a fact about the domain's history rather than about this window, so it does not move with the date range; it comes from the same takedown routing table the enforcement flow sends by.",
 	"byDomainRoot":        "Infringing sites grouped by brand, so a site and its mirrors count as one.",
-	"byDomainRootMirrors": "How many distinct mirror domains each brand was seen under — its mirror count, not its URL count.",
-	"byDomainRootAll":     "The LINKING side, per brand: infringing URLs found on the operator's linking domains, how many of those Google approved for de-indexing, and how many distinct mirror domains it was running. Linking domains only — the pages that point at infringing content, never the ones hosting it, which have their own card. The mirror count is drawn on its own scale beside the volume bars, never on the same axis: it counts domains, and the volumes beside it count URLs, orders of magnitude larger. Switch to TABLE for the de-indexing rate and share.",
-	"byDomainRootSource":  "The HOST side, per brand: infringing URLs found on the operator's host domains, how many came down, and how many distinct mirror domains it was running. Host domains only. Its second measure is removal — a notice the host acted on — which is a different fact from the linking card's de-indexing, so the two are never added together. The mirror count is drawn on its own scale beside the volume bars. Switch to TABLE for the removal rate and share.",
+	"byDomainRootMirrors": "How many distinct mirror domains each brand was seen under — its mirror count, not its URL count. Switch to TABLE to read the domains themselves.",
+	"byDomainRootAll":     "The LINKING side, per brand: infringing URLs found on the operator's linking domains, how many of those Google approved for de-indexing, and how many distinct mirror domains it was running. Linking domains only — the pages that point at infringing content, never the ones hosting it, which have their own card. The mirror count is drawn on its own scale beside the volume bars, never on the same axis: it counts domains, and the volumes beside it count URLs, orders of magnitude larger. Switch to TABLE for the de-indexing rate and share. The mirror count also OPENS: click it to list the domains behind it, and the same list travels as a column in the table view and in the download.",
+	"byDomainRootSource":  "The HOST side, per brand: infringing URLs found on the operator's host domains, how many came down, and how many distinct mirror domains it was running. Host domains only. Its second measure is removal — a notice the host acted on — which is a different fact from the linking card's de-indexing, so the two are never added together. The mirror count is drawn on its own scale beside the volume bars. Switch to TABLE for the removal rate and share. The mirror count also OPENS: click it to list the domains behind it, and the same list travels as a column in the table view and in the download.",
+
+	dimTopProfiles: "The ten accounts with the biggest AUDIENCE, with what was found on each, what came down, and whether the account itself is still up. Ranked by followers rather than by volume — the repeat-offender panel answers who gives us the most work; this one answers who reaches the most people, and an account with a handful of posts and millions of followers appears on this card and not that one. The follower figure is each account's own highest reading in the window, never a sum across its posts.",
 
 	"byAsset":     "The titles most affected, by how many infringing URLs were matched to each.",
 	"byAssetName": "The titles most affected, by how many infringing URLs were matched to each.",
@@ -91,7 +110,7 @@ var dimDescriptions = map[string]string{
 
 	/* Days, not volume — the whole point of the panel, and invisible from a bar
 	   whose length is the URL count. */
-	dimRepeatOffender: "Accounts ranked by how many separate DAYS they were caught on, not by how much they posted. One account with a busy afternoon is not a repeat offender; one caught again three weeks later is.",
+	dimRepeatOffender: "Channels and profiles ranked by how many times they came BACK — content went up, we got it removed, and more content went up on the same account afterwards. URLs found in one sweep count as one offence, so a busy afternoon is not a repeat; a return two hours after a takedown is. Beside the count is the account's own state: Suspended where the platform closed it, Not Available where it is still up or was never reported. A high count still reading Not Available is the account defying enforcement. Accounts we have never removed anything from do not appear here at all — they are not repeat offenders, and the Top Channels card beside this one ranks by volume.",
 
 	"byLanguage":           "The languages the infringing content was published in.",
 	"byLanguageId":         "The languages the infringing content was published in.",
@@ -115,14 +134,15 @@ var dimDescriptions = map[string]string{
 	"bySearchEngineNotices": "How many enforcement notices went to each search engine. Notices, not the URLs they covered.",
 	"byDelistingStatus":     "Infringing links found, against how many of them each search engine has dropped.",
 
-	dimHSPNotices:             "How many distinct takedown notices each hosting provider received — counted once each, not once per URL the notice listed.",
-	dimHSPDelisting:           "How many distinct de-indexing submissions covered links hosted by each provider — counted once each, not once per link the submission contained. The notices panel counts what was sent TO a provider; this counts what was sent to search engines ABOUT it.",
+	dimHSPNotices:             "What each hosting provider answers for on the HOST side: how much was found on the sites it carries, how much came down, how many distinct host domains it is running, and how many takedown notices it received — each notice counted once, not once per URL it listed. The domain gauge OPENS: click it to list the domains themselves. The notices gauge does not, because its rows are notice ids rather than anything a reader can act on.",
+	dimHSPDelisting:           "The same providers on the LINKING side: how much was found on the linking domains they carry, how much Google approved for de-indexing, and how many distinct linking domains each is running. Click the domain gauge to list them. Paired with the host card above — a provider can run a large linking estate and a small hosting one, and the two cards exist to show that apart.",
 	dimEngineDelistingBatches: "How many distinct de-indexing each search engine received — counted once each, not once per link the submission contained.",
 	dimNoticesByDay:           "How many distinct notices went out on each upload date. A notice covering two days' URLs counts on both — the question is what went out that day.",
 	dimBatchesByDay:           "How many distinct de-indexing were sent on each upload date.",
 
-	"byFranchise": "Identification and removal per franchise. A closed list, so every franchise is shown rather than a top ten.",
-	"byMatchDay":  "Identification and removal per match day. A closed list, so every match day is shown rather than a top ten.",
+	"byFranchise":   "The competitions being pirated most, by how many infringing URLs were matched to each. A top ten by default — the cut is set per client in Report Configuration, and the heading restates whatever it is, so a franchise that fell outside it is never silently missing.",
+	dimOverallByDay: "What was found and what came down on each day of the window, both sides of the report added together — the linking pages and the hosts as one movement rather than the two trend cards read separately. Every day is drawn, including the quiet ones, so the gaps are real gaps.",
+	"byMatchDay":    "Identification and removal per match day. A closed list, so every match day is shown rather than a top ten.",
 
 	"byApp":           "The app titles found, ranked by how many listings each had.",
 	"byCategory":      "The store categories the infringing apps were listed under.",
@@ -165,6 +185,17 @@ var filterDescriptions = map[string]string{
 	   Source. A reader who is not told they are the same two things reads the
 	   control as a third dimension. */
 	"sourceType": "Read one side of the open web instead of both. Infringing is the linking pages (the Linking panels); Source is the hosts behind them (the Host panels). Left unset, every figure covers both added together.",
+
+	/* The two values OVERLAP, and the description has to say so or the control
+	   reads as a two-way split whose halves should add up to the whole. They do
+	   not: end-to-end IS the whole. Named by the stages rather than by the
+	   engagement alone, because a reader checking a figure against the asset
+	   list needs to know which titles are in and the stage is what says so. */
+	"repeatPlatform": "Narrow the repeat-offender ranking to one platform — and ONLY that panel. Every other slicer here narrows the whole page; this one leaves the rest of the report on all the platforms it covers, so you can ask which accounts keep coming back on TikTok without taking the KPI band and the charts off everything else.",
+
+	"pirateBrand": "Narrow to one pirate operator — a site and all its mirrors together, so picking livetv covers livetv.sx, livetv901.me and cdn.livetv872.me at once. The brand is worked out from the hostname, not stored, so the list is the operators actually seen in this window. LINKING SIDE ONLY: the host table records no linking domain, so choosing a brand shows the linking half of the report rather than mixing a brand-scoped figure with an all-hosts one.",
+
+	"monitoringScope": "How far into the takedown workflow to read. Monitoring Only covers titles at Discovery, Discovery QC or Enforcement QC; End to End covers all six stages, which is every title — so it narrows nothing and is the report you see with this unset. The stage is a property of the title, from the asset master.",
 }
 
 /*

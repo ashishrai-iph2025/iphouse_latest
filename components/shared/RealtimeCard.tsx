@@ -1496,11 +1496,11 @@ export default function RealtimeCard({
                 guessable from anything on screen — see scopeNote. */}
             <h3 className="font-bold text-[#14254A] dark:text-white leading-tight flex items-center gap-1.5">
               {title}
-              {/* The admin's note first, the card's own note under it —
-                  see `desc` above for why this is an addition and not a
-                  substitution. */}
-              <InfoDot text={[desc, scopeNote(shown, REFRESH_MS[source] ?? 60_000)]
-                .filter(Boolean).join('\n\n')} />
+              {/* The configured description where there is one, the card's own
+                  note where there is not — see `desc` above. Trimmed before the
+                  test so a description of nothing but spaces reads as none,
+                  rather than as a blank tooltip that has replaced a useful one. */}
+              <InfoDot text={desc?.trim() || scopeNote(shown, REFRESH_MS[source] ?? 60_000)} />
             </h3>
             <span className="flex items-center gap-1.5 flex-shrink-0">
               {/* While a read the reader asked for is in flight, how old the

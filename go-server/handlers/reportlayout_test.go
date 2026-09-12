@@ -132,9 +132,13 @@ func TestEveryPanelCarriesADescription(t *testing.T) {
 				"thing that stops it being read as a URL count", metric)
 		}
 	}
-	// And the repeat panel, whose bars are a volume its ranking ignores.
-	if !strings.Contains(dimDescriptions[dimRepeatOffender], "DAYS") {
-		t.Error("the repeat-offenders note does not say it ranks by days, not volume")
+	/* And the repeat panel, whose bars are a volume its ranking ignores. The
+	   note has to say what the ranking IS — coming back after a takedown — or a
+	   reader takes the gold number for another count of the bars beside it.
+	   Pinned on BACK rather than on the whole sentence so the wording can be
+	   improved without the test being rewritten to match it. */
+	if !strings.Contains(dimDescriptions[dimRepeatOffender], "BACK") {
+		t.Error("the repeat-offenders note does not say it ranks by coming back after a takedown")
 	}
 }
 

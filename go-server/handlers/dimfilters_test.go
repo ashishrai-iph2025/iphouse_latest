@@ -66,11 +66,21 @@ func TestSportsAssetDimensions(t *testing.T) {
 			t.Errorf("%s filters on %q, want %q — the bridge sends this to "+
 				"reports_api as its dimension key", d.Key, got, w.param)
 		}
-		// A season's fixtures are a distribution, not a top-N: the merge must
-		// keep every row rather than cutting to fifteen.
-		if !closedSetDims[d.Key] {
+		/* MATCH DAY is a distribution and must keep every row: a season with a
+		   fixture missing is a hole the reader cannot see, and the merge across
+		   two tables would cut it to fifteen.
+
+		   FRANCHISE is not, any more. It is read as a ranking — which
+		   competitions are pirated most — so it takes the top-N treatment every
+		   other ranking does, and the heading restates the cut rather than
+		   leaving it silent. */
+		if d.Key == "byMatchDay" && !closedSetDims[d.Key] {
 			t.Errorf("%s is not in closedSetDims, so merging two tables would cut "+
 				"it to the top 15 and leave holes in the season", d.Key)
+		}
+		if d.Key == "byFranchise" && closedSetDims[d.Key] {
+			t.Error("byFranchise is back in closedSetDims — it is a top-N ranking now, " +
+				"and a closed set cannot be cut to ten")
 		}
 	}
 	for k := range want {

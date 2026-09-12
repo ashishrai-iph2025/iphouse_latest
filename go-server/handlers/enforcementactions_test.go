@@ -25,8 +25,13 @@ differently spelled one that does not exist. Getting this wrong does not fail: i
 draws the section's own identified count under a title promising notices.
 */
 func TestEnforcementPanelsCountActionsNotURLs(t *testing.T) {
+	/* dimHSPNotices was here and is not any more: it counted notices per
+	   provider and now reports what each provider answers for — sites,
+	   identifications, removals — so none of the action rules below apply to it.
+	   See its entry in reportplatforms.go, and TestTheProviderPanelsAreTwoPanels
+	   for what replaced these assertions. The per-engine panel is unchanged and
+	   is still an action. */
 	want := map[string]struct{ column, needs, measure, param, role string }{
-		dimHSPNotices:             {"HSPName", colSourceNoticeID, "notices", "hspName", "host"},
 		dimEngineDelistingBatches: {"SearchEngineName", colDelistingBatchID, "delistingBatches", "searchEngine", "linking"},
 	}
 	seen := map[string]bool{}

@@ -51,6 +51,13 @@ func ReportsSections(w http.ResponseWriter, r *http.Request) {
 		if allowed != nil && !allowed[p.Key] {
 			continue
 		}
+		/* A configured summary is described from its ATTACHED channels only —
+		   the same narrowing the data path applies, so the panels this promises
+		   and the figures that arrive are built from one table list. Without it
+		   here the section would still declare a bySourcePlatform panel for a
+		   channel the data no longer carries, and the page would draw an empty
+		   bar for it. See narrowSummaryToAttached. */
+		p = narrowSummaryToAttached(p, claims)
 		if p.Key != summaryKey {
 			visible = append(visible, p)
 		}
@@ -58,7 +65,7 @@ func ReportsSections(w http.ResponseWriter, r *http.Request) {
 		// panel is offered when at least one of its tables can produce it.
 		specs, _ := specsForPlatform(p)
 		dims := sectionDimensions(p)
-		params := filterParamsFor(p)
+		params := filterParamsFor(p, clientID)
 		extraSeen := map[string]bool{}
 		for _, sp := range specs {
 			for k := range sp.ExtraKPI {
@@ -220,8 +227,21 @@ func sectionDimensions(p platformDef) []map[string]any {
 			   can offer to change it and can say what it is changing FROM. 0
 			   means this panel is a closed list — every day of the window,
 			   every platform — and must not be cut at all. */
-			dims = append(dims, map[string]any{
-				"key": d.Key, "label": d.Label, "viz": viz, "limit": d.Limit})
+			dim := map[string]any{
+				"key": d.Key, "label": d.Label, "viz": viz, "limit": d.Limit}
+			/* The THIRD figure's name, where the panel carries one — see
+			   dimension.APIExtra. Published so the page can title the column and
+			   the chart row without a second copy of the mapping: the two
+			   provider panels are the only ones with it today, and hard-coding
+			   "Websites" on the page would put the naming in a file that does
+			   not know which panels have the figure at all. */
+			if d.ExtraLabel != "" {
+				dim["extraLabel"] = d.ExtraLabel
+			}
+			if d.ExtraLabel2 != "" {
+				dim["extraLabel2"] = d.ExtraLabel2
+			}
+			dims = append(dims, dim)
 		}
 	}
 	// Panels are collected table by table but read as one page, so they are put
@@ -591,14 +611,40 @@ func runSpec(s reportSpec, q map[string]string, bg bool) map[string]any {
 			}
 		}
 
-		/* Repeat offenders carry a THIRD measure — how many distinct days the
-		   account was seen on — which no other panel has and the generic
-		   queries below cannot express. Its own statement, and its own row
-		   mapping, so `repeats` survives to the page. See repeatoffenders.go. */
+		/* Repeat offenders carry TWO measures no other panel has — the repeat
+		   count and the profile's own status — which the generic queries below
+		   cannot express. Its own statement and its own row mapping, so both
+		   survive to the page. See repeatoffenders.go.
+
+		   Skipped where the table has no removal stamp: the count is measured
+		   from it, and without one every profile scores zero. An absent panel
+		   is a question somebody asks; a panel of zeroes is one nobody does. */
 		if d.Key == dimRepeatOffender {
+			removalTimeCol := tableShapeOf(s.Table).firstOf(repeatRemovalTimeColumns)
+			if removalTimeCol == "" {
+				continue
+			}
 			breakdowns[d.Key] = mapRows(
-				run(repeatOffenderSQL(s, d, where, identExpr, removedExpr)),
-				"label", "value", "urls", "removed", "repeats")
+				run(repeatOffenderSQL(s, d, where, identExpr, removedExpr, removalTimeCol)),
+				"label", "value", "urls", "removed", "repeats", "profileStatus")
+			continue
+		}
+
+		/* ── The audience ranking, on the direct path ─────────────────────
+		   Its API twin folds raw rows (computeTopProfiles); here the same shape
+		   is a plain GROUP BY, because MAX per profile is exactly what a group
+		   gives. Skipped where the table records no audience: a ranking by reach
+		   with nothing to rank on is a list in arbitrary order. */
+		if d.Key == dimTopProfiles {
+			shape := tableShapeOf(s.Table)
+			subsCol := shape.firstOf([]string{colSubscriberCnt})
+			if subsCol == "" {
+				continue
+			}
+			breakdowns[d.Key] = mapRows(
+				run(topProfilesSQL(s, d, where, identExpr, removedExpr, subsCol,
+					shape.firstOf([]string{colProfileStatus}))),
+				"label", "value", "urls", "removed", "extra", "profileStatus")
 			continue
 		}
 
@@ -635,13 +681,30 @@ func runSpec(s reportSpec, q map[string]string, bg bool) map[string]any {
 		// and the page never has to fall back to the label — a fallback that, for
 		// an id-based dimension, quietly filters by the asset's NAME and returns
 		// a report full of zeroes with no error anywhere to explain it.
+		/* The panel's extra figures, where it has any — see dimension.ExtraExpr.
+		   Selected in the SAME statement rather than queried separately: they
+		   are aggregates over the rows this GROUP BY already visits, so they
+		   cost nothing here and a second query could disagree with the first
+		   about which rows were in scope. */
+		extraSel, extraCols := "", []string{}
+		if d.ExtraExpr != "" {
+			extraSel += ", " + d.ExtraExpr + " AS extra"
+			extraCols = append(extraCols, "extra")
+		}
+		if d.ExtraExpr2 != "" {
+			extraSel += ", " + d.ExtraExpr2 + " AS extra2"
+			extraCols = append(extraCols, "extra2")
+		}
 		rows = run(fmt.Sprintf(
 			`SELECT COALESCE(%s,'Unknown') AS label, COALESCE(%s,'Unknown') AS value,
-			        %s AS urls, %s AS removed
+			        %s AS urls, %s AS removed%s
 			   FROM %s %s AND %s IS NOT NULL AND %s != ''
 			  GROUP BY %s ORDER BY urls DESC%s`,
-			d.Column, d.Column, identExpr, removedExpr,
+			d.Column, d.Column, identExpr, removedExpr, extraSel,
 			s.Table, where, d.Column, d.Column, d.Column, limit))
+		if len(extraCols) > 0 {
+			rows = mapRows(rows, append([]string{"label", "value", "urls", "removed"}, extraCols...)...)
+		}
 		breakdowns[d.Key] = sortedDimRows(d.Key, rows)
 	}
 
@@ -942,38 +1005,90 @@ func max64(a, b int64) int64 {
 /*
 repeatOffenderSQL is the repeat-offenders panel as one grouped statement.
 
-Three things separate it from the generic breakdown query above:
+It counts the same thing computeRepeatOffenders counts on the API path, and the
+two have to agree or one window draws two different charts depending on which
+backend answered. See the note above minRepeatOffences for what that thing IS.
 
-  - COUNT(DISTINCT DATE(...)) — the day count the panel ranks on. DATE() rather
-    than the raw column, because URLUploadDate is a datetime on some of these
-    tables and every row would otherwise be its own day.
-  - HAVING, so an account seen on a single day never reaches the chart. It is
-    not a repeat offender, and ten of them under this title would be a chart
-    that contradicts its own heading.
-  - ORDER BY the day count first. Volume breaks the tie, which is the same
-    order sortRepeatRows applies on the API path and after the per-platform
-    merge — the three have to agree or the same window draws two different
-    charts depending on which backend answered.
+  - A REQUEST is a group of URLs sharing an upload stamp; the inner query
+    collapses them and takes the batch's last removal, because a request is not
+    answered until its final URL is down.
+  - A REPEAT is a request that arrived after the profile's earliest removal.
+    Counted per request, not per URL: a sweep that finds twelve posts at once
+    has found one piece of behaviour.
+  - HAVING drops a profile that never came back. It is not a repeat offender,
+    and ten of them under this title would be a chart contradicting its heading.
+  - ORDER BY the repeat count first, volume second — sortRepeatRows again.
 
 The measures are passed in rather than read off the spec: a dimension may
 override them, and the caller has already resolved that.
+
+Falls back to the plain breakdown where the table has no removal-time column:
+without one there is no line to measure "afterwards" against, and every profile
+would score zero.
 */
-func repeatOffenderSQL(s reportSpec, d dimension, where, identExpr, removedExpr string) string {
+func repeatOffenderSQL(s reportSpec, d dimension, where, identExpr, removedExpr, removalTimeCol string) string {
 	limit := d.Limit
 	if limit <= 0 {
 		limit = repeatOffenderLimit
 	}
 	return fmt.Sprintf(
-		`SELECT COALESCE(%s,'Unknown') AS label, COALESCE(%s,'Unknown') AS value,
-		        %s AS urls, %s AS removed,
-		        COUNT(DISTINCT DATE(%s)) AS repeats
-		   FROM %s %s AND %s IS NOT NULL AND %s != ''
-		  GROUP BY %s
+		`SELECT b.label, b.label AS value,
+		        SUM(b.urls) AS urls, SUM(b.removed) AS removed,
+		        SUM(b.uploaded_at > b.first_removal_at) AS repeats,
+		        CASE WHEN MAX(b.profile_dead) = 1 THEN 'Suspended'
+		             ELSE 'Not Available' END AS profileStatus
+		   FROM (
+		          SELECT COALESCE(%s,'Unknown') AS label,
+		                 %s AS uploaded_at,
+		                 %s AS urls, %s AS removed,
+		                 MAX(%s) AS batch_removed_at,
+		                 MAX(LOWER(TRIM(COALESCE(%s,'')))='dead') AS profile_dead,
+		                 MIN(MAX(%s)) OVER (PARTITION BY COALESCE(%s,'Unknown'))
+		                   AS first_removal_at
+		            FROM %s %s AND %s IS NOT NULL AND %s != ''
+		           GROUP BY label, uploaded_at
+		        ) b
+		  GROUP BY b.label
 		 HAVING repeats >= %d
 		  ORDER BY repeats DESC, urls DESC
 		  LIMIT %d`,
-		d.Column, d.Column, identExpr, removedExpr, s.DateCol,
-		s.Table, where, d.Column, d.Column, d.Column, minRepeatDays, limit)
+		d.Column, s.DateCol, identExpr, removedExpr, removalTimeCol,
+		colProfileStatus, removalTimeCol, d.Column,
+		s.Table, where, d.Column, d.Column, minRepeatOffences, limit)
+}
+
+/*
+topProfilesSQL ranks accounts by audience on the direct-SQL path.
+
+MAX(subscribers) per profile, never SUM: one account appears on every post it
+made, so adding the column up counts the same followers once per post. A GROUP BY
+gives that max for nothing, which is why this panel — unlike its repeat-offender
+sibling — needs no window function.
+
+`statusCol` is optional. A table recording no profile state reports every account
+as "Not Available", which is the honest answer: it does not say the accounts are
+up, it says this source cannot tell.
+*/
+func topProfilesSQL(s reportSpec, d dimension, where, identExpr, removedExpr, subsCol, statusCol string) string {
+	limit := d.Limit
+	if limit <= 0 {
+		limit = topProfileLimit
+	}
+	dead := "0"
+	if statusCol != "" {
+		dead = fmt.Sprintf("MAX(LOWER(TRIM(COALESCE(%s,'')))='dead')", statusCol)
+	}
+	return fmt.Sprintf(
+		`SELECT COALESCE(%s,'Unknown') AS label, COALESCE(%s,'Unknown') AS value,
+		        %s AS urls, %s AS removed,
+		        MAX(%s) AS extra,
+		        CASE WHEN %s = 1 THEN 'Suspended' ELSE 'Not Available' END AS profileStatus
+		   FROM %s %s AND %s IS NOT NULL AND %s != ''
+		  GROUP BY label, value
+		  ORDER BY extra DESC, urls DESC
+		  LIMIT %d`,
+		d.Column, d.Column, identExpr, removedExpr, subsCol, dead,
+		s.Table, where, d.Column, d.Column, limit)
 }
 
 // qualifyExpr prefixes bare column references in a measure expression with a

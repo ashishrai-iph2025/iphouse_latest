@@ -145,6 +145,15 @@ cost one indexed request instead of three unindexed ones.
 report wants: 131,333 infringements is one fact about livetv and "spread over 28
 hostnames" is the other, and neither is much use alone.
 
+`mirrorDomains` is WHICH hostnames those are. The count alone tells a reader
+their operator is running 28 domains and gives them no way to find out which —
+and the list is already in hand here, so producing it costs nothing beyond the
+bytes. Kept in the order the rows arrived, which is volume order, so the busiest
+mirror reads first rather than whichever one starts with an "a".
+
+It is bounded by domainFoldRows (2,000 hostnames for the whole breakdown), so no
+single brand can carry more than that however the panel's top-N is configured.
+
 `googleDelisted` rides along for the panels measured on de-indexing rather than
 on removal. It is summed here and resolved by the caller, so this stays one fold
 over one breakdown however many panels are cut from it.
@@ -158,6 +167,7 @@ func foldDomainRows(rows []map[string]any, key func(string) string) []map[string
 		urls, removed    int64
 		googleDelisted   int64
 		mirrors          int64
+		hosts            []string
 		firstAppearedAtI int
 	}
 	byKey := map[string]*agg{}
@@ -187,6 +197,11 @@ func foldDomainRows(rows []map[string]any, key func(string) string) []map[string
 		   is exactly the tables whose panels never read it. */
 		a.googleDelisted += numOf(r["googleDelisted"])
 		a.mirrors++
+		/* The hostname itself, kept beside the count of them. A breakdown groups
+		   by hostname, so each one reaches this loop exactly once and the list
+		   and the count cannot disagree here — only a merge can pull them apart,
+		   which is why mergeBreakdownSets recomputes the count from the list. */
+		a.hosts = append(a.hosts, host)
 	}
 
 	out := make([]map[string]any, 0, len(order))
@@ -199,6 +214,8 @@ func foldDomainRows(rows []map[string]any, key func(string) string) []map[string
 			"urls":    a.urls,
 			"removed": a.removed,
 			"mirrors": a.mirrors,
+			// The hostnames behind that count — see the note above.
+			"mirrorDomains": a.hosts,
 			/* A WORKING measure, not a panel one. The caller either swaps it
 			   into `removed` or drops it — see foldedDomainPanel — so it never
 			   reaches a merge, a table or an export under its own name. */

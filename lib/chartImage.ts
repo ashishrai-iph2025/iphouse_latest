@@ -229,7 +229,10 @@ export async function chartToPng(root: HTMLElement, opts: ChartImageOptions): Pr
      rather than swapped for a second asset: `source-in` fills the shape the
      mark already has, so the two stay one file and cannot drift apart. */
   if (logo) {
-    const x = Math.round((totalW - logoW) / 2)
+    /* LEFT, level with the title and the content below it, rather than centred
+       over the canvas. A picture of one card is not a letterhead — the mark
+       belongs where the reading starts, in line with everything else on it. */
+    const x = PAD
     if (dark) {
       const tint = document.createElement('canvas')
       tint.width = Math.max(1, logoW)

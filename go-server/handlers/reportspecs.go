@@ -58,6 +58,57 @@ type dimension struct {
 	   see enforcementactions.go. */
 	CountDistinctCol string
 
+	/* A THIRD figure carried beside identified and removed.
+
+	   The two hosting-provider panels are the case this exists for: a reader
+	   comparing providers wants how many SITES each answers for as well as how
+	   much was found on them and how much came down. Three numbers per group,
+	   where every other panel has two.
+
+	   Drawn as a figure on the row rather than a third bar, and that is a
+	   deliberate reading of the data: a provider with 29 sites and 27,057
+	   identifications puts the two on scales three orders apart, so a third bar
+	   would be invisible at the width that makes the first two readable. The
+	   number is the point; the bar is for the comparison.
+
+	   `APIExtra` is the reports_api measure to read — both sports datasets
+	   declare `domains`, and a breakdown returns every measure a dataset has, so
+	   this costs no extra query. `ExtraLabel` is what the table column and the
+	   chart row call it. Empty on every other panel. */
+	APIExtra   string
+	ExtraLabel string
+	/* A SECOND extra, for the one panel that needs two.
+
+	   The host-provider card carries distinct websites AND notices sent: a host
+	   is sent a notice and takes content down, so both the size of its estate
+	   and how often we wrote to it belong on the same row. Everything else has
+	   one or none, which is why this is a second field rather than the pair
+	   becoming a slice — one panel's requirement should not reshape the struct
+	   every other panel is declared with. */
+	APIExtra2   string
+	ExtraLabel2 string
+	/*
+		── AND THE SAME TWO FIGURES ON THE DIRECT-SQL PATH ──────────────────
+
+		APIExtra names a measure for reports_api to answer. These name the SQL
+		to compute when there is no reports_api — which, on any deployment with
+		REPORTS_API_URL unset, is every report it serves.
+
+		Written out because the omission was invisible. A panel declaring
+		APIExtra and nothing else looks complete: the label reaches the page
+		through the sections payload, the column is titled, and only the NUMBER
+		is missing — so the card renders with a heading over an empty column,
+		or, once an empty column is dropped, with no sign that a measure was
+		ever intended. Two of these panels shipped that way and the figure was
+		never once drawn.
+
+		Resolved per table by inferSpec, which is why they are expressions here
+		rather than column names: the host side counts SourceDomain and the
+		linking side InfringingDomain, and neither may borrow the other's.
+	*/
+	ExtraExpr  string
+	ExtraExpr2 string
+
 	// A dimension with no Column is SYNTHETIC: the page shows a panel for it but
 	// there is no GROUP BY behind it, because the rows are assembled from figures
 	// the report already has (see byDelistingStatus in runPlatform). The runner
@@ -137,6 +188,20 @@ type reportSpec struct {
 	   the tile and the daily series are counted over the raw rows, and that walk
 	   needs the column NAME rather than the SQL wrapped around it. */
 	ActionCol string
+
+	/* The hostname column THIS SIDE counts, resolved against the table and
+	   pinned to the spec's role — InfringingDomain on the linking half,
+	   SourceDomain on the host half.
+
+	   Named on the spec rather than re-resolved at each call site because the
+	   pinning is the point: the generic lookup takes the first column the table
+	   has, which since the two sports raw tables gained each other's columns
+	   would give a host-side figure counting linking domains. See
+	   domainColumnsForRole, which this is set from.
+
+	   Empty where the table records no hostname, which is the honest answer for
+	   a source that cannot tell the two sides apart. */
+	DomainCol string
 
 	// Optional extra KPI expressions, keyed by the name the UI reads.
 	ExtraKPI map[string]string

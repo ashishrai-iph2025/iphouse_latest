@@ -432,17 +432,18 @@ func TestTheProviderPanelsAreTwoPanels(t *testing.T) {
 		t.Errorf("the linking panel groups by %q, not the provider column %q",
 			linking.Column, host.Column)
 	}
-	/* Different ACTION, and this is the point. The notice went to the provider;
-	   the submission went to search engines about links the provider hosts. A
-	   shared Needs column would mean both panels drawn off one table, counting
-	   the same ids twice under two titles. */
-	if linking.Needs == host.Needs {
-		t.Errorf("both provider panels need %q — one of them is counting the "+
-			"other's action", linking.Needs)
-	}
-	if linking.Needs != colDelistingBatchID {
-		t.Errorf("the linking panel counts %q; the linking table records de-indexing "+
-			"submissions and carries no notice id", linking.Needs)
+	/* Both panels now report the SAME three figures — sites, identifications,
+	   removals — so they need the same column and are told apart by ROLE alone.
+
+	   That is a change. They used to count two different ACTIONS (a notice sent
+	   to the provider, a de-indexing submission made to search engines about its
+	   links), which is why they once required two different id columns. The
+	   titles said "Websites" and the bars counted actions; the figures a reader
+	   wants from a provider ranking are how big the estate is and what
+	   enforcement achieved on it. */
+	if linking.Needs != host.Needs || linking.Needs != host.Column {
+		t.Errorf("the provider panels need %q and %q — both report on the provider "+
+			"column %q and require nothing else", linking.Needs, host.Needs, host.Column)
 	}
 	if linking.Role != "linking" || host.Role != "host" {
 		t.Errorf("roles are %q/%q — the pinning is what stops each table drawing "+
@@ -464,11 +465,25 @@ func TestTheProviderPanelsAreTwoPanels(t *testing.T) {
 			DIMFilterParam(dimHSPDelisting), DIMFilterParam(dimHSPNotices))
 	}
 
-	// And the bridge has to recognise it as an action panel, or its DISTINCT is
-	// taken over a breakdown that aggregated the id away and every bar reads 0.
-	if !isActionPanel(dimHSPDelisting) {
-		t.Error("the linking provider panel is not an action panel, so its count " +
-			"would be taken from the aggregate and every provider would read zero")
+	/* And NEITHER is an action panel any more. An action panel is required to
+	   name an APIMeasure and to declare no removal series — both wrong for a
+	   panel whose removal bar is half the point. Listed there, the bridge would
+	   empty `removed` and draw one series. */
+	for _, k := range []string{dimHSPDelisting, dimHSPNotices} {
+		if isActionPanel(k) {
+			t.Errorf("%s is still an action panel — the bridge would drop its removal "+
+				"series and count an id that is no longer what it reports", k)
+		}
+	}
+	// The third figure, which is what makes these two different from every other
+	// breakdown on the page.
+	for _, r := range []*struct {
+		Key, Column, Label, Viz, Ident, Removed, Needs, APIMeasure, Role string
+	}{linking, host} {
+		if r.APIMeasure != "" {
+			t.Errorf("%s names APIMeasure %q — identification and removal are the "+
+				"section's own measures here", r.Key, r.APIMeasure)
+		}
 	}
 	if kpiTileDescriptions[dimHSPDelisting] == "" && dimDescriptions[dimHSPDelisting] == "" {
 		t.Error("the linking provider panel has no note behind its ⓘ")
@@ -514,9 +529,11 @@ func TestActionPanelsDeclareNoRemovedSeries(t *testing.T) {
 				"covered, so anything but a DISTINCT counts URLs", d.Key, d.Ident)
 		}
 	}
-	if found != 5 {
-		t.Errorf("found %d action panels, want 5 — isActionPanel and the registry "+
-			"have drifted apart", found)
+	if found != 3 {
+		t.Errorf("found %d action panels, want 3 — isActionPanel and the registry "+
+			"have drifted apart. The two per-provider panels left this set when they "+
+			"stopped counting actions and started reporting sites, identifications "+
+			"and removals; see reportplatforms.go", found)
 	}
 }
 

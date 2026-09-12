@@ -62,6 +62,12 @@ const (
 	   half of the report, so it is its own panel rather than an extension of the
 	   one above: the two count different actions and must not be added. */
 	dimHSPDelisting = "byDelistingBatchHSP"
+
+	/* The overall day-wise card — both sides of a two-sided report added
+	   together, per upload day. Declared beside the other day-wise panels
+	   because it is read with them, and NOT an action panel: it counts the
+	   section's own identification and removal, not notices sent. */
+	dimOverallByDay = "byDayOverall"
 )
 
 /*
@@ -79,8 +85,21 @@ in one place and forgotten in the other.
 */
 func isActionPanel(key string) bool {
 	switch key {
-	case dimHSPNotices, dimEngineDelistingBatches, dimHSPDelisting,
-		dimNoticesByDay, dimBatchesByDay:
+	/* THREE, not five. dimHSPNotices and dimHSPDelisting used to be here and
+	   are not any more: they were per-provider ACTION counts — notices sent,
+	   submissions made — and they now report what each provider answers for,
+	   which is sites, identifications and removals. See their entries in
+	   reportplatforms.go for why.
+
+	   Which makes them ordinary two-series panels with a third figure, and the
+	   action rules below must not apply to them: an action panel is required to
+	   name an APIMeasure and to declare no removal series, and both would be
+	   wrong for a panel whose removal series is the point.
+
+	   Per-provider action counts are not lost. dimNoticesByDay and
+	   dimBatchesByDay count the same two actions asked "when" rather than "to
+	   whom", and dimEngineDelistingBatches keeps the per-engine split. */
+	case dimEngineDelistingBatches, dimNoticesByDay, dimBatchesByDay:
 		return true
 	}
 	return false
@@ -240,6 +259,76 @@ func enforcementDayPanel(rows []map[string]any, dateCol, idCol string) []map[str
 }
 
 /*
+reconciledList is a list of names to draw beside a count — or nothing.
+
+A card that draws a count as an OPENABLE gauge is promising that what opens
+accounts for what is printed. Two roads produce these figures and only one of
+them produces names: the service answers a COUNT(DISTINCT) over the whole
+window, this bridge walks the raw rows, and the walk is capped. Where the cap
+bit, the names are a subset of what the count counted — eleven under a gauge
+reading seventeen.
+
+So the promise is checked rather than assumed. The count always stands; the list
+is carried only when its length IS that count, and a card whose walk fell short
+simply goes back to a gauge that does not open.
+
+A zero count carries nothing either: a row with no domains at all has no drawer
+to offer, and an empty one that opens on nothing is a worse answer than none.
+*/
+func reconciledList(list []string, count int64) []string {
+	if count <= 0 || int64(len(list)) != count {
+		return nil
+	}
+	return list
+}
+
+/*
+enforcementSetsByGroup is WHICH distinct values each group holds.
+
+The counting version below is built on it, which is the point: the provider
+cards now show the domain list beside the domain count, and a count computed
+separately from the list it sits over is a number a reader can disprove by
+scrolling. Here the count is len() of the list, so the two cannot disagree
+however either is later cut or merged.
+
+Sorted, so a report run twice over one window lists a provider's domains in the
+same order both times — and alphabetically rather than by volume, because this
+is a list somebody scans for one particular domain. The rows carry no per-domain
+figure to rank by anyway.
+*/
+func enforcementSetsByGroup(rows []map[string]any, groupCol, idCol string) map[string][]string {
+	groupCol = rowKeyFor(rows, groupCol)
+	idCol = rowKeyFor(rows, idCol)
+
+	seen := make(map[string]map[string]struct{}, 64)
+	for _, r := range rows {
+		id := strFromAny(r[idCol])
+		if id == "" {
+			continue
+		}
+		label := strings.TrimSpace(strFromAny(r[groupCol]))
+		if label == "" {
+			label = "Unknown"
+		}
+		if seen[label] == nil {
+			seen[label] = make(map[string]struct{}, 16)
+		}
+		seen[label][id] = struct{}{}
+	}
+
+	out := make(map[string][]string, len(seen))
+	for label, ids := range seen {
+		list := make([]string, 0, len(ids))
+		for id := range ids {
+			list = append(list, id)
+		}
+		sort.Strings(list)
+		out[label] = list
+	}
+	return out
+}
+
+/*
 enforcementByGroup is the per-counterparty panel: how many distinct actions each
 provider or engine was on the receiving end of.
 
@@ -250,24 +339,7 @@ keeps the row shape identical to every other breakdown, so the Table view and
 the cross-filter need no special case.
 */
 func enforcementByGroup(rows []map[string]any, groupCol, idCol string, limit int) []map[string]any {
-	groupCol = rowKeyFor(rows, groupCol)
-	idCol = rowKeyFor(rows, idCol)
-
-	byLabel := make(map[string]map[string]struct{}, 64)
-	for _, r := range rows {
-		id := strFromAny(r[idCol])
-		if id == "" {
-			continue
-		}
-		label := strings.TrimSpace(strFromAny(r[groupCol]))
-		if label == "" {
-			label = "Unknown"
-		}
-		if byLabel[label] == nil {
-			byLabel[label] = make(map[string]struct{}, 16)
-		}
-		byLabel[label][id] = struct{}{}
-	}
+	byLabel := enforcementSetsByGroup(rows, groupCol, idCol)
 
 	out := make([]map[string]any, 0, len(byLabel))
 	for label, ids := range byLabel {

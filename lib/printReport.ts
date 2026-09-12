@@ -193,10 +193,11 @@ html, body {
 .pr-doc .grid > *, .pr-filters { break-inside: avoid; page-break-inside: avoid; }
 
 /* ── The document's own furniture ──────────────────────────────────────── */
-/* The mark, above everything, centred on the page. Its own band rather than a
+/* The mark, above everything, at the left margin. Its own band rather than a
    corner of the title row: this is the first thing on a document somebody is
-   going to forward, and a letterhead is centred. */
-.pr-brand { text-align: center; margin: 0 0 14px; }
+   going to forward. Left rather than centred so it lines up with the title,
+   the scope line and the table beneath it — one edge down the whole page. */
+.pr-brand { text-align: left; margin: 0 0 14px; }
 .pr-brand img { height: ${LOGO_PDF_H}px; width: auto; display: inline-block; }
 .pr-head {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;

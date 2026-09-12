@@ -102,11 +102,35 @@ function cellXml(ref: string, v: Cell, style: number): string {
   return `<c r="${ref}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${xml(String(v))}</t></is></c>`
 }
 
-/* Column widths from the widest thing in each column, in characters, with a
-   floor and a ceiling: narrower than the floor and the header is cut, wider
-   than the ceiling and one long URL pushes every other column off screen.
+/*
+── COLUMN WIDTHS: THE WIDEST VALUE, IN FULL ─────────────────────────────────
 
-   Lifted out of sheetXml because the mark is centred over them — see brandFor. */
+	Every column is sized to its longest cell so nothing arrives cut off.
+
+	It used to cap at 58 characters, which is narrower than a great many of the
+	values this report carries — an infringing URL with its query string runs
+	past 200. Excel does not wrap or ellipsize a too-narrow cell: it shows what
+	fits and hides the rest behind the next column, so a reader scanning a
+	downloaded sheet sees a URL that ends in the middle and no indication that
+	it does. The value is intact in the cell and invisible on the screen, which
+	is the worst of both.
+
+	The cap existed to stop one long column pushing the others off-screen. That
+	is a real cost, but it is a NAVIGATION cost the reader can fix by dragging a
+	column, and they can only fix it if the data is there to find. A silently
+	truncated display is not fixable, because nothing says anything is missing.
+
+	A ceiling remains, an order of magnitude higher, and it is only about
+	Excel's own limit: the format refuses a width above 255 characters and
+	rejects the file. So values longer than that still need a drag — but they
+	are a handful of extreme URLs rather than most of a column.
+
+	The +2 is padding for the cell border and the autofilter arrow on the header
+	row, which otherwise sits on top of the last character of the title.
+*/
+const XLSX_MIN_COL_CHARS = 9
+const XLSX_MAX_COL_CHARS = 255   // the format's own ceiling; wider is rejected
+
 function sheetWidths(s: Sheet): number[] {
   return s.head.map((h, i) => {
     let w = String(h ?? '').length
@@ -114,7 +138,7 @@ function sheetWidths(s: Sheet): number[] {
       const v = line[i]
       if (v !== null && v !== undefined) w = Math.max(w, String(v).length)
     }
-    return Math.min(58, Math.max(9, w + 2))
+    return Math.min(XLSX_MAX_COL_CHARS, Math.max(XLSX_MIN_COL_CHARS, w + 2))
   })
 }
 
@@ -192,16 +216,14 @@ interface SheetBrand { w: number; h: number; offsetX: number }
  * few lines above; Excel renders a character of Calibri 11 as seven pixels plus
  * five of padding, which is what colWidthPx converts.
  *
- * A single narrow column would put the mark off the right of it, so the offset
- * never goes below zero — on a two-column sheet it starts at the left edge,
- * which is the closest thing to centred that fits.
+ * At the LEFT edge — column A, no offset. See exportBrand.ts for why a sheet is
+ * the one artefact where centring is the wrong answer: there is no page to be
+ * centred on, so "the middle" moves whenever a column does.
  */
 function brandFor(s: Sheet, logo: { ratio: number } | null): SheetBrand | null {
   if (!logo) return null
   const h = LOGO_XLSX_H
-  const w = Math.round(h * logo.ratio)
-  const tableW = sheetWidths(s).reduce((a, chars) => a + colWidthPx(chars), 0)
-  return { w, h, offsetX: Math.max(0, Math.round((tableW - w) / 2)) }
+  return { w: Math.round(h * logo.ratio), h, offsetX: 0 }
 }
 
 const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

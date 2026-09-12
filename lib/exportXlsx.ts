@@ -183,15 +183,32 @@ const NUMERIC = /^-?\d+(\.\d+)?$/
  * lib/xlsx.ts for the same reasoning. Capped, because one long URL would
  * otherwise put the middle of the sheet a thousand pixels off screen.
  */
+/* Sized to the longest value in each column — the same rule, and the same
+   reasoning, as sheetWidths in lib/xlsx.ts. A URL that Excel cuts at 58
+   characters is a URL the reader cannot see is cut. */
+const MIN_COL_CHARS = 9
+const MAX_COL_CHARS = 255   // the format's own ceiling; wider is rejected
+
 function widthsOf(header: string[], rows: string[][]): number[] {
   return header.map((h, i) => {
     let w = String(h ?? '').length
     for (const r of rows) w = Math.max(w, String(r[i] ?? '').length)
-    return Math.min(58, Math.max(9, w + 2))
+    return Math.min(MAX_COL_CHARS, Math.max(MIN_COL_CHARS, w + 2))
   })
 }
 
 function sheetXml(header: string[], rows: string[][], brand: { w: number; h: number } | null): string {
+  /* COLUMN WIDTHS, which this writer computed and then never wrote.
+
+     widthsOf existed only to measure the table so the mark could be centred
+     over it; the figures were used for that arithmetic and thrown away, and no
+     <cols> element was ever emitted. So every column in a search export came
+     out at Excel's default — about eight characters — and a linking URL showed
+     as a few letters and an ellipsis on open. The sizing rule was right and
+     simply had no effect, which is why it looked deliberate. */
+  const cols = `<cols>${widthsOf(header, rows).map((w, i) =>
+    `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>`
+
   const cell = (text: string, ref: string) => {
     if (text === '') return ''
     if (NUMERIC.test(text) && Math.abs(Number(text)) < 1e15) {
@@ -220,7 +237,7 @@ function sheetXml(header: string[], rows: string[][], brand: { w: number; h: num
     (brand ? ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"' : '')
 
   return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-    `<worksheet ${ns}><sheetData>` +
+    `<worksheet ${ns}>${cols}<sheetData>` +
     brandRow +
     line(header, 1 + lead) +
     rows.map((r, i) => line(r, i + 2 + lead)).join('') +
@@ -256,15 +273,10 @@ export async function downloadXlsx<T>(
      somebody's work leaving the building and a decorative image is not a reason
      to withhold it. */
   const logo = await exportLogo()
+  // At the LEFT edge of column A — see brandFor in lib/xlsx.ts and the note in
+  // exportBrand.ts. A sheet has no page width to be centred on.
   const brand = logo
-    ? (() => {
-      const h = LOGO_XLSX_H
-      const w = Math.round(h * logo.ratio)
-      // Centred over the TABLE: a sheet is as wide as the reader drags it, so
-      // the only stable middle is the middle of the columns it actually has.
-      const tableW = widthsOf(header, body).reduce((a, chars) => a + colWidthPx(chars), 0)
-      return { w, h, offsetX: Math.max(0, Math.round((tableW - w) / 2)) }
-    })()
+    ? { w: Math.round(LOGO_XLSX_H * logo.ratio), h: LOGO_XLSX_H, offsetX: 0 }
     : null
 
   const files: ZipEntry[] = [

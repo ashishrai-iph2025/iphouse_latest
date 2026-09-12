@@ -237,8 +237,11 @@ func ReportsOptions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Configured platforms (reportplatforms.go) list their own slicer values,
-	// merged across every table the platform reads.
+	// merged across every table the platform reads — so a summary narrowed to
+	// its attached channels must be narrowed here too, or its rail would offer
+	// values that exist only in a table the report no longer reads.
 	if p, ok := platformByKey(kind); ok {
+		p = narrowSummaryToAttached(p, claims)
 		if !maySeeReport(claims, kind) {
 			Fail(w, 403, "You do not have access to this report")
 			return
@@ -252,6 +255,47 @@ func ReportsOptions(w http.ResponseWriter, r *http.Request) {
 		opts := mergeSpecOptions(specsForSourceType(specs, scope), clientID, scope)
 		if platformOffersSourceType(specs) {
 			opts[sourceTypeParam] = sourceTypeOptions()
+		}
+		/* The monitoring scope's two values are this codebase's own, for the same
+		   reason the source type's are: there is no column to list them from. The
+		   stage names live in mediascan.ProcessStage, but the DROPDOWN is not a
+		   list of stages — it is the two engagements those stages divide into, and
+		   one of them is all six. See monitoringscope.go. */
+		if monitoringScopeEnabled(clientID) {
+			opts[monitoringScopeParam] = monitoringScopeOptions()
+		}
+		/* The pirate brands in this window, busiest first.
+
+		   Listed from the folded hostname list rather than from a column, because
+		   there is no brand column to list — see piratebrand.go. Offered only on
+		   the LINKING spec, which is the only side that can honour the filter.
+		   A window with no readable domain list yields no options, and the pane
+		   then draws no control rather than an empty dropdown. */
+		for _, sp := range specsForSourceType(specs, scope) {
+			if sp.Role != "linking" || sp.DomainCol == "" {
+				continue
+			}
+			if ds, ok := reportsapi.Get().ByTable(r.Context(), sp.Table); ok {
+				if brands := pirateBrandOptions(r.Context(), ds, scope, sp.DomainCol); len(brands) > 0 {
+					opts[pirateBrandParam] = brands
+				}
+			}
+			break
+		}
+		/* The repeat-offender panel's own platform list.
+
+		   The same values the global `platform` slicer offers — one column, one
+		   set of values — served under the panel-scoped parameter so the pane can
+		   draw a second dropdown that narrows only that card. Copied rather than
+		   re-queried: asking the warehouse twice for one column's values would be
+		   a round trip to produce a list we already have. */
+		if plat, ok := opts["platform"]; ok {
+			for _, k := range filterParamsFor(p, clientID) {
+				if k == repeatPlatformParam {
+					opts[repeatPlatformParam] = plat
+					break
+				}
+			}
 		}
 		OK(w, opts)
 		return
@@ -391,6 +435,14 @@ func ReportsData(w http.ResponseWriter, r *http.Request) {
 			Fail(w, 403, "You do not have access to this report")
 			return
 		}
+		/* A configured summary reads only the channels this reader's attached
+		   platforms cover — see narrowSummaryToAttached. Applied BEFORE the
+		   cache call below, because platformShape keys on p.Tables: narrowing
+		   afterwards would file two readers with different platforms under one
+		   key and serve the first one's totals to the second. A no-op for every
+		   other platform, and for a summary whose sources are already a
+		   subset. */
+		p = narrowSummaryToAttached(p, claims)
 		/*
 			A POWER BI PLATFORM ANSWERS HERE AND GOES NO FURTHER.
 
@@ -658,7 +710,13 @@ func mapRows(rows []map[string]any, keys ...string) []map[string]any {
 			// which JSON-encodes as a base64 string the chart cannot plot.
 			case "urls", "removed", "delisted", "google", "bing", "repeats",
 				// The enforcement action counts — see enforcementactions.go.
-				"notices", "delistingBatches":
+				"notices", "delistingBatches",
+				/* And a panel's own extra figures — the provider cards' distinct
+				   domains and notices. Numeric for the same reason as every key
+				   above it: left to the default branch a COUNT() arrives as
+				   []byte, encodes as base64, and the gauge reads NaN — which
+				   this card now renders as no column at all. */
+				"extra", "extra2":
 				m[k] = numOf(v)
 			default:
 				m[k] = v

@@ -309,6 +309,11 @@ interface SectionDim {
   span?: 'full' | 'half' | 'third'
   /** Admin-written note from Report Configuration, shown behind an ⓘ icon. */
   desc?: string
+  /** What a THIRD figure on each row is called, where the panel carries one —
+      "Websites" on the two hosting-provider panels, absent everywhere else. The
+      server names it because only the server knows which panels have it; see
+      dimension.APIExtra in go-server/handlers/reportspecs.go. */
+  extraLabel?: string
 }
 
 /* The page is a twelve-column grid, so a row holds one panel, two, three or
@@ -505,6 +510,22 @@ const FILTER_LABELS: Record<string, string> = {
      value in one, which is why the server offers its two options itself rather
      than listing them from a column. See go-server/handlers/sourcetype.go. */
   sourceType: 'Source Type',
+  /* How far into the takedown workflow the report reads — monitoring alone, or
+     the whole engagement. The other slicer whose options the server supplies
+     itself, and one that appears only for clients switched on for it in Report
+     Configuration → Client mapping. The two values overlap: End to End is all
+     six process stages, which is every title, so it narrows nothing. See
+     go-server/handlers/monitoringscope.go. */
+  monitoringScope: 'Monitoring Scope',
+  /* One pirate operator, however many hostnames it runs — a site and its mirrors
+     picked together. The values are folded from the hostname list rather than
+     listed from a column, so the server supplies them; and it narrows the LINKING
+     side only, because the host table records no linking domain. See
+     go-server/handlers/piratebrand.go. */
+  pirateBrand: 'Pirate Brand',
+  /* The only slicer that narrows ONE PANEL rather than the page — the platform
+     behind the repeat-offender ranking. See go-server/handlers/repeatoffenders.go. */
+  repeatPlatform: 'Platform (Repeat Offenders)',
 }
 
 /** Display labels for the extra KPI keys a section may return. */
@@ -535,6 +556,19 @@ const KPI_LABELS: Record<string, string> = {
      own map — but nothing shown says it. */
   delistingBatches: 'De-Indexing',
   totalPlaces: 'No. of Website / Channel / Page', savedRevenue: 'Estimated Saved Revenue',
+  /* The two-sided open-web split. Each is one HALF of a figure the band already
+     shows whole, so each name says which half. Mirrors kpiTileLabels in
+     go-server/handlers/reportlayout.go. */
+  linkingIdentified: 'Total Linking Identification',
+  hostIdentified:    'Total Host Identification',
+  linkingDomains:    'Total Linking Domains',
+  hostDomains:       'Total Host Domains',
+  linkingBrands:     'Pirate Brands',
+  hostBrands:        'Host Pirate Brands',
+  /* The social reports' audience figure. Its pair is impactedSubscribers, which
+     counts the same thing on SUSPENDED accounts only — so this is the reach that
+     is out there and that one is the reach enforcement removed. */
+  totalSubscribers:  'Total Subscribers',
   // Mobile apps.
   totalApps: 'Total Apps', totalCategories: 'Categories', totalDevelopers: 'Developers',
   installs: 'Total Installs', ratings: 'Total Ratings', reviews: 'Total Reviews',
@@ -576,7 +610,24 @@ const SUMMARY = 'summary'
  * an install where nobody has touched the pane behaves exactly as this list
  * says — and one where somebody has, does what they asked instead.
  */
-const PANEL_ONLY_FILTERS = new Set(['tatBucket', 'keyword', 'channelUrl'])
+/* Filters the RAIL never draws.
+ *
+ * Two kinds, and they are here for opposite reasons. tatBucket, keyword and
+ * channelUrl are set by clicking a panel and have no sensible dropdown — a list
+ * of raw URLs is not a control anyone can pick from. repeatPlatform has a
+ * perfectly good dropdown and is excluded because of what it NARROWS: one card
+ * rather than the page, which makes the rail the wrong place for it. It is
+ * drawn on the repeat-offenders card instead — see REPEAT_PLATFORM_PARAM.
+ *
+ * The server says the same thing in sectionSlicers; this is the fallback for an
+ * older server that sends no arranged pane. */
+const PANEL_ONLY_FILTERS = new Set(['tatBucket', 'keyword', 'channelUrl', 'repeatPlatform'])
+
+/** The repeat-offender panel's own platform filter, and the panel it belongs
+ *  to. Same strings as repeatPlatformParam and dimRepeatOffender in
+ *  go-server/handlers/repeatoffenders.go. */
+const REPEAT_PLATFORM_PARAM = 'repeatPlatform'
+const REPEAT_DIM = 'byRepeatOffender'
 
 /**
  * The slicers the LIVE card's count is actually narrowed by.
@@ -757,8 +808,65 @@ const ROOT_SIDE: Record<string, { name: string; rate: string; head: string }> = 
   },
 }
 
-/** The side a panel is. Falls back to the linking one, which is the side a
- *  panel carrying this shape is if it is not the host. */
+/*
+ * EVERY PANEL DRAWN ON THE COUNT SHAPE, named here and nowhere else.
+ *
+ * Four panels use it: the two root-domain cards and the two hosting-provider
+ * cards. They share a shape and share nothing else — different rows, different
+ * second measure, different counts beside it — so each one says what its own
+ * columns are rather than inheriting a default.
+ *
+ * WRITTEN OUT RATHER THAN DERIVED, because deriving it is what went wrong. The
+ * naming used to fall back to the root-domain card's when a panel did not
+ * declare an extra label, so the two provider cards — which never carry that
+ * label until the server publishing it is deployed — both drew "Linking domain"
+ * over their rows and "De-indexed" over their orange bars. Two cards headed
+ * Linking and Host, labelled identically, both wrong on one of the two. A
+ * fallback that silently answers for a panel it knows nothing about is worse
+ * than no answer: it cannot be seen to be wrong.
+ */
+const COUNT_PANELS: Record<string, {
+  nameHead: string
+  removedName: string
+  /* `list` is the row field holding the NAMES this count is counting, where the
+     server sends them. A count without one draws a gauge and no drawer, which is
+     what every count did before the drawers existed — so leaving it off is the
+     safe default rather than an omission. */
+  counts: Array<{ key: string; name: string; list?: string }>
+}> = {
+  [DOMAIN_ROOT_ALL]: {
+    nameHead: 'Linking domain', removedName: 'Google de-indexed',
+    counts: [{ key: 'mirrors', name: 'Mirror domains', list: 'mirrorDomains' }],
+  },
+  [DOMAIN_ROOT_SOURCE]: {
+    nameHead: 'Host domain', removedName: 'Removed',
+    counts: [{ key: 'mirrors', name: 'Mirror domains', list: 'mirrorDomains' }],
+  },
+  /* The LINKING provider card. Its second measure is de-indexing — a link is
+     dropped from search results, not taken down — and the count beside it is
+     how many distinct linking domains that provider carries. */
+  byDelistingBatchHSP: {
+    nameHead: 'Hosting provider', removedName: 'De-indexed',
+    counts: [{ key: 'extra', name: 'Linking domains', list: 'extraDomains' }],
+  },
+  /* The HOST provider card, which has one figure more than any other panel on
+     the page: notices. A host is sent a notice and takes content down, so both
+     the count of sites it carries and the count of notices it received belong
+     here — and they get separate gauges, because 188 websites and 3 notices on
+     one scale draws the notices as nothing. */
+  byHSPNotices: {
+    nameHead: 'Hosting provider', removedName: 'Removed',
+    counts: [
+      { key: 'extra', name: 'Host domains', list: 'extraDomains' },
+      /* NO LIST on the notices gauge, and not for want of one: the rows carry
+         the notice ids and a drawer of GUIDs is not something a reader can act
+         on. The domains are names of things; the notices are keys. */
+      { key: 'extra2', name: 'Notices' },
+    ],
+  },
+}
+
+/** The root-domain naming, for the two panels that still read it directly. */
 const rootSide = (key: string) => ROOT_SIDE[key] ?? ROOT_SIDE[DOMAIN_ROOT_ALL]
 
 /**
@@ -846,6 +954,17 @@ export interface PanelTable {
   rows: (string | number)[][]
   /** The value each row filters BY, one per row, in row order. See DataTable. */
   pickValues?: string[]
+  /* Columns holding LONG TEXT rather than a figure — today, the mirror-domain
+     list on the root cards.
+
+     Every column but the first is right-aligned tabular numerals, which is right
+     for the measures that made up every column but the first until now. A list of
+     twelve hostnames rendered that way is unreadable AND unbounded: nothing
+     truncates it, so one brand's mirrors push the table's other columns off the
+     card. Named here so the on-screen twin can left-align and clip them. The
+     export ignores this and writes the full string, the same way it ignores
+     pickValues — a sheet has no width to run out of. */
+  textCols?: number[]
 }
 
 /** Date or Month, depending on what the trend is grained by. */
@@ -880,20 +999,101 @@ function rateTableData(rows: any[], grain: string): PanelTable {
   }
 }
 
+/* The NAMES behind a count a card draws on its own gauge.
+
+   Two panels' worth: `mirrorDomains` is the hostnames a brand's mirror count is
+   counting (foldDomainRows), `extraDomains` the domains a hosting provider's
+   domain count is (the row walk in reportsapi_bridge.go). Both are absent on
+   every other panel, and absent again on a row whose count the server could not
+   vouch for the list of — see applyBreakdownSets, which drops a list it cannot
+   reconcile rather than showing a fragment.
+
+   So this answers with an empty array rather than undefined, and every caller
+   can ask without checking first. */
+function listOf(r: any, key: string): string[] {
+  const v = r?.[key]
+  return Array.isArray(v) ? v.map((x: any) => String(x)).filter(Boolean) : []
+}
+
+/** The mirror list specifically — the one the two root-domain cards read. */
+const mirrorList = (r: any) => listOf(r, 'mirrorDomains')
+
+/* A count's own name, agreeing with the number in front of it.
+
+   The gauges are named in the plural because that is what a column heading over
+   ten rows is — "Mirror domains", "Host domains" — and a drawer holding one of
+   them then read "1 mirror domains". Only the trailing s is touched: these names
+   are all regular, and a general pluraliser for three fixed strings would be a
+   library nobody asked for. */
+const countNoun = (name: string, n: number) => {
+  const lower = name.toLowerCase()
+  return n === 1 && lower.endsWith('s') ? lower.slice(0, -1) : lower
+}
+
 /** A breakdown, in whichever of its three shapes the panel is drawing.
  *
  *  Keyed off the DIMENSION for the repeat-offender columns, not off `viz`:
  *  switching that panel to bars does not stop its rows being accounts. */
-function dimTableData(key: string, label: string, viz: string, rows: any[]): PanelTable {
+function dimTableData(key: string, label: string, viz: string, rows: any[],
+                      extraLabel = ''): PanelTable {
   const pickValues = rows.map(r => String(r.label ?? ''))
 
-  if (key === 'byRepeatOffender') {
+  /* The third figure as a COLUMN, where the chart shows it beside the name.
+
+     The chart has room for one number per row and the table has room for all of
+     them, which is the division of labour between the two views — so this is
+     where a reader who wants to sort providers by site count goes. Only for the
+     panels that carry one; every other table keeps the four columns it had. */
+  if (extraLabel && rows.some(r => r.extra !== undefined && r.extra !== null)) {
+    const total = rows.reduce((a, x) => a + (Number(x.urls) || 0), 0)
+    /* The ACCOUNT's own state, where the panel carries one. A post can come down
+       while the account stays up, so this is a column of its own rather than
+       anything inferable from the removal figure beside it. Only the panels that
+       report it get the column; everything else keeps the five it had. */
+    const status = rows.some(r => r.profileStatus)
+    /* WHICH domains the provider's count is counting, next to the count.
+
+       The chart answers this by opening the gauge; this is the same list where
+       it can be read all at once and, more to the point, where it leaves in the
+       download. Named after the count it belongs to — "Host domains list" beside
+       "Host domains" — because a provider card can carry two estates and a
+       column headed plain "Domains" would not say which. */
+    const lists = rows.some(r => listOf(r, 'extraDomains').length > 0)
     return {
-      head: ['Channel / Profile URL', 'Days', 'Identified', 'Removed', 'Removal rate'],
+      head: ['Name', extraLabel, ...(lists ? [`${extraLabel} list`] : []),
+        'Identified', 'Removed', 'Removal rate',
+        ...(status ? ['Status'] : []), 'Share'],
       rows: rows.map(r => {
         const urls = Number(r.urls) || 0
         const removed = Number(r.removed) || 0
-        return [String(r.label ?? '—'), Number(r.repeats) || 0, urls, removed, `${pct(removed, urls)}%`]
+        const domains = listOf(r, 'extraDomains')
+        return [String(r.label ?? '—'),
+          /* Counted off the list wherever there is one, so the figure and the
+             names behind it are read from the same array — the server already
+             guarantees they agree, and this is what keeps them agreeing here. */
+          domains.length || Number(r.extra) || 0,
+          ...(lists ? [domains.join(', ')] : []),
+          urls, removed,
+          `${pct(removed, urls)}%`,
+          ...(status ? [String(r.profileStatus ?? '—')] : []),
+          `${pct(urls, total)}%`]
+      }),
+      pickValues,
+      // The joined list, where there is one: column 2, straight after its count.
+      textCols: lists ? [2] : [],
+    }
+  }
+
+  if (key === 'byRepeatOffender') {
+    return {
+      head: ['Channel / Profile URL', 'Repeat offences', 'Identified', 'Removed',
+             'Removal rate', 'Profile status'],
+      rows: rows.map(r => {
+        const urls = Number(r.urls) || 0
+        const removed = Number(r.removed) || 0
+        return [String(r.label ?? '—'), Number(r.repeats) || 0, urls, removed,
+                `${pct(removed, urls)}%`,
+                String(r.profileStatus ?? '').trim() || 'Not Available']
       }),
       pickValues,
     }
@@ -913,37 +1113,83 @@ function dimTableData(key: string, label: string, viz: string, rows: any[]): Pan
   if (ROOT_ALL_DIMS.has(key)) {
     const side = rootSide(key)
     const t = rows.reduce((a, x) => a + (Number(x.urls) || 0), 0)
+    /* WHICH domains the mirror count is counting.
+
+       The count on its own tells a reader their operator is running twelve
+       domains and gives them no way to find out which twelve — which is the
+       next question every one of them asks. The chart answers it by expanding
+       a row (see MirrorBars); this is the same list where it can be read all at
+       once and, more to the point, where it leaves in the download.
+
+       Its own column rather than a line under the name, because the export is
+       this table: a sheet with one cell per fact is one somebody can filter,
+       and a joined string wedged into the name column is not. */
+    const lists = rows.some(r => mirrorList(r).length > 0)
     return {
-      head: [side.head, 'Identified', side.name, side.rate, 'Mirror domains', 'Share'],
+      head: [side.head, 'Identified', side.name, side.rate, 'Mirror domains',
+        ...(lists ? ['Mirror domain list'] : []), 'Share'],
       rows: rows.map(r => {
         const urls = Number(r.urls) || 0
         const removed = Number(r.removed) || 0
+        const mirrors = mirrorList(r)
         return [String(r.label ?? '—'), urls, removed, `${pct(removed, urls)}%`,
-          Number(r.mirrors) || 0, `${pct(urls, t)}%`]
+          /* The LIST's length wherever there is one, never the carried count.
+             The two agree by construction — the server re-derives the count
+             from the list it sends (see applyBreakdownSets) — and reading both
+             off one array is what keeps a column of names beside a number that
+             contradicts it impossible rather than merely unlikely. */
+          mirrors.length || Number(r.mirrors) || 0,
+          ...(lists ? [mirrors.join(', ')] : []),
+          `${pct(urls, t)}%`]
       }),
       pickValues,
+      // The joined list, where there is one: column 5, after the four figures.
+      textCols: lists ? [5] : [],
     }
   }
 
   if (viz === 'value' || viz === 'ordinal') {
-    // Single-series panels have no removal figure to show — a bucket's rows
-    // have all come down by definition.
+    /* Single-series panels have no removal figure to show — a bucket's rows
+       have all come down by definition.
+
+       The mirror-count card is one of these: its bars ARE the hostname count,
+       so its rows carry the same list the two combined cards do and it gets the
+       same column. Nothing else that lands here has one. */
+    const lists = rows.some(r => mirrorList(r).length > 0)
     return {
-      head: [label, 'Count'],
-      rows: rows.map(r => [String(r.label ?? '—'), Number(r.urls) || 0]),
+      head: [label, 'Count', ...(lists ? ['Mirror domain list'] : [])],
+      rows: rows.map(r => [String(r.label ?? '—'), Number(r.urls) || 0,
+        ...(lists ? [mirrorList(r).join(', ')] : [])]),
       pickValues,
+      textCols: lists ? [2] : [],
     }
   }
 
   const total = rows.reduce((a, x) => a + (Number(x.urls) || 0), 0)
+  /* WHETHER THE HOST HAS EVER HONOURED A NOTICE — on the panels whose rows are
+     host domains, and on no others.
+
+     Carried by the server only where it means something (see
+     complianceDomainPanels in go-server/handlers/domaincompliance.go), so the
+     column appears exactly where a row IS a domain rather than wherever this
+     generic shape happens to be drawn. A report whose warehouse could not answer
+     carries no status at all and keeps the five columns it had — an absent
+     column reads as a column that was not asked for, where a full one of "Not
+     recorded" would read as a finding about the client's hosts. */
+  const compliance = rows.some(r => r.complianceStatus)
   return {
-    head: ['Name', 'Identified', 'Removed', 'Removal rate', 'Share'],
+    head: ['Name', 'Identified', 'Removed', 'Removal rate',
+      ...(compliance ? ['Compliance'] : []), 'Share'],
     rows: rows.map(r => {
       const urls = Number(r.urls) || 0
       const removed = Number(r.removed) || 0
-      return [String(r.label ?? '—'), urls, removed, `${pct(removed, urls)}%`, `${pct(urls, total)}%`]
+      return [String(r.label ?? '—'), urls, removed, `${pct(removed, urls)}%`,
+        ...(compliance ? [String(r.complianceStatus ?? '—')] : []),
+        `${pct(urls, total)}%`]
     }),
     pickValues,
+    // A word, not a figure — left with the names rather than the numerals.
+    textCols: compliance ? [4] : [],
   }
 }
 
@@ -1263,17 +1509,25 @@ const MAP_VIZ: VizOption = { key: 'map', label: 'World map', hint: 'Countries ti
     rows carry a mirror-domain count, and the reason that card exists. Listed first
     there, because it is the only shape on the menu that draws all three of its
     measures; every other one silently leaves the mirror count out. */
+/* Named for the SHAPE, not for the measure that first needed it.
+
+   It was "Volume & mirrors", because mirror domains per brand was the first
+   panel to want a third figure that could not share the volume axis. The
+   hosting-provider cards now use it for their distinct-website count, and a
+   card headed "Hosting Providers" offering a chart type called "mirrors" reads
+   as though it were counting mirrors. The shape is "two bars and a count on its
+   own scale"; what the count IS belongs to the panel. */
 const MIRROR_VIZ: VizOption = {
-  key: 'mirror', label: 'Volume & mirrors',
-  hint: 'Found and removed as bars, with each brand\'s mirror-domain count on its own scale',
+  key: 'mirror', label: 'Volume & count',
+  hint: 'Found and removed as bars, with the panel\'s own count measure beside them on its own scale',
 }
 
 /** Offered only on the repeat-offenders panel — it is the one breakdown whose
-    rows carry a day count, and on any other panel this shape draws an axis of
-    "0 days". */
+    rows carry a repeat count, and on any other panel this shape has nothing to
+    rank by. */
 const REPEAT_VIZ: VizOption = {
   key: 'repeat', label: 'Repeat offenders',
-  hint: 'Ranked by how many separate days each account was found on',
+  hint: 'Ranked by how many times each account came back after a takedown',
 }
 
 const TREND_VIZ: VizOption[] = [
@@ -1733,8 +1987,10 @@ function NoData({ note = 'No data for this period' }: { note?: string }) {
 }
 
 /** The table twin behind every chart's Table toggle. */
-function DataTable({ head, rows, onPick, pickValues, activeVal = '' }: {
+function DataTable({ head, rows, onPick, pickValues, activeVal = '', textCols = [] }: {
   head: string[]; rows: (string | number)[][]
+  /** See PanelTable.textCols — the columns that are prose, not figures. */
+  textCols?: number[]
   /* Clicking a row filters by it, exactly as clicking its mark does.
 
      A table twin exists because the chart had to shorten or drop something — a
@@ -1754,6 +2010,8 @@ function DataTable({ head, rows, onPick, pickValues, activeVal = '' }: {
   activeVal?: string
 }) {
   if (rows.length === 0) return <div className="text-sm text-gray-400 py-3">No data.</div>
+  // Column 0 is always prose — it is the row's name.
+  const text = new Set<number>([0, ...textCols])
   return (
     <div className="overflow-x-auto max-h-[320px]">
       <table className="w-full text-xs">
@@ -1761,7 +2019,7 @@ function DataTable({ head, rows, onPick, pickValues, activeVal = '' }: {
           <tr className="text-gray-400">
             {head.map((h, i) => (
               <th key={h} className={`font-bold uppercase tracking-widest text-[9px] px-2 pb-2 ${
-                i === 0 ? 'text-left' : 'text-right'}`}>{h}</th>
+                text.has(i) ? 'text-left' : 'text-right'}`}>{h}</th>
             ))}
           </tr>
         </thead>
@@ -1787,7 +2045,7 @@ function DataTable({ head, rows, onPick, pickValues, activeVal = '' }: {
                    problem repeated. */
                 <td key={j} title={typeof c === 'number' ? undefined : String(c)}
                   className={`px-2 py-1.5 ${
-                  j === 0
+                  text.has(j)
                     ? 'text-gray-700 dark:text-gray-200 truncate max-w-[220px]'
                     : 'text-right tabular-nums font-semibold text-[#14254A] dark:text-white'}`}>
                   {typeof c === 'number' ? full(c) : c}
@@ -1826,6 +2084,8 @@ const KPI_ICON: Record<string, string> = {
   profilesSuspended: 'M5 5l14 14M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z',
   suspendedWebsites: 'M5 5l14 14M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z',
   impactedSubscribers: 'M16 19v-2a4 4 0 0 0-8 0v2M12 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
+  // Same glyph as impactedSubscribers: the same audience, differently narrowed.
+  totalSubscribers: 'M16 19v-2a4 4 0 0 0-8 0v2M12 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
   impactedTraffic: 'M16 19v-2a4 4 0 0 0-8 0v2M12 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
   views: 'M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
   viewsSaved: 'M12 21s7-4 7-9V6l-7-3-7 3v6c0 5 7 9 7 9z',                  // shield
@@ -1835,6 +2095,16 @@ const KPI_ICON: Record<string, string> = {
   bingDelisted: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM8 11h6M20 20l-4.2-4.2',
   notices: 'M3 6h18v12H3zM3 7l9 6 9-6',                                    // envelope
   crawled: 'M4 18V9M10 18V5M16 18v-6M22 18h-20',                           // bars
+
+  /* The two-sided open-web split. The pair within each row shares a glyph —
+     they are the same measure on two sides, and giving each its own icon would
+     say they were different things. What tells them apart is the label. */
+  linkingIdentified: 'M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1', // chain
+  hostIdentified: 'M4 5h16v6H4zM4 13h16v6H4zM8 8h.01M8 16h.01',            // server
+  linkingDomains: 'M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z',      // globe
+  hostDomains: 'M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z',
+  linkingBrands: 'M3 11l9-8 9 8v9a2 2 0 0 1-2 2h-4v-6H9v6H5a2 2 0 0 1-2-2z', // estate
+  hostBrands: 'M3 11l9-8 9 8v9a2 2 0 0 1-2 2h-4v-6H9v6H5a2 2 0 0 1-2-2z',
 }
 const KPI_ICON_FALLBACK = 'M6 12h.01M12 12h.01M18 12h.01'
 
@@ -2773,15 +3043,29 @@ function RankTable({ rows, onPick, activeVal = '', limit = 12, mirrors = false,
                 <td className="px-1.5 py-1.5 text-right font-bold tabular-nums text-[#14254A] dark:text-white">{full(urls)}</td>
                 <td className="px-1.5 py-1.5 text-right font-bold tabular-nums text-[#14254A] dark:text-white">{full(removed)}</td>
                 <td className="px-1.5 py-1.5 text-right tabular-nums text-gray-500 dark:text-white/50">{pct(removed, urls)}%</td>
-                {mirrors && (
+                {mirrors && (() => {
                   /* The operator's footprint, not their volume. Set in the ink
                      the figures use rather than the muted grey of the two
                      percentages beside it — it is a COUNT, and reading it as a
                      rate is the one mistake this column invites. */
-                  <td className="px-1.5 py-1.5 text-right font-bold tabular-nums text-[#14254A] dark:text-white">
-                    {full(Number(r.mirrors) || 0)}
-                  </td>
-                )}
+                  const list = mirrorList(r)
+                  return (
+                    /* THE NAMES ARE ON THE CELL. This shape is what a panel
+                       configured as a ranked table draws INSTEAD of the TABLE
+                       twin, so the drawer on the bar card and the list column in
+                       that twin are both out of reach here — the tooltip is the
+                       one place left to put them, and a count nothing can be
+                       checked against is what the list exists to end.
+
+                       Counted off the list wherever there is one, so the figure
+                       and the names behind it are read from the same array. */
+                    <td title={list.length ? list.join(', ') : undefined}
+                      className={`px-1.5 py-1.5 text-right font-bold tabular-nums text-[#14254A] dark:text-white ${
+                        list.length ? 'cursor-help underline decoration-dotted underline-offset-4' : ''}`}>
+                      {full(list.length || Number(r.mirrors) || 0)}
+                    </td>
+                  )
+                })()}
                 <td className="px-1.5 py-1.5 text-right tabular-nums text-gray-400">{pct(urls, total)}%</td>
               </tr>
             )
@@ -2838,11 +3122,26 @@ function VolumeBar({ v, max, color }: { v: number; max: number; color: string })
    a copy of its markup. A preview that reimplements the thing it previews
    agrees with the page exactly once — on the day it is written. */
 export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
-  removedName = 'Removed', nameHead = 'Root domain' }: {
+  removedName = 'Removed', nameHead = 'Root domain',
+  counts = [{ key: 'mirrors', name: 'Mirror domains', list: 'mirrorDomains' }] }: {
   rows: any[]; m: MarkTheme; onPick?: (v: string) => void; activeVal?: string; limit?: number
   /** What the rows ARE. The same words the TABLE toggle uses, so switching
       between the two views of one card does not rename its rows. */
   nameHead?: string
+  /* WHICH KEY HOLDS THE THIRD FIGURE, and what it is called.
+
+     This shape — two volume bars and a small count on its own gauge — was built
+     for mirror domains per brand, and it turns out to be the answer to a second
+     question the report was failing to draw: how many distinct websites each
+     hosting provider carries. The panels already had the number (APIExtra
+     "totalDomains"), and the hbar shape they were drawn as had nowhere to put
+     it, so it lived in the `<title>` of an axis tick where nobody would find it.
+
+     The key is a parameter rather than a second component because the reason
+     the count needs its own scale is identical in both cases: 9.9K URLs beside
+     19 websites cannot share an axis, and a third bar would be a third of a
+     pixel. One shape, two callers, one rule about scales. */
+  counts?: Array<{ key: string; name: string; list?: string }>
   /** What the second bar counts on this card. The linking side's is the count
       Google approved for de-indexing, the host side's is what came down — two
       different facts about two different tables, and the legend has to say
@@ -2854,21 +3153,34 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
     val: String(r.value ?? r.label ?? ''),
     urls: Number(r.urls) || 0,
     removed: Number(r.removed) || 0,
-    mirrors: Number(r.mirrors) || 0,
+    counts: counts.map(c => Number(r[c.key]) || 0),
+    /* The NAMES behind each count, where that count has any — the brand's mirror
+       hostnames, the provider's domains. Empty for a count whose caller declared
+       no list field, and empty again where the server dropped a list it could
+       not reconcile against the count, so the expander below appears exactly
+       where there is something whole to expand. */
+    lists: counts.map(c => (c.list ? listOf(r, c.list) : [])),
   }))
   if (data.length === 0) return <div className="text-sm text-gray-400 py-3">No data.</div>
 
   const maxVol = Math.max(1, ...data.map(d => Math.max(d.urls, d.removed)))
-  const topMirror = Math.max(0, ...data.map(d => d.mirrors))
-  /* No mirror count anywhere in the window. Every gauge would be an empty well,
-     which reads as a column that failed rather than as a measure the data does
-     not carry — so the card draws the two volume bars and says so underneath.
-     This is also what a reader sees on a panel whose rows never had the figure,
-     if the shape is ever picked for one from Report Configuration. */
-  const showMirrors = topMirror > 0
-  // The third identity hue, which every theme's palette puts at cat[2] — the
-  // first colour that is neither of the two series drawn beside it.
-  const mirrorInk = m.cat[2] || m.removed
+  /* One scale PER COUNT, not one shared between them.
+
+     The host card carries distinct websites and notices sent, and those are no
+     more comparable with each other than either is with the URL volume — 188
+     websites beside 3 notices on one gauge draws the notices as nothing. Each
+     count is read down its own column against its own top. */
+  const tops = counts.map((_, i) => Math.max(0, ...data.map(d => d.counts[i])))
+  /* A count nothing in this window has is dropped, column and all. An empty
+     well reads as a column that failed rather than as a measure the data does
+     not carry, and a caption explaining the absence is noise on a card whose
+     other figures are fine. */
+  const shown = counts.map((c, i) => ({ ...c, i })).filter(c => tops[c.i] > 0)
+  const showMirrors = shown.length > 0
+  /* A hue per count, starting at the palette's third — the first that is
+     neither of the two series drawn beside it. Two counts on one card must not
+     share a colour, or the legend names two things the eye reads as one. */
+  const countInk = (i: number) => m.cat[(i + 2) % Math.max(1, m.cat.length)] || m.removed
   const hasActive = !!activeVal
   /* The mirror track is a FRACTION of the volume track, never a fixed width.
 
@@ -2878,7 +3190,22 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
      measure drawn as the big one, which is the exact misreading the separate
      scale exists to prevent. As a fraction the two shrink together and the
      ordering holds at every width. */
-  const cols = showMirrors ? '128px minmax(0,2fr) minmax(0,1fr)' : '128px minmax(0,1fr)'
+  const cols = ['128px', 'minmax(0,2fr)', ...shown.map(() => 'minmax(0,1fr)')].join(' ')
+
+  /* ONE drawer open at a time, keyed by the row's VALUE and the COLUMN it was
+     opened from.
+
+     By value rather than index so the drawer follows its row when the ranking
+     moves under it: a poll that lifts owledge from third to second must not
+     leave owledge's domains sitting open beneath whatever is third now. A row
+     that drops out of the top ten closes, which is the right answer — its list
+     is no longer on the card.
+
+     And by column because the host provider card has two gauges. Keyed on the
+     row alone, clicking its domain count would have re-opened whatever was last
+     shown for that provider. */
+  const [openRow, setOpenRow] = useState('')
+  const drawerKey = (val: string, countKey: string) => `${val}\u0000${countKey}`
 
   return (
     <div className="py-1">
@@ -2888,50 +3215,124 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
         style={{ gridTemplateColumns: cols }}>
         <span>{nameHead}</span>
         <span>Identified / {removedName}</span>
-        {showMirrors && <span className="text-right">Mirror domains</span>}
+        {shown.map(c => <span key={c.key} className="text-right">{c.name}</span>)}
       </div>
 
       <div className="flex flex-col gap-1">
         {data.map((d, i) => {
           const isActive = activeVal === d.val || activeVal === d.label
+          // Which of this row's gauges is open, if any.
+          const openCount = shown.find(c => openRow === drawerKey(d.val, c.key))
+          const rowTitle = `${d.label}: ${full(d.urls)} identified, ${full(d.removed)} ${removedName.toLowerCase()}${
+            shown.map(c => `, ${full(d.counts[c.i])} ${c.name.toLowerCase()}`).join('')}`
           return (
-            <button key={d.val + i} type="button" disabled={!onPick} onClick={() => onPick?.(d.val)}
-              title={`${d.label}: ${full(d.urls)} identified, ${full(d.removed)} ${removedName.toLowerCase()}${
-                showMirrors ? `, across ${full(d.mirrors)} mirror domain${d.mirrors === 1 ? '' : 's'}` : ''}`}
-              className={`grid items-center gap-3 rounded-md px-1.5 py-1 text-left transition-all ${
-                onPick ? 'hover:bg-[#14254A]/[0.04] dark:hover:bg-white/5' : 'cursor-default'} ${
+            <div key={d.val + i}>
+              {/* THREE CONTROLS IN THE ROW, not one.
+
+                  It was a single button wrapping the whole row, which is the
+                  right shape while the row does one thing. It does two now: the
+                  name and the bars narrow the report to this brand, and the
+                  mirror count opens the list of domains behind it. A button
+                  inside a button is not markup a browser will render, and a div
+                  with an onClick would take the keyboard away from an action
+                  that had it — so the row is a plain grid and each of its cells
+                  is its own control. The row highlight moved here with them. */}
+              <div className={`grid items-center gap-3 rounded-md px-1.5 py-1 text-left transition-all ${
+                onPick ? 'hover:bg-[#14254A]/[0.04] dark:hover:bg-white/5' : ''} ${
                 isActive ? 'bg-[#14254A]/[0.05] ring-1 ring-[#14254A]/30 dark:bg-white/5 dark:ring-white/20' : ''} ${
                 hasActive && !isActive ? 'opacity-40' : ''}`}
-              style={{ gridTemplateColumns: cols }}>
-              <span className="text-xs text-gray-600 dark:text-gray-300 truncate" title={d.label}>{d.label}</span>
-              <span className="flex flex-col gap-1 min-w-0">
-                <VolumeBar v={d.urls} max={maxVol} color={m.ident} />
-                <VolumeBar v={d.removed} max={maxVol} color={m.removed} />
-              </span>
-              {showMirrors && (
-                <span className="flex items-center gap-2 justify-end">
-                  {/* Capped, so a full-width card does not spend 400 pixels
-                      drawing a count of nine. Past the cap the column's slack
-                      turns into distance between the two scales, which is the
-                      better use for it. */}
-                  <span className="relative h-2.5 flex-1 rounded-full overflow-hidden"
-                    style={{ background: m.grid, maxWidth: 180 }}>
-                    {/* A floor of 4% so a brand on ONE domain still shows a
-                        mark. Zero gets nothing: an empty well and a printed 0
-                        is the honest picture of a brand seen on no mirror
-                        domain this panel could resolve. */}
-                    <span className="absolute inset-y-0 left-0 rounded-full"
-                      style={{
-                        width: d.mirrors > 0 ? `${Math.max(4, (d.mirrors / topMirror) * 100)}%` : 0,
-                        background: mirrorInk,
-                      }} />
-                  </span>
-                  <span className="text-[10px] font-bold tabular-nums text-[#14254A] dark:text-white w-8 text-right">
-                    {full(d.mirrors)}
-                  </span>
-                </span>
+                style={{ gridTemplateColumns: cols }}>
+                <button type="button" disabled={!onPick} onClick={() => onPick?.(d.val)}
+                  title={rowTitle}
+                  className="text-xs text-gray-600 dark:text-gray-300 truncate text-left disabled:cursor-default">
+                  {d.label}
+                </button>
+                <button type="button" disabled={!onPick} onClick={() => onPick?.(d.val)}
+                  title={rowTitle}
+                  className="flex flex-col gap-1 min-w-0 disabled:cursor-default">
+                  <VolumeBar v={d.urls} max={maxVol} color={m.ident} />
+                  <VolumeBar v={d.removed} max={maxVol} color={m.removed} />
+                </button>
+                {shown.map(c => {
+                  const open = openRow === drawerKey(d.val, c.key)
+                  const gauge = (
+                    <>
+                      {/* Capped, so a full-width card does not spend 400 pixels
+                          drawing a count of nine. Past the cap the column's slack
+                          turns into distance between the scales, which is the
+                          better use for it. */}
+                      <span className="relative h-2.5 flex-1 rounded-full overflow-hidden"
+                        style={{ background: m.grid, maxWidth: 180 }}>
+                        {/* A floor of 4% so a row with ONE still shows a mark. Zero
+                            gets nothing: an empty well and a printed 0 is the honest
+                            picture of a row this measure found none for. */}
+                        <span className="absolute inset-y-0 left-0 rounded-full"
+                          style={{
+                            width: d.counts[c.i] > 0
+                              ? `${Math.max(4, (d.counts[c.i] / tops[c.i]) * 100)}%` : 0,
+                            background: countInk(c.i),
+                          }} />
+                      </span>
+                      <span className="text-[10px] font-bold tabular-nums text-[#14254A] dark:text-white w-8 text-right">
+                        {full(d.counts[c.i])}
+                      </span>
+                    </>
+                  )
+                  /* A gauge opens only where a list came with it. The notices
+                     gauge declares none, and any gauge whose list the server could
+                     not reconcile against its count arrives without one — a
+                     chevron on either would promise a drawer that opens on
+                     nothing, or worse, on a fragment. */
+                  const list = d.lists[c.i]
+                  if (list.length === 0) {
+                    return (
+                      <span key={c.key} className="flex items-center gap-2 justify-end">{gauge}</span>
+                    )
+                  }
+                  return (
+                    <button key={c.key} type="button" aria-expanded={open}
+                      onClick={() => setOpenRow(open ? '' : drawerKey(d.val, c.key))}
+                      title={open ? `Hide the ${countNoun(c.name, list.length)} behind this count`
+                        : `Show the ${full(list.length)} ${countNoun(c.name, list.length)} behind this count`}
+                      className="flex items-center gap-2 justify-end">
+                      {gauge}
+                      <svg viewBox="0 0 10 6" width="8" height="5" aria-hidden="true"
+                        className={`shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+                        style={{ fill: 'none', stroke: m.axis, strokeWidth: 1.6 }}>
+                        <path d="M1 1l4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                  )
+                })}
+              </div>
+              {/* THE LIST ITSELF.
+
+                  Under the row rather than in a popover. A popover is the shape
+                  for something you glance at and dismiss; this is a list somebody
+                  is going to read down and copy out, and a block that pushes the
+                  rows below it apart is the one that can be selected.
+
+                  Every name in full. This drawer exists because the count on its
+                  own was not enough, so truncating its answer would put the
+                  reader back where they started. */}
+              {openCount && (
+                <div className="mt-0.5 mb-1.5 ml-1.5 rounded-md px-3 py-2"
+                  style={{ background: m.grid }}>
+                  {/* Named for the GAUGE it was opened from, not for domains in
+                      general: "17 host domains" and "29 linking domains" are two
+                      different estates, and a provider card can show both. */}
+                  <div className="text-[9px] font-bold uppercase tracking-widest text-gray-400 pb-1.5">
+                    {full(d.lists[openCount.i].length)}{' '}
+                    {countNoun(openCount.name, d.lists[openCount.i].length)} · {d.label}
+                  </div>
+                  <ul className="flex flex-wrap gap-x-4 gap-y-1">
+                    {d.lists[openCount.i].map(h => (
+                      <li key={h} className="text-[11px] text-gray-600 dark:text-gray-300 break-all">{h}</li>
+                    ))}
+                  </ul>
+                </div>
               )}
-            </button>
+            </div>
           )
         })}
       </div>
@@ -2941,16 +3342,8 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
         { label: removedName, color: m.removed },
         // The scale is named in the legend as well as over the column: this is
         // the one entry a reader must not take as another bar on the left.
-        ...(showMirrors
-          ? [{ label: `Mirror domains`, color: mirrorInk }]
-          : []),
+        ...shown.map(c => ({ label: c.name, color: countInk(c.i) })),
       ]} />
-
-      {!showMirrors && (
-        <p className="pt-1 text-center text-[11px] text-gray-400">
-          No mirror domain counts in this window.
-        </p>
-      )}
     </div>
   )
 }
@@ -3287,14 +3680,26 @@ function SectionHead({ title, sub }: { title: string; sub?: string }) {
  * is the part being read. Direct-labelled at the bar end, matching the other
  * charts here.
  */
-function HBarChart({ rows, m, onPick, activeVal = '', limit = 10 }: {
+/* Exported for .preview-rootcard.tsx, for the same reason MirrorBars is: the
+   preview renders THIS component rather than a copy of its markup, and a copy
+   agrees with the page exactly once — on the day it is written. */
+export function HBarChart({ rows, m, onPick, activeVal = '', limit = 10, extraLabel = '' }: {
   rows: any[]; m: MarkTheme; onPick?: (v: string) => void; activeVal?: string; limit?: number
+  /* What a THIRD figure on each row is called, where the panel carries one —
+     "Websites" on the two hosting-provider panels. Empty everywhere else, which
+     is every panel that has only the two bars. */
+  extraLabel?: string
 }) {
   const data = rows.slice(0, limit).map(r => ({
     label: String(r.label ?? '—'),
     value_: String(r.value ?? r.label ?? ''),
     urls: Number(r.urls) || 0,
     removed: Number(r.removed) || 0,
+    extra: r.extra === undefined || r.extra === null ? null : Number(r.extra),
+    /* Whether this host has ever honoured a notice. Only the host-domain panels
+       carry one — see domaincompliance.go — and '' everywhere else, which draws
+       nothing at all rather than a second tick line saying "—". */
+    status: String(r.complianceStatus ?? '').trim(),
   }))
   if (data.length === 0) return <div className="text-sm text-gray-400 py-3">No data.</div>
 
@@ -3338,13 +3743,58 @@ function HBarChart({ rows, m, onPick, activeVal = '', limit = 10 }: {
      turns a long asset title into two lines inside a band sized for one — and
      two of those in a row collide. The full title stays reachable: it is on the
      tick as a tooltip, in the chart's own tooltip, and in the table view. */
+  /* The third figure, by the row it belongs to.
+
+     On the TICK rather than as a third bar, and that is a reading of the data
+     rather than a shortcut: a provider with 29 sites and 27,057 identifications
+     puts the two three orders of magnitude apart, so a third bar is either
+     invisible or forces a log scale onto a panel whose other two bars are read
+     by length. The count is a fact about the provider; the bars are the
+     comparison. Kept as a number beside the name, where a reader ranking
+     providers can see it without a second card. */
+  const extraBy = new Map(data.map(d => [d.label, d.extra]))
+  const hasExtra = !!extraLabel && data.some(d => d.extra !== null)
+  /* The compliance word, by the row it belongs to.
+
+     ON A SECOND LINE UNDER THE NAME, not appended to it. "Non-Compliant" is
+     thirteen characters and the axis is 172px wide — appended, it either pushes
+     the domain down to a stub or overruns the plot, and the domain is the part
+     being read. Under it there is room for both at full length, and the 50px
+     band each row already has (see the note on height above) holds two lines of
+     text without touching its neighbour.
+
+     NO COLOUR CODE. Every other mark on this page is navy for identification and
+     orange for removal, and minting a third meaning for one of those hues here
+     would have the same colour saying two things on one card. The word is the
+     signal; weight is what makes the one worth acting on findable. */
+  const statusBy = new Map(data.map(d => [d.label, d.status]))
+  const hasStatus = data.some(d => !!d.status)
+
   const Tick = ({ x, y, payload }: any) => {
     const full = String(payload?.value ?? '')
-    const short = full.length > 26 ? full.slice(0, 26) + '…' : full
+    const n = extraBy.get(full)
+    const status = statusBy.get(full) || ''
+    // Shorter truncation where a figure follows it, so the two never collide in
+    // the fixed 172px the axis is given.
+    const cap = hasExtra && n !== null && n !== undefined ? 20 : 26
+    const short = full.length > cap ? full.slice(0, cap) + '…' : full
+    const suffix = hasExtra && n !== null && n !== undefined ? `  ${axisNum(n)}` : ''
+    // Lifted by the height of the line that follows, so the PAIR stays centred
+    // on the band rather than the name sitting where the pair should be.
+    const dy = hasStatus ? -1 : 4
     return (
-      <text x={x} y={y} dy={4} textAnchor="end" fill={m.axis} fontSize={11}>
-        <title>{full}</title>
+      <text x={x} y={y} dy={dy} textAnchor="end" fill={m.axis} fontSize={11}>
+        <title>{[full,
+          suffix ? `${axisNum(n as number)} ${extraLabel.toLowerCase()}` : '',
+          status].filter(Boolean).join(' — ')}</title>
         {short}
+        {suffix && <tspan fontWeight={700} fill={m.ident}>{suffix}</tspan>}
+        {hasStatus && (
+          <tspan x={x} dy={12} fontSize={9}
+            fontWeight={status === 'Non-Compliant' ? 700 : 400}>
+            {status || '—'}
+          </tspan>
+        )}
       </text>
     )
   }
@@ -3972,7 +4422,9 @@ function prettyURL(u: string): string {
   return bare || raw
 }
 
-function RepeatOffenders({ rows, m, onPick, activeVal = '', limit = 10 }: {
+/* Exported for .preview-repeat.tsx, which renders THIS component rather than
+   a copy of it — see the note on MirrorBars. */
+export function RepeatOffenders({ rows, m, onPick, activeVal = '', limit = 10 }: {
   rows: any[]; m: MarkTheme; onPick?: (v: string) => void; activeVal?: string; limit?: number
 }) {
   const segs = rows.slice(0, limit)
@@ -3982,7 +4434,7 @@ function RepeatOffenders({ rows, m, onPick, activeVal = '', limit = 10 }: {
   if (segs.length === 0) {
     return (
       <div className="text-sm text-gray-400 dark:text-white/45 py-6 text-center">
-        No channel or profile was identified on more than one day in this window.
+        No channel or profile came back after a takedown in this window.
       </div>
     )
   }
@@ -3997,12 +4449,19 @@ function RepeatOffenders({ rows, m, onPick, activeVal = '', limit = 10 }: {
           const filterVal = String(r.value ?? url)
           const urls = Number(r.urls) || 0
           const removed = Number(r.removed) || 0
-          const days = Number(r.repeats) || 0
+          const repeats = Number(r.repeats) || 0
+          /* The account's OWN state, as against its posts'. The server sends
+             the two words this shows — see profileStatusLabel — so a status
+             the warehouse spells some third way cannot arrive here as a third
+             thing the layout has no room for. */
+          const status = String(r.profileStatus ?? '').trim() || 'Not Available'
+          const suspended = status === 'Suspended'
           const isActive = activeVal === filterVal || activeVal === url
           const dimmed = hasActive && !isActive
           return (
             <button key={filterVal + i} type="button" disabled={!onPick} onClick={() => onPick?.(filterVal)}
-              title={`${url}\nIdentified on ${days} separate days · ${full(urls)} URLs identified · ${full(removed)} removed`}
+              title={`${url}\nCame back ${repeats} time${repeats === 1 ? '' : 's'} after a takedown · `
+                + `${full(urls)} URLs identified · ${full(removed)} removed · Profile: ${status}`}
               className={`grid items-center gap-3 rounded-md px-1.5 py-1 text-left transition-all ${
                 onPick ? 'hover:bg-[#14254A]/[0.04] dark:hover:bg-white/5' : 'cursor-default'} ${
                 isActive ? 'bg-[#14254A]/[0.05] ring-1 ring-[#14254A]/30 dark:bg-white/5 dark:ring-white/20' : ''} ${
@@ -4012,7 +4471,7 @@ function RepeatOffenders({ rows, m, onPick, activeVal = '', limit = 10 }: {
                  account". The bars take a share rather than a fixed width, so
                  the same panel works full-width here and half-width in a
                  summary. */
-              style={{ gridTemplateColumns: '18px 52px minmax(90px, 1fr) minmax(160px, 42%)' }}>
+              style={{ gridTemplateColumns: '18px 52px minmax(90px, 1fr) 92px minmax(150px, 34%)' }}>
 
               {/* The position, so "top 10" is a fact on the card rather than a
                   claim in its title. */}
@@ -4026,12 +4485,31 @@ function RepeatOffenders({ rows, m, onPick, activeVal = '', limit = 10 }: {
                   is the order the card is in. */}
               <span className="flex items-baseline gap-0.5 justify-end tabular-nums"
                 style={{ color: BRAND_GOLD }}>
-                <span className="text-[13px] font-extrabold leading-none">{days}</span>
-                <span className="text-[9px] font-bold uppercase tracking-wide">days</span>
+                <span className="text-[13px] font-extrabold leading-none">{repeats}</span>
+                <span className="text-[9px] font-bold uppercase tracking-wide">
+                  {repeats === 1 ? 'time' : 'times'}
+                </span>
               </span>
 
               <span className="text-xs text-gray-600 dark:text-gray-300 truncate" title={url}>
                 {midCut(prettyURL(url), 56)}
+              </span>
+
+              {/* THE PROFILE'S OWN STATE, beside the count of what it did.
+                  The pairing is the finding: a profile we removed four times
+                  that is STILL not suspended is a different problem from one
+                  that was, and reading the two together is the whole reason
+                  the column is here rather than in the tooltip.
+
+                  "Not Available" is muted on purpose — it covers both "Active"
+                  and "never told", which are the same amount of evidence, and
+                  colouring it like a live status would make the weaker claim
+                  look like the stronger one. */}
+              <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded text-center
+                whitespace-nowrap ${suspended
+                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
+                  : 'bg-gray-100 text-gray-400 dark:bg-white/5 dark:text-white/40'}`}>
+                {suspended ? 'Suspended' : 'N/A'}
               </span>
 
               {/* Two thin bars from a shared baseline, 2px apart, each with its
@@ -4053,7 +4531,7 @@ function RepeatOffenders({ rows, m, onPick, activeVal = '', limit = 10 }: {
         })}
       </div>
       <Legend items={[
-        { label: 'Days identified on — the ranking', color: BRAND_GOLD },
+        { label: 'Re-Uploaded', color: BRAND_GOLD },
         { label: 'URLs identified', color: m.ident },
         { label: 'Removed', color: m.removed },
       ]} />
@@ -4062,6 +4540,128 @@ function RepeatOffenders({ rows, m, onPick, activeVal = '', limit = 10 }: {
 }
 
 /** Slicer in the right rail. */
+/*
+A filter that lives on a CARD rather than in the rail.
+
+Sized and worded to read as part of the card's header strip, beside the chart
+type — the two controls there are the two things a reader changes about this one
+panel, and they look alike because they are the same kind of decision. The rail's
+Slicer is a different animal: stacked label over box, a dozen of them, each one
+moving the whole page.
+
+── WHY IT IS NOT A <select> ─────────────────────────────────────────────────
+
+	It was one, and the list it dropped was the operating system's: system font,
+	system blue highlight, system metrics, sitting under a card whose every other
+	surface is this product's. A native select styles its BOX and nothing else —
+	the options are drawn by the platform and cannot be reached from CSS at all,
+	so the mismatch was not a matter of trying harder with the stylesheet.
+
+	So the list is ours, built on the same portal-and-outside-click pattern as
+	the VizPicker it sits beside: one popover behaviour on this card rather than
+	two that merely look similar. Portalled because the card clips its own
+	overflow — a menu rendered in place would be cut off by the chart below it.
+
+	The keyboard behaviour a native select gives free is put back deliberately:
+	Escape closes, the trigger is a real button with aria-haspopup, and each
+	option is a button in the tab order. What is NOT put back is type-ahead;
+	these lists are a dozen platforms and a reader can see all of them.
+*/
+/* Exported for .preview-panelsel.tsx — see the note on MirrorBars. */
+export function PanelSelect({ label, value, options, onChange }: {
+  label: string
+  value: string
+  options: { key: string; label: string }[]
+  onChange: (v: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [rect, setRect] = useState<DOMRect | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    setRect(btnRef.current?.getBoundingClientRect() ?? null)
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (btnRef.current?.contains(t) || menuRef.current?.contains(t)) return
+      setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const active = value !== ''
+  const current = options.find(o => o.key === value)
+  const MENU_W = 190
+
+  const pick = (v: string) => { onChange(v); setOpen(false) }
+
+  return (
+    <>
+      <button ref={btnRef} type="button" onClick={() => setOpen(o => !o)}
+        aria-haspopup="listbox" aria-expanded={open}
+        title={`${label}: ${current?.label ?? 'All'}`}
+        className={`flex items-center gap-1.5 rounded-md border h-6 pl-2 pr-1.5 transition-colors ${
+          active
+            ? 'border-[#FC934C]/60 bg-[#FC934C]/10 text-[#FC934C]'
+            : 'border-gray-200 text-gray-400 hover:text-[#14254A] hover:border-gray-300 dark:border-white/15 dark:text-white/50 dark:hover:text-white'
+        }`}>
+        <span className="text-[9px] font-bold uppercase tracking-widest opacity-70">{label}</span>
+        <span className="text-[11px] font-bold max-w-[110px] truncate">
+          {current?.label ?? 'All'}
+        </span>
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" className="opacity-60">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+
+      {open && rect && createPortal(
+        <div ref={menuRef} role="listbox"
+          className="fixed z-[9999] rounded-xl border shadow-2xl overflow-hidden py-1
+            bg-white border-gray-200 dark:bg-[#1a2d55] dark:border-white/15"
+          style={{
+            width: MENU_W,
+            /* Flipped above the trigger when there is no room below, and never
+               off the bottom — these lists run to a dozen or more rows and the
+               card often sits low on a long page. */
+            top: Math.min(rect.bottom + 6, Math.max(8, window.innerHeight - 320)),
+            left: Math.max(8, Math.min(rect.left, window.innerWidth - MENU_W - 8)),
+          }}>
+          <p className="px-3 pt-1.5 pb-1 text-[9px] font-bold uppercase tracking-widest text-gray-400">
+            {label}
+          </p>
+          <div className="max-h-[280px] overflow-y-auto">
+            {/* "All" is an option rather than a separate clear button: it is
+                what the control reads when nothing is chosen, so it has to be
+                choosable by the same gesture. */}
+            {[{ key: '', label: 'All' }, ...options].map(o => {
+              const on = o.key === value
+              return (
+                <button key={o.key || '__all'} type="button" role="option" aria-selected={on}
+                  onClick={() => pick(o.key)}
+                  className={`w-full text-left px-3 py-1.5 text-xs truncate transition-colors ${
+                    on
+                      ? 'font-bold text-[#14254A] bg-[#14254A]/[0.06] dark:text-white dark:bg-white/10'
+                      : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/5'
+                  }`}>
+                  {o.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>,
+        document.body)}
+    </>
+  )
+}
+
 function Slicer({ label, info, value, onChange, options, placeholder = 'All', required, disabled, wide }: {
   label: string; value: string; onChange: (v: string) => void
   options: { key: string; label: string }[]
@@ -5487,6 +6087,16 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
    * a ranked table. Extracted so the promoted headline panel and the ones in the
    * grid below are the same component and cannot drift apart.
    */
+  /* The values the repeat-offender platform control offers.
+
+     Served under the panel's own parameter and only where the panel can honour
+     it — see the note in go-server/handlers/reports.go — so an empty list is
+     this report having no platform column rather than a dropdown worth drawing
+     empty. Read here rather than inside renderDim so the card does not re-derive
+     it on every panel it draws. */
+  const repeatPlatformOpts = useMemo(
+    () => asOpts(opts[REPEAT_PLATFORM_PARAM]), [opts])
+
   const renderDim = (dim: SectionDim, spanClass: string) => {
     /*
       TWO row sets, and the difference between them is the whole of "hide for
@@ -5532,8 +6142,8 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     /* Built once. The toggle below draws it and the download hands it over —
        and a panel showing its chart as a ranked TABLE still has rows worth
        exporting, which is why this is not inside the conditional under it. */
-    const td = dimTableData(dim.key, dim.label, viz, rows)
-    const tdExport = dimTableData(dim.key, dim.label, viz, rowsAll)
+    const td = dimTableData(dim.key, dim.label, viz, rows, dim.extraLabel)
+    const tdExport = dimTableData(dim.key, dim.label, viz, rowsAll, dim.extraLabel)
 
     /* This file's own rendering of the panel. Always built, because it is what
        the card shows on the built-in engine AND what every other engine falls
@@ -5545,13 +6155,28 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         {viz === 'donut'   && <Donut rows={rows} m={m} onPick={pick} activeVal={active} />}
         {viz === 'share'   && <Donut rows={rows} m={m} onPick={pick} activeVal={active} ramp="ordinal" />}
         {viz === 'stacked' && <StackedBars rows={rows} m={m} onPick={pick} activeVal={active} />}
-        {viz === 'hbar'    && <HBarChart rows={rows} m={m} onPick={pick} activeVal={active} />}
+        {viz === 'hbar'    && <HBarChart rows={rows} m={m} onPick={pick} activeVal={active}
+          extraLabel={dim.extraLabel} />}
         {viz === 'column'  && (FULL_SET_DIMS.has(dim.key)
           ? <SeasonColumns rows={rows} m={m} onPick={pick} activeVal={active} />
           : <ColumnChart rows={rows} m={m} onPick={pick} activeVal={active} />)}
         {viz === 'repeat'  && <RepeatOffenders rows={rows} m={m} onPick={pick} activeVal={active} />}
-        {viz === 'mirror'  && <MirrorBars rows={rows} m={m} onPick={pick} activeVal={active}
-          removedName={rootSide(dim.key).name} nameHead={rootSide(dim.key).head} />}
+        {/* Named from COUNT_PANELS, which knows all four by key. A panel the
+            shape was picked for from Report Configuration and that is not in
+            that table gets the neutral wording rather than another panel's —
+            see the note there. */}
+        {viz === 'mirror'  && (() => {
+          const c = COUNT_PANELS[dim.key]
+          return <MirrorBars rows={rows} m={m} onPick={pick} activeVal={active}
+            nameHead={c?.nameHead ?? 'Name'}
+            removedName={c?.removedName ?? 'Removed'}
+            /* The fallback for a panel Report Configuration put on this shape
+               without COUNT_PANELS knowing about it. `list` is named on the
+               chance the row carries one; where it does not, listOf answers
+               empty and the gauge draws without a drawer, exactly as before. */
+            counts={c?.counts ?? [{ key: 'extra', name: dim.extraLabel || 'Count',
+              list: 'extraDomains' }]} />
+        })()}
         {viz === 'table'   && <RankTable rows={rows} onPick={pick} activeVal={active}
           mirrors={ROOT_ALL_DIMS.has(dim.key)}
           removedHead={ROOT_ALL_DIMS.has(dim.key) ? rootSide(dim.key).name : undefined}
@@ -5574,10 +6199,30 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
     return (
       <Card key={dim.key} title={dim.label} info={dim.desc}
         exportTable={tdExport} exportSubtitle={exportScope} exportFooter={EXPORT_FOOTER}
-        action={<VizPicker options={options} value={viz} fallback={configured}
-          saved={vizDefault[vizKey]}
-          onPick={v => setViz(vizKey, v)}
-          onSetDefault={v => saveVizDefault(vizKey, v)} />}
+        action={<div className="flex items-center gap-1.5">
+          {/* THE PLATFORM, on the card it narrows.
+
+              Only on the repeat-offender panel, and only where the source
+              records a platform to pick from — the server serves the values
+              under this parameter exactly where the panel can honour it, so an
+              empty list is the sign that this report has no such column rather
+              than a dropdown worth drawing.
+
+              On the card rather than in the rail because of its REACH: every
+              control in the pane moves the whole page, and this one moves one
+              ranking. Beside the chart it acts on, that is obvious without a
+              sentence explaining it. */}
+          {dim.key === REPEAT_DIM && repeatPlatformOpts.length > 0 && (
+            <PanelSelect label="Platform"
+              value={filters[REPEAT_PLATFORM_PARAM] || ''}
+              options={repeatPlatformOpts}
+              onChange={v => setF(REPEAT_PLATFORM_PARAM)(v)} />
+          )}
+          <VizPicker options={options} value={viz} fallback={configured}
+            saved={vizDefault[vizKey]}
+            onPick={v => setViz(vizKey, v)}
+            onSetDefault={v => saveVizDefault(vizKey, v)} />
+        </div>}
         /* No per-panel "click a row to filter" caption. It said the same thing
            on every one of a dozen cards and cost each of them a line of height;
            the section heading above them says it once. The affordance is still
@@ -5588,7 +6233,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
            one count, a breakdown's five columns — are dimTableData's, so the
            twin and the download are the same table by construction. */
         table={viz === 'table' ? undefined
-          : <DataTable head={td.head} rows={td.rows}
+          : <DataTable head={td.head} rows={td.rows} textCols={td.textCols}
               onPick={pick} activeVal={active} pickValues={td.pickValues} />}
         className={spanClass}>
         {/* The panel's chart, drawn by whichever engine is selected — or by the

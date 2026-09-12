@@ -44,6 +44,9 @@ interface ClientMapRow {
   warehouseName?: string
   /** A warehouse client whose name matches this one — offered, never applied. */
   suggestion?: string
+  /** Whether this client's reports offer the Monitoring Scope slicer. Off for
+      everyone until somebody turns it on, so no existing rail changes shape. */
+  monitoringScope?: boolean
 }
 
 /* ── Layout ───────────────────────────────────────────────────────────────────
@@ -709,6 +712,29 @@ export default function ReportConfigPage() {
     }
   }
 
+  /* The Monitoring Scope switch, saved on its own.
+
+     Its own request, and the body carries ONLY this field — the server reads it
+     as a pointer for that reason, so a save here cannot disturb the warehouse
+     link and a re-link cannot disturb this. Two controls on one row, each
+     minding itself. */
+  async function saveMonitoringScope(userId: number, on: boolean) {
+    setClientMap(cur => cur.map(c => c.userId === userId ? { ...c, monitoringScope: on } : c))
+    try {
+      const r = await fetch('/api/admin/report-client-map', {
+        method: 'PUT', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, monitoringScope: on }),
+      })
+      const d = await r.json()
+      if (!r.ok || d.success === false) throw new Error(d.error || 'Could not save the setting')
+      flash(on ? 'Monitoring Scope slicer on' : 'Monitoring Scope slicer off')
+    } catch (e: any) {
+      flash(e.message, false)
+      loadClientMap()
+    }
+  }
+
   useEffect(() => { loadPlatforms() }, [loadPlatforms])
   /* The table picker is a list of every warehouse table, so it is fetched only
      once the server has said this login may have one. Asking unconditionally
@@ -1169,11 +1195,19 @@ export default function ReportConfigPage() {
     const pane = isPaneFilter(p)
     const atTop = i <= 0 || isPaneFilter(layout[i - 1]) !== pane
     const atEnd = i < 0 || i === layout.length - 1 || isPaneFilter(layout[i + 1]) !== pane
-    /* Everything but a section rule can be renamed and described — slicers
-       included, since the rail is where a reader most often needs telling what
-       a control narrows. A rule already IS a title and carries its own
-       subtitle, so it has nothing to add. */
-    const canAnnotate = p.kind !== 'heading'
+    /* EVERY panel can be renamed and described, section rules included —
+       slicers too, since the rail is where a reader most often needs telling
+       what a control narrows.
+
+       A rule was excluded on the reasoning that it already IS a title and
+       carries its own subtitle, so it had nothing to add. That left the two
+       lines heading each section as the only copy on the report nobody could
+       change. A heading's description IS its subtitle now — see asMap in
+       go-server/handlers/reportlayout.go — so there is nothing left that cannot
+       be annotated, and the flag stays only to name the one thing that differs:
+       what the second field is CALLED. */
+    const canAnnotate = true
+    const isRule = p.kind === 'heading'
     const editing = editKey === p.key
     const annotated = p.title.trim() !== '' || p.desc.trim() !== ''
     return (
@@ -1411,11 +1445,16 @@ export default function ReportConfigPage() {
           </label>
           <label className="block">
             <span className="text-[9px] font-bold uppercase tracking-widest text-gray-400 block mb-1">
-              Description
+              {/* A section rule has no ⓘ — this field IS the grey line under its
+                  title, so it is named for what the reader will see. */}
+              {isRule ? 'Subtitle' : 'Description'}
             </span>
-            <textarea value={p.desc} maxLength={1000} rows={3}
+            <textarea value={p.desc} maxLength={1000} rows={isRule ? 2 : 3}
               onChange={e => setDesc(p.key, e.target.value)}
-              placeholder={p.defaultDesc || 'What this figure means, how it is counted, or what to read it against…'}
+              placeholder={p.defaultDesc
+                || (isRule
+                  ? 'The line under this heading…'
+                  : 'What this figure means, how it is counted, or what to read it against…')}
               className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-white/15
                 bg-white dark:bg-white/[0.06] text-[12px] text-[#14254A] dark:text-white resize-y
                 placeholder:text-gray-300 dark:placeholder:text-white/25
@@ -1427,7 +1466,9 @@ export default function ReportConfigPage() {
                   platform failed to answer and the total is therefore a floor —
                   so replacing it with fixed prose would drop the one line that
                   says the number is incomplete. */}
-              {p.kind === 'realtime'
+              {isRule
+                ? 'Shown under the heading on the report. Leave empty to keep the line shown above in grey.'
+                : p.kind === 'realtime'
                 ? 'Appears behind the ⓘ on the strip, above the card’s own live note — which says what the reading covered and whether any platform failed to answer, and is kept whatever you write here.'
                 : p.defaultDesc
                   ? 'Appears behind an ⓘ on the card. Leave empty to keep the built-in note shown above in grey.'
@@ -2686,6 +2727,28 @@ export default function ReportConfigPage() {
                         placeholder="Not linked"
                         emptyLabel="Not linked" />
                     </span>
+
+                    {/* The Monitoring Scope slicer, per client.
+
+                        Beside the warehouse link because both answer the same
+                        question — what this company's reporting is set up to be
+                        — and the note under the list says why linking alone is
+                        not access. Disabled while the client is unlinked: the
+                        slicer narrows a report those logins cannot open, so
+                        offering it there is a control with nothing behind it. */}
+                    <label title={c.warehouseClient
+                        ? 'Show the Monitoring Scope slicer in this client’s filter pane'
+                        : 'Link the client to a warehouse client first — there is no report to narrow yet'}
+                      className={`flex items-center gap-1.5 flex-shrink-0 text-[11px] font-semibold ${
+                        c.warehouseClient
+                          ? 'text-[#14254A] dark:text-white/80 cursor-pointer'
+                          : 'text-gray-300 dark:text-white/25 cursor-not-allowed'}`}>
+                      <input type="checkbox" disabled={!c.warehouseClient}
+                        checked={!!c.monitoringScope}
+                        onChange={e => saveMonitoringScope(c.userId, e.target.checked)}
+                        className="w-3.5 h-3.5 accent-[#FC934C] disabled:opacity-40" />
+                      Monitoring scope
+                    </label>
 
                     {c.warehouseClient
                       ? <Pill tone="ok">Linked</Pill>

@@ -268,8 +268,22 @@ func ReportClientMapList(w http.ResponseWriter, r *http.Request) {
 	   COALESCE rather than `!= 1 AND != 2`: role is nullable, and in SQL a NULL
 	   fails an inequality rather than passing it, so the null rows — ordinary
 	   clients — would have been dropped instead. */
+	/* The monitoring-scope switch, or a literal 0 where the column could not be
+	   added.
+
+	   Selected conditionally rather than trusted, because this list is the whole
+	   Client mapping tab: a SELECT naming a column that is not there fails the
+	   request, and the screen an admin would use to investigate is the screen
+	   that broke. A missing column means the switch reads off everywhere, which
+	   is the feature not working — an error here is the tab not working, and
+	   those are not the same outage. */
+	monitoringCol := "0"
+	if ensureMonitoringScopeSchema(); portalColumnExists("dcp_user", MonitoringScopeColumn) {
+		monitoringCol = MonitoringScopeColumn
+	}
 	clients, err := db.Query(`
-		SELECT userId, name, ` + ClientIDColumn + ` AS cid FROM dcp_user
+		SELECT userId, name, ` + ClientIDColumn + ` AS cid,
+		       ` + monitoringCol + ` AS monitoring FROM dcp_user
 		 WHERE COALESCE(role, 0) = 0 AND deleted = 0
 		 ORDER BY name`)
 	if err != nil {
@@ -316,7 +330,11 @@ func ReportClientMapList(w http.ResponseWriter, r *http.Request) {
 		uid := numOf(c["userId"])
 		name := strFromAny(c["name"])
 		cid := strings.TrimSpace(strFromAny(c["cid"]))
-		row := map[string]any{"userId": uid, "name": name}
+		/* The monitoring-scope switch, always present rather than only when on:
+		   the tab draws a checkbox per row, and an absent key would render as
+		   unchecked for a client whose value simply failed to load. */
+		row := map[string]any{"userId": uid, "name": name,
+			"monitoringScope": numOf(c["monitoring"]) == 1}
 		if cid != "" {
 			row["warehouseClient"] = cid
 			row["warehouseName"] = nameByID[cid]
@@ -364,6 +382,12 @@ func ReportClientMapSave(w http.ResponseWriter, r *http.Request) {
 		UserID          int64  `json:"userId"`
 		WarehouseClient string `json:"warehouseClient"`
 		WarehouseName   string `json:"warehouseName"`
+		/* The monitoring-scope switch. A POINTER, so "the tab did not mention
+		   it" and "the tab turned it off" are different requests: the mapping
+		   picker and the checkbox are two controls on one row and each saves on
+		   its own, so a bare bool would have the picker silently clear the
+		   checkbox every time somebody re-linked a client. */
+		MonitoringScope *bool `json:"monitoringScope"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.UserID <= 0 {
@@ -392,6 +416,26 @@ func ReportClientMapSave(w http.ResponseWriter, r *http.Request) {
 	if claims != nil {
 		log.Printf("[report-map] %s set %s for client %d to %q",
 			claims.LoginUsername, ClientIDColumn, body.UserID, id)
+	}
+
+	/* Saved separately, and only when asked. See the pointer on the field. */
+	if body.MonitoringScope != nil {
+		ensureMonitoringScopeSchema()
+		on := 0
+		if *body.MonitoringScope {
+			on = 1
+		}
+		if _, _, err := db.Exec(
+			"UPDATE dcp_user SET "+MonitoringScopeColumn+" = ?, updated_at = UTC_TIMESTAMP() WHERE userId = ?",
+			on, body.UserID); err != nil {
+			log.Printf("[monitoring-scope] save %d: %v", body.UserID, err)
+			Fail(w, 500, "Could not save the monitoring scope setting")
+			return
+		}
+		if claims != nil {
+			log.Printf("[monitoring-scope] %s set the slicer for client %d to %v",
+				claims.LoginUsername, body.UserID, *body.MonitoringScope)
+		}
 	}
 	OK(w, map[string]any{"success": true, "userId": body.UserID, "cleared": id == ""})
 }

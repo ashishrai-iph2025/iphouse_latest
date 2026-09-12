@@ -149,14 +149,23 @@ func TestPanelsCarryTheResolvedIDColumn(t *testing.T) {
 	}
 	d, ok := find(host, dimHSPNotices)
 	if !ok {
-		t.Fatal("the host table grew no notices panel")
+		t.Fatal("the host table grew no provider panel")
 	}
 	if d.Column != "HSPName" {
-		t.Errorf("notices panel groups by %q, want HSPName", d.Column)
+		t.Errorf("provider panel groups by %q, want HSPName", d.Column)
 	}
-	if d.CountDistinctCol != colSourceNoticeID {
-		t.Errorf("notices panel counts %q, want %q — empty means the panel has "+
-			"nothing to count and draws blank", d.CountDistinctCol, colSourceNoticeID)
+	/* It no longer counts a notice id. The panel reports what the provider
+	   answers for — sites, identifications, removals — so the id it once
+	   required is not a column it needs, and CountDistinctCol resolves to the
+	   grouping column itself. The tile and the daily series still count notices,
+	   which is what ActionCol below is for and why that assertion stays. */
+	if d.CountDistinctCol != "HSPName" {
+		t.Errorf("provider panel counts %q, want HSPName — it reports on the "+
+			"provider, not on an action id", d.CountDistinctCol)
+	}
+	if d.APIExtra == "" {
+		t.Error("the provider panel carries no third figure, so the site count " +
+			"a reader ranks providers by would be absent")
 	}
 	if host.ActionCol != colSourceNoticeID {
 		t.Errorf("host ActionCol = %q — the tile and the daily series count this",

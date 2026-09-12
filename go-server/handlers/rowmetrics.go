@@ -127,6 +127,10 @@ type rowMetrics struct {
 
 	profilesSuspended   int64
 	impactedSubscribers int64
+	/* Every profile's audience, not just the suspended ones — the reach this
+	   client is up against, where impactedSubscribers is the reach enforcement
+	   has taken off the table. Same max-per-profile rule, ungated. */
+	totalSubscribers int64
 }
 
 /*
@@ -183,7 +187,7 @@ func computeRowMetrics(rows []map[string]any, dateCol string, groupCols []string
 	   MAX rather than first-seen: the count is a snapshot taken when the row was
 	   written, so the same profile carries different numbers on different rows,
 	   and the largest is the one that reflects the account at its reach. */
-	var profileSubs map[string]int64
+	var profileSubs, allSubs map[string]int64
 
 	for _, r := range rows {
 		if isDead(r[colRemovalStatus]) {
@@ -200,6 +204,28 @@ func computeRowMetrics(rows []map[string]any, dateCol string, groupCols []string
 			}
 			for _, c := range groupCols {
 				m.removedByCol[c][groupValue(r[c])]++
+			}
+		}
+
+		/* ── THE AUDIENCE, PER PROFILE ────────────────────────────────────
+
+		   MAX and not SUM, and that is the whole point. One account appears on
+		   every post it made, so adding the column up counts its followers once
+		   per post: the figure read 2.1 billion on a client whose accounts hold
+		   1.4 million. Max per profile is the account's own number however many
+		   rows carry it, and the readings differ between rows because the count
+		   moves between crawls.
+
+		   Accumulated for EVERY profile here, before the suspended-only branch
+		   below. The two tiles are different questions — how much reach is out
+		   there, against how much of it enforcement has removed — and the second
+		   is a subset of the first by construction. */
+		if url := strings.TrimSpace(strFromAny(r[colProfileURL])); url != "" {
+			if allSubs == nil {
+				allSubs = map[string]int64{}
+			}
+			if subs := numOf(r[colSubscriberCnt]); subs > allSubs[url] {
+				allSubs[url] = subs
 			}
 		}
 
@@ -226,6 +252,9 @@ func computeRowMetrics(rows []map[string]any, dateCol string, groupCols []string
 		m.impactedSubscribers += subs
 	}
 	m.profilesSuspended = int64(len(profileSubs))
+	for _, subs := range allSubs {
+		m.totalSubscribers += subs
+	}
 	return m
 }
 

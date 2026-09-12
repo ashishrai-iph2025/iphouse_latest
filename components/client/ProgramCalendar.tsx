@@ -461,7 +461,31 @@ export default function ProgramCalendar({ onLoadingChange }: {
   const [cat, setCat] = useState<string>('all')
   const [genre, setGenre] = useState<string>('all')
   const [q, setQ] = useState('')
-  const [day, setDay] = useState<number | null>(null)
+  /*
+    TODAY, selected before the reader touches anything.
+
+    The panel beside the calendar used to open on a sentence explaining how to
+    fill it. That is a reasonable thing to show when there is genuinely nothing
+    to show — and there almost never is: the page is opened on a day, that day
+    has releases or it does not, and either answer is more useful than an
+    instruction for obtaining it. A reader who wants a different day still taps
+    one; a reader who wants today's now has it without the click.
+
+    nowDay() is UTC midnight, which is the same key byDay is built on — a local
+    midnight would miss by the timezone offset and select the wrong day for
+    anyone east or west of UTC.
+  */
+  const [day, setDay] = useState<number | null>(() => nowDay())
+  /*
+    Whether the reader PICKED this day, as against it being today by default.
+
+    Only the narrow layout cares. There the panel is stacked under the calendar
+    and takes better than a third of the height, so it stays hidden until it is
+    asked for — opening a phone on a calendar with a third of it gone is a worse
+    trade than the click it saves. On a wide screen the panel has its own column
+    and costs the calendar nothing, so it is filled from the start.
+  */
+  const [dayPicked, setDayPicked] = useState(false)
   const [open, setOpen] = useState<Occ | null>(null)
 
   const today = useMemo(nowDay, [])
@@ -836,7 +860,15 @@ export default function ProgramCalendar({ onLoadingChange }: {
           narrow to hold a title. */}
       <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px]">
         <MonthGrid month={anchor} today={today} byDay={byDay} selected={day}
-          onPickDay={ts => setDay(day === ts ? null : ts)} onPickOcc={setOpen}
+          onPickDay={ts => {
+            /* Tapping the selected day DESELECTS it, which is how this has
+               always worked — and on the narrow layout that is also how the
+               panel is closed again. */
+            const next = day === ts ? null : ts
+            setDay(next)
+            setDayPicked(next !== null)
+          }}
+          onPickOcc={setOpen}
           varOf={varOf} tintOf={tintOf} />
 
         {/* Beside the grid on a wide screen, UNDER it on a narrow one — and
@@ -856,15 +888,21 @@ export default function ProgramCalendar({ onLoadingChange }: {
             stopped being one. */}
         <div className={`min-h-0 border-t xl:border-t-0 xl:border-l border-gray-100 dark:border-white/10
           bg-gray-50/60 dark:bg-black/10 flex-col max-h-[38%] xl:max-h-none
-          ${day === null ? 'hidden xl:flex' : 'flex'}`}>
+          ${dayPicked ? 'flex' : 'hidden xl:flex'}`}>
           <div className="px-4 py-2.5 border-b border-gray-100 dark:border-white/10 flex items-center
             justify-between gap-2">
             <p className="text-[12px] font-extrabold text-[#14254A] dark:text-white truncate">
-              {day === null ? 'Pick a day' : fmtDayLong(day)}
+              {day === null ? "Today's releases" : fmtDayLong(day)}
             </p>
-            {day !== null && (
-              <button onClick={() => setDay(null)}
-                className="text-[11px] font-bold text-[#FC934C] hover:underline flex-shrink-0">Clear</button>
+            {/* BACK TO TODAY, not "clear".
+
+                Clearing made sense when nothing was selected to begin with; now
+                the empty state is not somewhere a reader would choose to return
+                to. Hidden while today IS the selection, so the control is only
+                there when it would do something. */}
+            {day !== null && day !== today && (
+              <button onClick={() => { setDay(today); setDayPicked(true) }}
+                className="text-[11px] font-bold text-[#FC934C] hover:underline flex-shrink-0">Today</button>
             )}
           </div>
 
@@ -882,7 +920,7 @@ export default function ProgramCalendar({ onLoadingChange }: {
               </p>
             ) : dayItems.length === 0 ? (
               <p className="px-4 py-6 text-[11.5px] text-gray-400 dark:text-white/40">
-                No titles on this day.
+                {day === today ? 'No titles released today.' : 'No titles on this day.'}
               </p>
             ) : (
               <>
