@@ -621,13 +621,31 @@ const SUMMARY = 'summary'
  *
  * The server says the same thing in sectionSlicers; this is the fallback for an
  * older server that sends no arranged pane. */
-const PANEL_ONLY_FILTERS = new Set(['tatBucket', 'keyword', 'channelUrl', 'repeatPlatform'])
+export const PANEL_ONLY_FILTERS = new Set(['tatBucket', 'keyword', 'channelUrl', 'repeatPlatform'])
 
 /** The repeat-offender panel's own platform filter, and the panel it belongs
  *  to. Same strings as repeatPlatformParam and dimRepeatOffender in
  *  go-server/handlers/repeatoffenders.go. */
 const REPEAT_PLATFORM_PARAM = 'repeatPlatform'
 const REPEAT_DIM = 'byRepeatOffender'
+
+/*
+Filters that narrow ONE PANEL rather than the scope — the server's
+panelScopedParams, mirrored.
+
+NOT the same set as PANEL_ONLY_FILTERS above, and the difference is the whole
+reason both exist. That set is about having no DROPDOWN: tatBucket, keyword and
+channelUrl are set by clicking a panel, and a list of raw URLs is not a control
+anyone could pick from. They still narrow the entire report.
+
+This set is about REACH. Only repeatPlatform is in it, and it is the only filter
+whose change leaves every other panel answering the question it already
+answered — which is what lets the report stay on screen while it runs. Reusing
+the other set here would have kept a stale report up after a TAT bucket click,
+showing figures for the previous filter set as though they answered the new one:
+precisely the thing the loader was put there to stop.
+*/
+export const PANEL_SCOPED_FILTERS = new Set([REPEAT_PLATFORM_PARAM])
 
 /**
  * The slicers the LIVE card's count is actually narrowed by.
@@ -4767,6 +4785,13 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
      back. */
   const rangePicked = useRef(false)
   const [opts,     setOpts]     = useState<Record<string, any>>({})
+  /* In flight for a PANEL-SCOPED filter only — see the run effect. The global
+     `loading` replaces the report; this one marks a single card. */
+  const [panelBusy, setPanelBusy] = useState(false)
+  /* What the filters were on the last run, so a change can be classified before
+     it is acted on. A ref rather than state: reading it must not itself be a
+     reason to run again. */
+  const prevFilters = useRef<Record<string, string>>({})
   const [data,     setData]     = useState<any>(null)
   const [loading,  setLoading]  = useState(false)
   const [err,      setErr]      = useState('')
@@ -5434,7 +5459,36 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
   useEffect(() => {
     if (!section || !activeSection) { setData(null); return }
     if (!filters.clientId) { setData(null); setLoading(false); return }
-    setLoading(true)
+
+    /*
+      A PANEL-SCOPED change does not replace the report.
+
+      The loader below takes the whole report off screen on every run, and for a
+      scope change that is right: the numbers on screen answer the previous
+      filter set, and leaving them up under a new one shows the reader figures
+      that do not belong to the question they just asked.
+
+      That reasoning does not reach a panel-scoped filter. Narrowing the
+      repeat-offender ranking to one platform leaves every other panel, the KPI
+      band and the trends answering exactly the question they already answered —
+      so blanking them says a change happened where none did, and costs the
+      reader the whole page to look at one card.
+
+      The request still goes to the server, and it has to: the panel is a TOP
+      TEN, and the ten it holds for one platform are not a subset of the ten it
+      holds for all of them. Filtering the rows already on screen would quietly
+      answer "which of the overall top ten are on TikTok", which is a different
+      question with a smaller answer. So the fetch happens and the page simply
+      does not tear itself down for it — the affected card marks itself busy and
+      everything else keeps the answer it already had.
+    */
+    const changed = Object.keys({ ...prevFilters.current, ...filters })
+      .filter(k => (prevFilters.current[k] || '') !== (filters[k] || ''))
+    const panelOnly = changed.length > 0 && changed.every(k => PANEL_SCOPED_FILTERS.has(k))
+    prevFilters.current = filters
+
+    if (panelOnly) setPanelBusy(true)
+    else setLoading(true)
     let active = true
     const t = setTimeout(async () => {
       try {
@@ -5454,7 +5508,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
       } catch (e: any) {
         if (active) setErr(e.message)
       } finally {
-        if (active) setLoading(false)
+        if (active) { setLoading(false); setPanelBusy(false) }
       }
     }, 350)
     return () => { active = false; clearTimeout(t) }
@@ -6160,7 +6214,15 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         {viz === 'column'  && (FULL_SET_DIMS.has(dim.key)
           ? <SeasonColumns rows={rows} m={m} onPick={pick} activeVal={active} />
           : <ColumnChart rows={rows} m={m} onPick={pick} activeVal={active} />)}
-        {viz === 'repeat'  && <RepeatOffenders rows={rows} m={m} onPick={pick} activeVal={active} />}
+        {viz === 'repeat'  && (
+          /* Dimmed, not replaced. The ranking on screen is the previous
+             platform's and is about to change — saying so is honest — but it is
+             still a real answer, and swapping it for a skeleton would cost the
+             reader their place for the length of one request. */
+          <div className={panelBusy ? 'opacity-50 transition-opacity' : 'transition-opacity'}>
+            <RepeatOffenders rows={rows} m={m} onPick={pick} activeVal={active} />
+          </div>
+        )}
         {/* Named from COUNT_PANELS, which knows all four by key. A panel the
             shape was picked for from Report Configuration and that is not in
             that table gets the neutral wording rather than another panel's —
@@ -6213,10 +6275,20 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
               ranking. Beside the chart it acts on, that is obvious without a
               sentence explaining it. */}
           {dim.key === REPEAT_DIM && repeatPlatformOpts.length > 0 && (
-            <PanelSelect label="Platform"
-              value={filters[REPEAT_PLATFORM_PARAM] || ''}
-              options={repeatPlatformOpts}
-              onChange={v => setF(REPEAT_PLATFORM_PARAM)(v)} />
+            <>
+              {/* Busy on THIS card, because this card is the only thing the
+                  change affects. A spinner over the whole report would say a
+                  page-wide thing had happened, which is the impression the
+                  panel-scoped path exists to avoid. */}
+              {panelBusy && (
+                <span className="w-3 h-3 rounded-full border-2 border-[#FC934C]/30
+                  border-t-[#FC934C] animate-spin" aria-label="Updating" />
+              )}
+              <PanelSelect label="Platform"
+                value={filters[REPEAT_PLATFORM_PARAM] || ''}
+                options={repeatPlatformOpts}
+                onChange={v => setF(REPEAT_PLATFORM_PARAM)(v)} />
+            </>
           )}
           <VizPicker options={options} value={viz} fallback={configured}
             saved={vizDefault[vizKey]}
