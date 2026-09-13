@@ -466,10 +466,25 @@ func main() {
 	mux.Handle("GET /api/admin/report-appearance", cfg("report-config", handlers.ReportAppearanceGet))
 	mux.Handle("PUT /api/admin/report-appearance", cfg("report-config", handlers.ReportAppearanceSave))
 	mux.Handle("DELETE /api/admin/report-appearance", cfg("report-config", handlers.ReportAppearanceReset))
+	/* Which arrows the /welcome programme calendar draws — previous, next, or
+	   both at once ("complete") — per client with a shared default. Same grant
+	   and the same two-layer lookup as Appearance; readers get the resolved
+	   answer folded into GET /api/reports/assets rather than an endpoint of
+	   their own. See handlers/welcomecalendar.go. */
+	mux.Handle("GET /api/admin/report-welcome-calendar", cfg("report-config", handlers.WelcomeCalendarGet))
+	mux.Handle("PUT /api/admin/report-welcome-calendar", cfg("report-config", handlers.WelcomeCalendarSave))
+	mux.Handle("DELETE /api/admin/report-welcome-calendar", cfg("report-config", handlers.WelcomeCalendarReset))
 	/* The sports reporting period: one window, governing every sports report.
 	   Same grant as the rest of Report Configuration — it decides what a report
 	   covers, which is what that grant is for, and it names no warehouse table
 	   so it needs nothing stronger. See sportsperiod.go. */
+	/* The values a client's report may be narrowed to, and which of them are
+	   currently hidden — see handlers/dimexclusions.go. Three routes because the
+	   screen asks three different questions: what is hidden, what is there to
+	   hide, and hide this set. */
+	mux.Handle("GET /api/admin/report-dim-values", cfg("report-config", handlers.DimExclusionValues))
+	mux.Handle("GET /api/admin/report-dim-exclusions", cfg("report-config", handlers.DimExclusionsGet))
+	mux.Handle("PUT /api/admin/report-dim-exclusions", cfg("report-config", handlers.DimExclusionsSave))
 	mux.Handle("GET /api/admin/report-sports-period", cfg("report-config", handlers.SportsPeriodGet))
 	mux.Handle("PUT /api/admin/report-sports-period", cfg("report-config", handlers.SportsPeriodSave))
 	mux.Handle("DELETE /api/admin/report-sports-period", cfg("report-config", handlers.SportsPeriodDelete))

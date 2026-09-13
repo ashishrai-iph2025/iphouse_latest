@@ -27,7 +27,10 @@ a first or last reading: it is the account's own number, and the highest one see
 is the closest thing the window holds to it.
 */
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // dimTopProfiles is the panel key. Its own, not a variant of the repeat-offender
 // one: same grouping column, different question, and a reader comparing the two
@@ -38,7 +41,12 @@ const dimTopProfiles = "byTopProfiles"
 const topProfileLimit = 10
 
 type profileTally struct {
-	url      string
+	url string
+	/* What the account is CALLED, where the table says so — see
+	   profilename.go. First non-empty wins: the column is stamped per row and a
+	   profile renamed mid-window carries both, so the panel would otherwise
+	   flip between them depending on which row arrived last. */
+	name     string
 	subs     int64
 	urls     int64
 	removed  int64
@@ -59,7 +67,7 @@ removal is.
 carrying neither gets no panel: a ranking by reach with no reach to rank on is a
 list of accounts in arbitrary order, which is worse than no card.
 */
-func computeTopProfiles(rows []map[string]any, urlCol, subsCol, statusCol, identCol, removedCol string, limit int) []map[string]any {
+func computeTopProfiles(rows []map[string]any, urlCol, subsCol, statusCol, nameCol, identCol, removedCol string, limit int) []map[string]any {
 	if urlCol == "" || subsCol == "" {
 		return []map[string]any{}
 	}
@@ -108,12 +116,20 @@ func computeTopProfiles(rows []map[string]any, urlCol, subsCol, statusCol, ident
 		if statusCol != "" && isDead(r[statusCol]) {
 			t.dead = true
 		}
+
+		// The account's name, where the table records one.
+		if nameCol != "" && t.name == "" {
+			t.name = strings.TrimSpace(strFromAny(r[nameCol]))
+		}
 	}
 
 	out := make([]map[string]any, 0, len(byURL))
 	for _, t := range byURL {
 		out = append(out, map[string]any{
-			"label": t.url, "value": t.url,
+			"label": profileLabel(t.name, t.url), "value": t.url,
+			// The full URL, for the row's tooltip — the label is a shortening
+			// and the reader must still be able to reach the account itself.
+			"url":  t.url,
 			"urls": t.urls, "removed": t.removed,
 			// The audience, carried as the panel's third figure — drawn beside
 			// the account name rather than as a third bar, because followers and

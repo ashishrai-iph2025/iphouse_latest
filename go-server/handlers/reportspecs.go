@@ -47,6 +47,17 @@ type dimension struct {
 	// draws the identified count, which is a plausible number under a title that
 	// promises a different one.
 	APIMeasure string
+	/*
+		The reports_api measure this panel's REMOVAL series reads, where it is
+		not the section's own `removed`.
+
+		Distinct from APIMeasure above, which replaces the identified series and
+		blanks removal — right for an action count, wrong for a panel that keeps
+		both series and only means something different by the second one. The
+		app-source panel is that case: its removal is SourceRemovalStatus =
+		'Dead', which the service publishes as `sourceRemoved`.
+	*/
+	APIRemoved string
 
 	/* The column this panel counts DISTINCT VALUES of, as resolved against the
 	   table — the id in `COUNT(DISTINCT …)`, not the column it groups by.

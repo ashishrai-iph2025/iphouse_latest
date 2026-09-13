@@ -246,3 +246,94 @@ func TestTheNarrowedSummaryDrawsNoBarForAnUnattachedChannel(t *testing.T) {
 		t.Errorf("the panel lost its %q bar, which the reader does have", ch)
 	}
 }
+
+/*
+THE SPORTS SUMMARY, which the guard could not see.
+
+Recognising a summary by its key being exactly "summary" worked for one install
+and one summary. Report Configuration lets an admin create as many as they like,
+and on the install this was reported from there are two: "summary" over the
+unified table, and "summary-sprts" over five sports tables — four channels'
+worth, including a Mobile Apps table the client has no section for.
+
+The sports one matched neither half of the guard, so it was never trimmed AND it
+counted among the reader's own attached platforms — vouching for the very
+channel it should have been measured against. Two failures from one string
+comparison, which is why the recognition is structural now.
+*/
+func sportsSummaryPlatform() platformDef {
+	return platformDef{Key: "summary-sprts", Label: "Summary - Sports", Enabled: true, Tables: []string{
+		"dashboards.SportsURLRawData",
+		"dashboards.SportsSourceURLRawData",
+		"dashboards.SocialMedia_Sports_Raw",
+		"dashboards.Agg_Daily_Telegram_Sports_Raw",
+		"dashboards.UnifiedMobileAppsDashboardTable",
+	}}
+}
+
+func TestASummaryIsRecognisedByShapeNotByItsKey(t *testing.T) {
+	if !isSummaryPlatform(sportsSummaryPlatform()) {
+		t.Error("summary-sprts is not recognised as a summary — it would be neither " +
+			"trimmed nor excluded from the channels it is measured against")
+	}
+	// The reserved key stays a summary whatever it reads: the built-in one is a
+	// single unified table and is still a fan-out.
+	if !isSummaryPlatform(platformDef{Key: summaryKey, Tables: []string{"dashboards.Unified_BI_Dashboard"}}) {
+		t.Error("the reserved summary key stopped being a summary")
+	}
+	/* And an ordinary platform is NOT one, however many tables it reads. Open
+	   Web reads two, both of the same channel — the linking side and the host
+	   side — and trimming it would be this guard reaching a report it has no
+	   business in. */
+	for _, p := range []platformDef{openWebPlatform(), socialPlatform(), telegramPlatform(), mobileAppsPlatform()} {
+		if isSummaryPlatform(p) {
+			t.Errorf("%s was taken for a summary; it reads one channel", p.Key)
+		}
+	}
+}
+
+/*
+The reported case, end to end: the sports summary loses the channel its reader
+has no platform for.
+*/
+func TestTheSportsSummaryDropsAnUnattachedChannel(t *testing.T) {
+	attached := attachedChannels([]platformDef{
+		openWebPlatform(), socialPlatform(), telegramPlatform(),
+	})
+	got := narrowToChannels(sportsSummaryPlatform(), attached, 1)
+
+	for _, tbl := range got.Tables {
+		if ch := sourceChannelName(tbl); ch == "Mobile Apps" {
+			t.Errorf("kept %s (%s) — the client has no Mobile Apps section, so the "+
+				"summary must neither query it nor draw a bar for it", tbl, ch)
+		}
+	}
+	if n := len(got.Tables); n != 4 {
+		t.Errorf("kept %d tables (%s), want the four the reader's platforms cover",
+			n, tablesOf(got))
+	}
+}
+
+/*
+And the summary is not counted among the platforms it is measured against.
+
+This is the half that made the other half useless: with summary-sprts in the
+attached set, its Mobile Apps channel was attached BECAUSE the summary read it,
+so even a working trim would have found nothing to remove.
+*/
+func TestASummaryDoesNotVouchForItsOwnChannels(t *testing.T) {
+	all := []platformDef{
+		sportsSummaryPlatform(), openWebPlatform(), socialPlatform(), telegramPlatform(),
+	}
+	kept := []platformDef{}
+	for _, p := range all {
+		if isSummaryPlatform(p) {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	if attachedChannels(kept)["Mobile Apps"] {
+		t.Error("Mobile Apps counted as attached, and only the summary reads it — " +
+			"the guard is asking the summary to vouch for itself")
+	}
+}

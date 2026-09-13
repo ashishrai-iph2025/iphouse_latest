@@ -457,6 +457,13 @@ export default function ProgramCalendar({ onLoadingChange }: {
   const [rows, setRows] = useState<AssetRow[] | null>(null)
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(true)
+  /* Which arrows this client is allowed — see Report Configuration → Welcome
+     calendar and go-server/handlers/welcomecalendar.go. Defaults to every
+     direction closed until the fetch below answers, which is the same fixed
+     single-month card this was before the setting existed — the safe state
+     to render for the one paint before the real answer arrives. */
+  const [nav, setNav] = useState<{ previous: boolean; next: boolean; complete: boolean }>(
+    { previous: false, next: false, complete: false })
 
   const [cat, setCat] = useState<string>('all')
   const [genre, setGenre] = useState<string>('all')
@@ -490,18 +497,30 @@ export default function ProgramCalendar({ onLoadingChange }: {
 
   const today = useMemo(nowDay, [])
 
-  /* ── THE MONTH ON SCREEN, AND THERE IS ONLY ONE ─────────────────────
+  /* ── THE MONTH ON SCREEN ──────────────────────────────────────────────
 
-     Held as state once, with a ‹ › pair and a Today button that reached any
-     month in the catalogue. It is not state now, and the difference is the
-     whole point of this card: it sits on the welcome page to answer what is
-     happening NOW, and a reader who paged forward to March 2031 and came back
-     to the tab an hour later was looking at a calendar that no longer answered
-     it — with nothing on screen to say so except a month name.
+     Used to be derived from `today` with no state of its own — deliberately,
+     because a reader who paged forward to March 2031 and came back to the tab
+     an hour later was looking at a calendar that no longer answered "what is
+     happening now", with nothing on screen to say so except a month name.
 
-     Derived from `today` rather than stored, so there is no month for the rest
-     of the card to get out of step with. */
-  const anchor = useMemo(() => startOfMonth(today), [today])
+     It is state again, because Report Configuration can now open that door
+     per client — see `nav`, resolved from go-server/handlers/welcomecalendar.go
+     — and the risk above is covered by two things that survive paging: the
+     "This month" pill in MonthGrid is computed off the wall clock rather than
+     this offset, so it only ever lights on the real current month, and the
+     Today control below jumps back to it in one click whichever direction the
+     reader wandered. A client whose admin has left every arrow off never sees
+     either control and gets exactly the old fixed card.
+
+     MONTHS FROM TODAY rather than an absolute timestamp, so the offset survives
+     `today` recomputing at midnight without the reader's place on the calendar
+     jumping under them. */
+  const [monthOffset, setMonthOffset] = useState(0)
+  const anchor = useMemo(() => addMonths(startOfMonth(today), monthOffset), [today, monthOffset])
+  const canPrev = nav.complete || nav.previous
+  const canNext = nav.complete || nav.next
+  const onCurrentMonth = monthOffset === 0
 
   /* The card sizes itself to what is left of the screen — see useFitHeight.
      `rows` is a dependency because the page above draws a loader until the
@@ -561,6 +580,9 @@ export default function ProgramCalendar({ onLoadingChange }: {
         if (d?.available === false) { setErr(d.error || 'The reporting service is unavailable.'); return }
         if (!d?.ok) { setErr(d?.error || 'The title list could not be read.'); return }
         setRows(Array.isArray(d.rows) ? d.rows : [])
+        setNav({
+          previous: !!d?.nav?.previous, next: !!d?.nav?.next, complete: !!d?.nav?.complete,
+        })
         setErr('')
       })
       .catch(e => { if (live) setErr(e?.message || 'The title list could not be read.') })
@@ -733,9 +755,54 @@ export default function ProgramCalendar({ onLoadingChange }: {
           </h2>
         </div>
 
-        {/* Search is all that is left on this side. The ‹ Today › group went
-            with the month state — see the note on `anchor`. */}
+        {/* Paging, then search. Kept together on this side rather than beside
+            the month name below: the arrows move the whole card, the same
+            reach as the search box beside them, and neither belongs to one
+            month grid over another when a wide screen someday draws two. */}
         <div className="flex items-center gap-2">
+          {/* Hidden outright rather than disabled where Report Configuration
+              has closed a direction — a reader should not see a control for
+              a month they were never going to be allowed to reach. See `nav`. */}
+          {(canPrev || canNext) && (
+            <span className="flex items-center gap-0.5">
+              {canPrev && (
+                <button type="button" onClick={() => setMonthOffset(o => o - 1)}
+                  aria-label="Previous month" title="Previous month"
+                  className="w-7 h-7 grid place-items-center rounded-lg text-[#14254A] dark:text-white
+                    hover:bg-[#14254A]/[0.06] dark:hover:bg-white/10 transition-colors">
+                  <svg width="7" height="11" viewBox="0 0 7 11" fill="none">
+                    <path d="M6 1 1.5 5.5 6 10" stroke="currentColor" strokeWidth={1.8}
+                      strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              )}
+              {/* CURRENT, between the two arrows it returns from — a jump back
+                  to this month, greyed out once it would do nothing. The one
+                  control that stays mounted whichever direction is open, so
+                  the cluster does not reflow as a reader pages one way. */}
+              <button type="button" onClick={() => setMonthOffset(0)} disabled={onCurrentMonth}
+                aria-label="Jump to the current month" title="Jump to the current month"
+                className="w-7 h-7 grid place-items-center rounded-lg text-[#14254A] dark:text-white
+                  hover:bg-[#14254A]/[0.06] dark:hover:bg-white/10 disabled:opacity-30
+                  disabled:pointer-events-none transition-colors">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <circle cx="12" cy="12" r="8.25" />
+                  <circle cx="12" cy="12" r="2.75" fill="currentColor" stroke="none" />
+                </svg>
+              </button>
+              {canNext && (
+                <button type="button" onClick={() => setMonthOffset(o => o + 1)}
+                  aria-label="Next month" title="Next month"
+                  className="w-7 h-7 grid place-items-center rounded-lg text-[#14254A] dark:text-white
+                    hover:bg-[#14254A]/[0.06] dark:hover:bg-white/10 transition-colors">
+                  <svg width="7" height="11" viewBox="0 0 7 11" fill="none">
+                    <path d="M1 1 5.5 5.5 1 10" stroke="currentColor" strokeWidth={1.8}
+                      strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              )}
+            </span>
+          )}
           <div className="relative">
             <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" width="12" height="12"
               viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}
@@ -1081,6 +1148,11 @@ function MonthGrid({ month, today, byDay, selected, onPickDay, onPickOcc, varOf,
     <div className={`min-h-0 flex flex-col p-3 sm:p-4 xl:p-5 ${className}`}>
       <div className="flex-shrink-0 flex items-baseline gap-2 mb-2.5">
         <h3 className="text-[14px] font-extrabold text-[#14254A] dark:text-white">{monthLabel(month)}</h3>
+        {/* The one indicator that survives paging: computed off the wall clock
+            rather than the page's own offset, so it lights on the real current
+            month whichever way the reader has navigated — see `nav` and
+            `monthOffset` in the parent, and the header controls beside the
+            search box that move this grid. */}
         {isCurrent && (
           <span className="text-[9.5px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded"
             style={{ background: 'var(--cal-now-bg)', color: 'var(--cal-now-fg)' }}>This month</span>

@@ -219,7 +219,15 @@ export default function MultiSearchableSelect({
                     </svg>
                   )}
                 </span>
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.label}</span>
+                {/* WRAPPED, never clipped — the same rule as the single-select
+                    list beside it, and for the same reason: a row you can only
+                    read most of is not a row anyone can choose. This list is
+                    exactly its trigger's width, so it wraps sooner than that
+                    one does. */}
+                <span style={{
+                  flex: 1, minWidth: 0, whiteSpace: 'normal',
+                  overflowWrap: 'anywhere', lineHeight: 1.35,
+                }}>{o.label}</span>
               </button>
             </li>
           )

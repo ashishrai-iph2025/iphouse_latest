@@ -641,10 +641,15 @@ func runSpec(s reportSpec, q map[string]string, bg bool) map[string]any {
 			if subsCol == "" {
 				continue
 			}
-			breakdowns[d.Key] = mapRows(
+			/* Named by the SAME rule as the API path — the statement emits the
+			   stored name or nothing, and nameTopProfileRows fills the gap from the
+			   URL. Doing it here rather than in SQL is what keeps the two paths
+			   from drifting: one function decides what an account is called. */
+			breakdowns[d.Key] = nameTopProfileRows(mapRows(
 				run(topProfilesSQL(s, d, where, identExpr, removedExpr, subsCol,
-					shape.firstOf([]string{colProfileStatus}))),
-				"label", "value", "urls", "removed", "extra", "profileStatus")
+					shape.firstOf([]string{colProfileStatus}),
+					shape.firstOf(profileNameColumns))),
+				"label", "value", "urls", "removed", "extra", "profileStatus"))
 			continue
 		}
 
@@ -704,6 +709,10 @@ func runSpec(s reportSpec, q map[string]string, bg bool) map[string]any {
 			s.Table, where, d.Column, d.Column, d.Column, limit))
 		if len(extraCols) > 0 {
 			rows = mapRows(rows, append([]string{"label", "value", "urls", "removed"}, extraCols...)...)
+		}
+		// Table names into store names — see nameAppSourceRows.
+		if d.Key == dimAppSource {
+			rows = nameAppSourceRows(rows)
 		}
 		breakdowns[d.Key] = sortedDimRows(d.Key, rows)
 	}
@@ -1069,7 +1078,7 @@ sibling — needs no window function.
 as "Not Available", which is the honest answer: it does not say the accounts are
 up, it says this source cannot tell.
 */
-func topProfilesSQL(s reportSpec, d dimension, where, identExpr, removedExpr, subsCol, statusCol string) string {
+func topProfilesSQL(s reportSpec, d dimension, where, identExpr, removedExpr, subsCol, statusCol, nameCol string) string {
 	limit := d.Limit
 	if limit <= 0 {
 		limit = topProfileLimit
@@ -1078,16 +1087,30 @@ func topProfilesSQL(s reportSpec, d dimension, where, identExpr, removedExpr, su
 	if statusCol != "" {
 		dead = fmt.Sprintf("MAX(LOWER(TRIM(COALESCE(%s,'')))='dead')", statusCol)
 	}
+	/* The stored name, where the table has one — MAX rather than a GROUP BY
+	   term, so an account renamed mid-window stays ONE row. Grouping by the name
+	   as well would split it into two accounts with the same URL, each holding
+	   part of its posts and neither holding its true audience.
+
+	   Empty where the table records no name; nameTopProfileRows then reads a
+	   handle off the URL. Deliberately not COALESCEd to the URL here, because
+	   this column is the answer to "does the warehouse know what this is
+	   called", and a URL substituted in SQL is indistinguishable from a stored
+	   name by the time the rows arrive. */
+	name := "''"
+	if nameCol != "" {
+		name = fmt.Sprintf("COALESCE(MAX(NULLIF(TRIM(%s),'')),'')", nameCol)
+	}
 	return fmt.Sprintf(
-		`SELECT COALESCE(%s,'Unknown') AS label, COALESCE(%s,'Unknown') AS value,
+		`SELECT %s AS label, COALESCE(%s,'Unknown') AS value,
 		        %s AS urls, %s AS removed,
 		        MAX(%s) AS extra,
 		        CASE WHEN %s = 1 THEN 'Suspended' ELSE 'Not Available' END AS profileStatus
 		   FROM %s %s AND %s IS NOT NULL AND %s != ''
-		  GROUP BY label, value
+		  GROUP BY value
 		  ORDER BY extra DESC, urls DESC
 		  LIMIT %d`,
-		d.Column, d.Column, identExpr, removedExpr, subsCol, dead,
+		name, d.Column, identExpr, removedExpr, subsCol, dead,
 		s.Table, where, d.Column, d.Column, limit)
 }
 

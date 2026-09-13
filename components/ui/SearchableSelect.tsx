@@ -8,7 +8,10 @@
 //
 //   · it can be WIDER than its trigger. A slicer in a 244px filter rail cannot
 //     show "Alianza Contra la Piratería" — but the list it opens can, and a name
-//     you have to guess at from its first twenty characters is not a choice,
+//     you have to guess at from its first twenty characters is not a choice.
+//     How MUCH wider is measured from the longest label rather than fixed, so a
+//     list of fixtures gets the room fixtures need and a list of countries does
+//     not sit in 600px of white space — see contentWidth,
 //   · it can open UPWARDS when the trigger is near the bottom of the window,
 //     instead of running off the screen,
 //   · its height is whatever the viewport has room for, rather than a constant
@@ -83,8 +86,40 @@ const MIN_HEIGHT = 176
 const MAX_HEIGHT = 440
 /** A trigger narrower than this gets a wider list — see the note above. */
 const MIN_WIDTH = 288
-const MAX_WIDTH = 460
+/* And this is as wide as it may get before the viewport has the final say.
+   Raised from 460, which cut "Serie A: Venezia vs Fiorentina (12-09-2026)" — a
+   perfectly ordinary row in a sports report — a few characters short of its
+   date. A list is a set of things to choose between, and a name you can only
+   read most of is not something anyone can choose between. */
+const MAX_WIDTH = 640
 const EDGE = 12
+
+/* Everything on a row that is NOT the label: the button's own padding, the
+   list's padding either side, a scrollbar, and the fixed slots the count and
+   the check sit in. Added to the widest label to get the width at which nothing
+   wraps.
+
+   Approximate by construction, and deliberately generous — the cost of being a
+   few pixels over is a few pixels of white space, and the cost of being under
+   is the wrapping this exists to avoid. */
+const ROW_CHROME = 24 + 12 + 14 + 23
+const COUNT_SLOT = 54
+
+/* Label widths are measured, not estimated from character counts.
+
+   A proportional font makes "Serie A: Lazio vs Milan" and "Serie A: AC Milan vs
+   Lazio" — same length in characters — 14px apart, and a list sized off the
+   longer-looking one still clips the other. One canvas, reused, so a list of
+   1,500 assets costs one allocation rather than 1,500. */
+let scratch: HTMLCanvasElement | null = null
+function textWidth(text: string, font: string): number {
+  if (typeof document === 'undefined') return 0
+  scratch ??= document.createElement('canvas')
+  const ctx = scratch.getContext('2d')
+  if (!ctx) return 0
+  ctx.font = font
+  return ctx.measureText(text).width
+}
 /** Options above which the list is worth searching rather than scanning. */
 const SEARCH_FROM = 7
 
@@ -143,6 +178,27 @@ export default function SearchableSelect({
     ],
     [filtered, emptyLabel, clearable])
 
+  const hasCounts = useMemo(() => options.some(o => o.count !== undefined), [options])
+
+  /* The widest label, measured ONCE per list rather than on every reposition —
+     measure() also runs on scroll and resize while the list is open, and 1,500
+     assets re-measured on every scroll frame is the one way this could cost
+     anything. */
+  const contentWidth = useMemo(() => {
+    if (typeof document === 'undefined') return 0
+    const family = typeof getComputedStyle === 'function' && triggerRef.current
+      ? getComputedStyle(triggerRef.current).fontFamily
+      : 'system-ui, sans-serif'
+    const font = `14px ${family}`
+    let widest = textWidth(emptyLabel, font)
+    for (const o of options) {
+      const w = textWidth(String(o.label ?? ''), font)
+      if (w > widest) widest = w
+    }
+    return Math.ceil(widest)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options, emptyLabel, open])
+
   const measure = useCallback(() => {
     const el = triggerRef.current
     if (!el) return
@@ -155,8 +211,16 @@ export default function SearchableSelect({
     const space = up ? above : below
     const maxHeight = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, space))
 
+    /* Wide enough for the longest NAME in it, within what the window allows.
+
+       Three bounds, in order: never narrower than the trigger or MIN_WIDTH,
+       never wider than MAX_WIDTH, and never wider than the viewport can hold.
+       Past that the label wraps rather than being cut — see the option row — so
+       this decides how the list LOOKS, and the wrapping decides that it is
+       always readable whatever this returns. */
+    const want = contentWidth + ROW_CHROME + (hasCounts ? COUNT_SLOT : 0)
     const width = Math.min(
-      Math.max(r.width, MIN_WIDTH),
+      Math.max(r.width, MIN_WIDTH, want),
       Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, window.innerWidth - EDGE * 2)))
     // Aligned to the trigger, pulled back when that would hang off the edge.
     const left = Math.max(EDGE, Math.min(r.left, window.innerWidth - EDGE - width))
@@ -164,7 +228,7 @@ export default function SearchableSelect({
     setPos(up
       ? { left, width, maxHeight, bottom: window.innerHeight - r.top + 4 }
       : { left, width, maxHeight, top: r.bottom + 4 })
-  }, [])
+  }, [contentWidth, hasCounts])
 
   // Close on outside click
   useEffect(() => {
@@ -328,7 +392,22 @@ export default function SearchableSelect({
                   fontWeight: on ? 600 : 400,
                   transition: 'background 0.12s',
                 }}>
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {/* WRAPPED, never clipped.
+
+                    The list is sized to its longest label (see contentWidth), so
+                    on almost every list this is one line and the wrapping never
+                    shows. It is what happens on the lists that do not fit — a
+                    forty-character fixture name in a narrow window — and there
+                    the choice is between two lines and half a name. A row you
+                    have to hover to identify is not a row anyone can pick from.
+
+                    `anywhere` rather than `break-word` so a single long
+                    unbroken token — a URL, a hostname — breaks too instead of
+                    forcing the row wider than the list. */}
+                <span style={{
+                  flex: 1, minWidth: 0, whiteSpace: 'normal',
+                  overflowWrap: 'anywhere', lineHeight: 1.35,
+                }}>
                   {o.label}
                 </span>
                 {/* Tabular figures and a fixed slot, so the counts form a column
@@ -402,7 +481,11 @@ export default function SearchableSelect({
           borderRadius: compact ? '0.625rem' : '0.75rem',
           padding: compact ? '5px 9px' : '10px 12px',
           fontSize: compact ? 12.5 : 14,
-          height: compact ? 32 : 44, cursor: disabled ? 'not-allowed' : 'pointer',
+          /* A FLOOR, not a height. The label below wraps rather than clipping,
+             so a control holding a long fixture name grows instead of showing
+             the first two words of it. Every short value — which is nearly all
+             of them — lands on exactly the height this always was. */
+          minHeight: compact ? 32 : 44, cursor: disabled ? 'not-allowed' : 'pointer',
           opacity: disabled ? 0.5 : 1, transition: 'all 0.15s',
           background: 'rgba(255,255,255,0.065)',
           border: `1px solid ${open || marked ? 'rgba(249,115,22,0.5)' : 'rgba(255,255,255,0.09)'}`,
@@ -416,8 +499,9 @@ export default function SearchableSelect({
           padding: compact ? '5px 9px' : '10px 12px',
           fontSize: compact ? 12.5 : 14,
           // Light mode had no explicit height, so it grew out of its padding.
-          // Compact pins it, or a rail of them lands a pixel off the dark one.
-          ...(compact ? { height: 32 } : {}),
+          // Compact pins it, or a rail of them lands a pixel off the dark one —
+          // as a FLOOR, for the reason on the dark branch above.
+          ...(compact ? { minHeight: 32 } : {}),
           cursor: disabled ? 'not-allowed' : 'pointer',
           opacity: disabled ? 0.5 : 1, transition: 'all 0.15s', background: '#fff',
           /* Brand orange, matching the dark branch above and every text input
@@ -436,7 +520,17 @@ export default function SearchableSelect({
             : (selected ? '#1f2937' : '#9ca3af'),
           fontWeight: selected ? 500 : 400,
           fontSize: compact ? 12.5 : (dark ? '0.865rem' : 14),
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          /* WRAPPED, like the rows in the list it opens.
+
+             A closed control is the only place the current selection is stated,
+             so "Serie A: Juventus vs Mila…" is a report narrowed to a fixture
+             the reader cannot name. The title attribute held the rest, which is
+             a hover on a touch screen and a guess everywhere else.
+
+             flex + textAlign because the span now fills the row rather than
+             sizing to its text, and space-between no longer does the aligning. */
+          flex: 1, minWidth: 0, textAlign: 'left',
+          whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.3,
         }}>
           {selected ? selected.label : placeholder}
         </span>

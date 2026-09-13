@@ -53,8 +53,38 @@ window.fetch = ((input: any, init?: any) => {
   return real(input, init)
 }) as typeof window.fetch
 
+/* THE CARD'S OWN THREE SLICERS, which only appear when the caller has options
+   for them — so without this the picker bar along the foot is simply absent and
+   the preview cannot show it.
+
+   Real fixture labels, because their LENGTH is the point: the Asset control is
+   the one that had to show "Serie A: Juventus vs Mila…" in a track fixed at
+   170px, and the bar is what decides how much room it gets. */
+const dimOptions = {
+  franchiseName: [
+    { key: 'seriea', label: 'Serie A', count: 12480 },
+    { key: 'laliga', label: 'LaLiga', count: 9312 },
+    { key: 'ligue1', label: 'Ligue 1', count: 2201 },
+  ],
+  matchDay: [
+    { key: 'md3', label: 'Matchday 3', count: 4120 },
+    { key: 'md4', label: 'Matchday 4', count: 3980 },
+  ],
+  assetId: [
+    { key: 'a1', label: 'Serie A: Juventus vs Milan (07-09-2026)', count: 481 },
+    { key: 'a2', label: 'LaLiga: Real Madrid vs Rayo Vallecano (07-09-2026)', count: 444 },
+    { key: 'a3', label: 'Serie A: Venezia vs Fiorentina (12-09-2026)', count: 370 },
+    { key: 'a4', label: 'Ligue 1: Paris Saint-Germain vs Olympique de Marseille (14-09-2026)', count: 258 },
+    { key: 'a5', label: 'Serie A: Lazio vs Milan (12-09-2026)', count: 407 },
+    { key: 'a6', label: 'Serie A: Cagliari vs Lecce (07-09-2026)', count: 333 },
+    { key: 'a7', label: 'Serie A: Udinese vs Lazio (08-09-2026)', count: 296 },
+    { key: 'a8', label: 'LaLiga: Sevilla vs Valencia (12-09-2026)', count: 259 },
+  ],
+}
+
 createRoot(document.getElementById('root')!).render(
   <div className="bg-[#eef2f7] min-h-[100dvh] p-6">
-    <RealtimeCard view="sports" windowOptions={[24, 48, 72, 96, 120, 144, 168]} />
+    <RealtimeCard view="sports" windowOptions={[24, 48, 72, 96, 120, 144, 168]}
+      dimOptions={dimOptions} />
   </div>,
 )

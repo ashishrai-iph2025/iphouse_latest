@@ -18,7 +18,9 @@ import BackToConfiguration from '@/components/admin/BackToConfiguration'
 import ReportsApiConnectionPanel from '@/components/admin/ReportsApiConnectionPanel'
 import ReportCachePanel from '@/components/admin/ReportCachePanel'
 import SportsPeriodPanel from '@/components/admin/SportsPeriodPanel'
+import ReportScopePanel from '@/components/admin/ReportScopePanel'
 import ReportAppearancePanel from '@/components/admin/ReportAppearancePanel'
+import WelcomeCalendarPanel from '@/components/admin/WelcomeCalendarPanel'
 import AdminPageHeader from '@/components/admin/AdminPageHeader'
 import SearchableSelect from '@/components/ui/SearchableSelect'
 import MultiSearchableSelect from '@/components/ui/MultiSearchableSelect'
@@ -34,7 +36,7 @@ import LayoutPreview, { packRows } from '@/components/reports/LayoutPreview'
 const NAVY   = '#14254A'
 const ORANGE = '#FC934C'
 
-type Tab = 'warehouse' | 'sources' | 'layout' | 'appearance' | 'inventory' | 'access' | 'clients' | 'sports' | 'connection' | 'cache'
+type Tab = 'warehouse' | 'sources' | 'layout' | 'appearance' | 'calendar' | 'inventory' | 'access' | 'clients' | 'sports' | 'scope' | 'connection' | 'cache'
 
 /** One portal client and the warehouse client it reads. */
 interface ClientMapRow {
@@ -1563,6 +1565,10 @@ export default function ReportConfigPage() {
        what draws it and what colour it comes out. Both are per client with a
        shared default underneath. */
     { key: 'appearance', label: 'Appearance',      hint: 'Which charting engine draws a report, and the palette it is drawn in' },
+    /* Beside Appearance, because both decide how a client-facing screen behaves
+       rather than what a report contains — this one just governs a different
+       page, the welcome calendar rather than the report viewer. */
+    { key: 'calendar',  label: 'Welcome calendar', hint: 'Which months a client can page to on their welcome calendar' },
     // The Database report is the fullest disclosure on this screen — every
     // mapped table, its columns and its row counts — so it is not offered at
     // all to a login that may not see them.
@@ -1575,6 +1581,10 @@ export default function ReportConfigPage() {
        it decides: not which rows exist, but which of them a sports report is
        allowed to reach. */
     { key: 'sports',    label: 'Sports period',    hint: 'The date window every sports report is held inside' },
+    /* Beside the period, because the two are the same kind of decision about the
+       same reports: that one bounds WHEN a sports report may look, this one
+       bounds WHAT it may count. Both are per client. */
+    { key: 'scope',     label: 'Report scope',     hint: 'Which franchises, match days and titles a client is reported on' },
     // Last, because it is the thing you set once and the others are the daily
     // work — but on this screen rather than a separate page, since "which table
     // feeds this report" and "which service serves those tables" are one question.
@@ -2903,7 +2913,10 @@ export default function ReportConfigPage() {
       {/* ── User access ─────────────────────────────────────────────────────── */}
       {tab === 'appearance' && <ReportAppearancePanel />}
 
+      {tab === 'calendar' && <WelcomeCalendarPanel />}
+
       {tab === 'sports' && <SportsPeriodPanel />}
+      {tab === 'scope' && <ReportScopePanel />}
 
       {tab === 'connection' && <ReportsApiConnectionPanel />}
 

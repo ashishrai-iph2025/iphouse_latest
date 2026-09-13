@@ -226,6 +226,8 @@ var (
 		// that counts something else needs to say which — otherwise it silently
 		// draws the section's identified count under a title promising notices.
 		APIMeasure string
+		// The measure this panel's REMOVAL series reads — see dimension.APIRemoved.
+		APIRemoved string
 		// A third figure beside identified and removed — see dimension.APIExtra.
 		APIExtra, ExtraLabel string
 		// A second one, for the host-provider card — see dimension.APIExtra2.
@@ -390,8 +392,30 @@ var (
 		   The built-in summary has always called this one "Top 10 Social Media
 		   Platforms"; this is the same correction for every other report. */
 		{Key: "byPlatform", Column: "Platform", Label: "Social Media Platforms", Viz: "donut"},
+		/* THE ACCOUNT, and only where the table has one.
+
+		   `Needs: ChannelURL` is what makes that true. ChannelName means two
+		   different things across these tables — the pirate's own account where
+		   there is a URL for it, and the BROADCASTER on the two Open Web sports
+		   tables, which carry no account column at all. Without the gate this
+		   panel drew both under one heading, so a summary merging the tables
+		   ranked ESPN and Paramount+ alongside the Telegram channels restreaming
+		   them, as though they were the same kind of thing. */
 		{Key: "byChannel", Column: "ChannelName", Alts: []string{"ChannelOrProfileName"},
+			Needs: colChannelURL,
 			Label: "Top 10 Channels", Viz: "hbar"},
+		/* THE BROADCASTER — the station whose feed was taken.
+
+		   Its column is not fixed: ChannelName on the two Open Web sports
+		   tables, TVChannelName everywhere else. Resolved in the loop below
+		   through tvChannelColumn, the same function the TV-channel tile uses,
+		   so the two cannot disagree about what a station is.
+
+		   TVChannelName does not exist on most of these tables yet. That is why
+		   the resolution is by rule rather than by a list: the day the column is
+		   added upstream, this panel starts drawing there with no change here. */
+		{Key: dimTVChannel, Column: colTVChannelName, Alts: []string{colChannelName},
+			Label: "Source of Piracy", Viz: "hbar"},
 		/* ── The same accounts, ranked by PERSISTENCE rather than volume ──────
 		   Directly after the channel list, because it is the second question
 		   asked of it: not which account posted the most, but which one keeps
@@ -499,7 +523,15 @@ var (
 		/* Reach, against the repeat panel's persistence. Same grouping column,
 		   opposite question — see topprofiles.go. Needs the subscriber column,
 		   so it appears only on a source that records an audience. */
-		{Key: dimTopProfiles, Column: colProfileURL, Viz: "hbar",
+		/* Drawn on the COUNT shape rather than plain bars.
+
+		   The panel ranks by subscribers and the hbar shape had nowhere to put
+		   them, so the measure the ranking is built on was the one figure not on
+		   the card. The count shape gives it its own gauge, and the account's own
+		   state its own column: an account with a big audience that is still up
+		   is a different finding from one already suspended, and the card could
+		   show neither. */
+		{Key: dimTopProfiles, Column: colProfileURL, Viz: "mirror",
 			Label:    "Top 10 Profiles by Subscribers - Identification & Removal",
 			APIExtra: "totalSubscribers", ExtraLabel: "Subscribers",
 			Needs: colSubscriberCnt},
@@ -596,6 +628,26 @@ var (
 		// the very label being read.
 		{Key: "byApp", Column: "AppName", Label: "Top 10 Apps", Viz: "hbar"},
 		{Key: "byCategory", Column: "CategoryName", Label: "App Categories", Viz: "column"},
+		/* WHERE THE APP WAS FOUND — the two official stores against the
+		   third-party feeds.
+
+		   The four sources are not one problem: a takedown on Google Play is a
+		   form and a wait, and the same app on a third-party APK site is a
+		   different piece of work with a different success rate. The report
+		   carried all four added together and said so nowhere.
+
+		   Its removal series is SourceRemovalStatus = 'Dead', published as
+		   `sourceRemoved` — verified against the live dataset, where that
+		   measure is 186 on the Dead rows and 0 on every other status. NOT the
+		   section's own `removed`: the two happen to agree on today's data and
+		   are different definitions, and a panel that names one while counting
+		   the other is right until the day it is not.
+
+		   `Needs` keeps it off the reports that have no such column, which is
+		   every platform except this one. */
+		{Key: dimAppSource, Column: "SourceTable", Viz: "column",
+			Label:      "App Source - Identification & Removal",
+			APIRemoved: "sourceRemoved", Needs: "SourceTable"},
 		// Only the two store feeds record a publisher, so this is thin unless
 		// the Source Feed slicer is set to one of them.
 		{Key: "byDeveloper", Column: "CompanyName", Label: "Top 10 Developers", Viz: "hbar"},
@@ -740,7 +792,7 @@ func channelKPIs(shape tableShape) map[string]string {
 	if ch := shape.firstOf([]string{colChannelURL, colChannelName, colProfileURL}); ch != "" {
 		out["totalChannels"] = fmt.Sprintf("COUNT(DISTINCT %s)", ch)
 	}
-	if col := tvChannelColumn(shape.has); col != "" {
+	if col := tvChannelColumn(shape.Table, shape.has); col != "" {
 		out["totalTVChannels"] = fmt.Sprintf("COUNT(DISTINCT %s)", col)
 		if out["totalTVChannels"] == out["totalChannels"] {
 			delete(out, "totalChannels")
@@ -1240,6 +1292,13 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 			continue
 		}
 		col := shape.firstOf(append([]string{d.Column}, d.Alts...))
+		/* The source-of-piracy panel picks its column by RULE rather than by
+		   preference order — see tvChannelColumn. Plain preference would take
+		   ChannelName on a table that has both columns, which is the pirate's
+		   account, under a heading that says broadcaster. */
+		if d.Key == dimTVChannel {
+			col = tvChannelColumn(shape.Table, shape.has)
+		}
 		if col == "" {
 			continue
 		}
@@ -1335,6 +1394,8 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 			LookupTable: lkTable, LookupIDCol: lkID, LookupName: lkName,
 			IdentOverride: ident, RemovedOverride: d.Removed,
 			APIMeasure: d.APIMeasure,
+			// The removal series' own measure, where the panel names one.
+			APIRemoved: d.APIRemoved,
 			// The third figure, where the panel carries one — see dimension.APIExtra.
 			APIExtra: d.APIExtra, ExtraLabel: d.ExtraLabel,
 			// And the fourth, which only the host-provider card has.

@@ -659,14 +659,23 @@ function DimPicker({
        its content and the trigger inside is `width: 100%` of nothing, so an
        auto track collapses it to the chevron.
 
-       170px, which is where a fixture name stops being two words and an
-       ellipsis. The whole pair is 240px, so three fit across any card wider
-       than a phone and wrap cleanly below that.
+       170px is the FLOOR now rather than the width. It was chosen as the point
+       where a fixture name stops being two words and an ellipsis — which was
+       the best a fixed track could do while the trigger clipped. The trigger
+       wraps instead of clipping, so the name is readable at 170px either way;
+       giving the track the card's spare width just means it usually does not
+       have to. Three still fit across any card wider than a phone, and they
+       wrap cleanly below that.
 
        A <div> rather than a <label>: the control is a button now, and wrapping
        a button in a label neither names it nor focuses it. The name goes to the
        trigger directly. */
-    <div className="grid grid-cols-[64px_170px] items-center gap-1.5 min-w-0 max-w-full">
+    /* basis + grow: each picker takes a share of the bar's spare width instead
+       of a fixed 170px, and falls back to its own line when three no longer
+       fit. Capped, because one picker stretched across a wide card is a 700px
+       dropdown trigger holding the word "All". */
+    <div className="grid grid-cols-[64px_minmax(0,1fr)] items-center gap-1.5
+      min-w-0 basis-[234px] grow max-w-[400px]">
       <span className={`text-[10px] uppercase tracking-wide truncate ${
         overridden ? 'text-[#FC934C]' : 'text-gray-400 dark:text-white/40'}`}>
         {label}

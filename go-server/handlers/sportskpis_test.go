@@ -119,7 +119,16 @@ func TestTVChannelsIsItsOwnFigure(t *testing.T) {
 // shapeWith is a table that has exactly these columns. tableShape keys on the
 // lower-cased name, which is what `has` and `firstOf` look up.
 func shapeWith(cols ...string) tableShape {
-	sh := tableShape{Table: "dashboards.__test", Columns: map[string]string{}}
+	return namedShape("dashboards.__test", cols...)
+}
+
+/*
+The same, for the tests where WHICH TABLE matters — ChannelName counts as the
+
+	broadcaster on two named tables and nowhere else. See tvChannelColumn.
+*/
+func namedShape(table string, cols ...string) tableShape {
+	sh := tableShape{Table: table, Columns: map[string]string{}}
 	for _, c := range cols {
 		sh.Columns[strings.ToLower(c)] = c
 	}
@@ -247,17 +256,32 @@ func TestTVChannelColumnTellsStationsFromAccounts(t *testing.T) {
 		}
 		return func(c string) bool { return set[c] }
 	}
+	/* The TABLE is part of the question now, not just its columns. ChannelName
+	   counts as the station on two named tables and nowhere else — see
+	   tvChannelColumn for why that is a list rather than a rule. */
 	for _, tc := range []struct {
-		name string
-		cols []string
-		want string
+		name  string
+		table string
+		cols  []string
+		want  string
 	}{
-		{"telegram sports", []string{"TVChannelName", "ChannelName", "ChannelURL"}, "TVChannelName"},
-		{"open web sports", []string{"ChannelId", "ChannelName"}, "ChannelName"},
-		{"youtube", []string{"ChannelName", "ChannelURL"}, ""},
-		{"social sports", []string{"ProfileURL"}, ""},
+		{"telegram sports", "dashboards.Agg_Daily_Telegram_Sports_Raw",
+			[]string{"TVChannelName", "ChannelName", "ChannelURL"}, "TVChannelName"},
+		{"open web sports", "dashboards.SportsURLRawData",
+			[]string{"ChannelId", "ChannelName"}, "ChannelName"},
+		{"open web sports, host side", "dashboards.SportsSourceURLRawData",
+			[]string{"ChannelId", "ChannelName"}, "ChannelName"},
+		{"youtube", "dashboards.Agg_Daily_Youtube_MasterNew",
+			[]string{"ChannelName", "ChannelURL"}, ""},
+		{"social sports", "dashboards.SocialMedia_Sports_Raw", []string{"ProfileURL"}, ""},
+		/* The case the old rule got wrong: a table with names and no URL that
+		   is NOT one of the two. It satisfied "no ChannelURL, therefore a
+		   station" exactly, and its pirate accounts would have been drawn as
+		   broadcasters. */
+		{"some other table of account names", "dashboards.SomeOtherAccountTable",
+			[]string{"ChannelName"}, ""},
 	} {
-		if got := tvChannelColumn(has(tc.cols...)); got != tc.want {
+		if got := tvChannelColumn(tc.table, has(tc.cols...)); got != tc.want {
 			t.Errorf("%s: tvChannelColumn = %q, want %q", tc.name, got, tc.want)
 		}
 	}
@@ -272,8 +296,11 @@ sports. Two tiles reading 326 under two names invites the reader to hunt for a
 difference that is not there.
 */
 func TestTheDuplicateChannelTileIsDropped(t *testing.T) {
-	// No ChannelURL: both resolve to ChannelName, so only the named one stays.
-	same := channelKPIs(shapeWith("ChannelId", "ChannelName"))
+	/* On one of the two broadcaster tables, with no ChannelURL, both tiles
+	   resolve to ChannelName — so only the named one stays. The table has to be
+	   named for that to be true at all: anywhere else ChannelName is an account
+	   and there is no station tile to collide with. */
+	same := channelKPIs(namedShape("dashboards.SportsURLRawData", "ChannelId", "ChannelName"))
 	if _, still := same["totalChannels"]; still {
 		t.Errorf("both channel tiles survived on one column: %v", same)
 	}
@@ -282,7 +309,8 @@ func TestTheDuplicateChannelTileIsDropped(t *testing.T) {
 	}
 
 	// With an account URL the two count different things and both belong.
-	apart := channelKPIs(shapeWith("ChannelURL", "ChannelName", "TVChannelName"))
+	apart := channelKPIs(namedShape("dashboards.Agg_Daily_Telegram_Sports_Raw",
+		"ChannelURL", "ChannelName", "TVChannelName"))
 	if apart["totalChannels"] == "" || apart["totalTVChannels"] == "" {
 		t.Errorf("a table with both an account and a station lost a tile: %v", apart)
 	}

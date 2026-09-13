@@ -868,6 +868,9 @@ func openWebLiveRemoved(clientID, assetIDs, from, to string) (int64, bool) {
 	if assetIDs != "" {
 		q.Set("assetId", assetIDs)
 	}
+	// And the client's hidden values, or this figure would be counted over a
+	// wider set than the tile it replaces. See applyDimExclusions.
+	applyDimExclusions(q, clientID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), openWebLiveRemovalTimeout)
 	defer cancel()
@@ -934,6 +937,12 @@ func realtimeFetch(ctx context.Context, view, clientID, assetIDs string, scope r
 		q.Set("assetId", assetIDs)
 	}
 	dims.apply(q)
+	/* The client's hidden values, exactly as the report sends them.
+
+	   The card and the panels below it have to agree about what the client is
+	   looking at, and they reach the warehouse by different roads — so the
+	   exclusions are applied on both. See applyDimExclusions. */
+	applyDimExclusions(q, clientID)
 	var body realtimeResponse
 	err := reportsapi.Get().GetJSON(ctx, "/v1/realtime/"+view, q, &body)
 	return body, err

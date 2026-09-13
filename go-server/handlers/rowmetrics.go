@@ -312,25 +312,48 @@ the warehouse:
 	Agg_Daily_Youtube_MasterNew     ChannelName             the YouTube account
 	SocialMedia_Sports_Raw          none
 
-So ChannelName is the broadcaster on one table and the infringer's own account on
-another, and a tile that took it blindly would report 3,950 "TV channels" on
-Telegram. The discriminator is ChannelURL: where a table carries one, ChannelName
-is the name OF that URL — an account — and where it does not, the name stands
-alone and is the station.
+TVChannelName IS THE ANSWER WHEREVER IT EXISTS. Two tables do not have it and
+are not going to — the two Open Web sports raw tables, where ChannelName is the
+broadcaster because those rows carry no account at all — and they are named
+here, by table.
 
-Passed a predicate rather than a table type, because both callers ask the same
-question of different things: the direct-SQL path holds a tableShape and the API
-path holds a dataset from the catalogue.
+── WHY BY NAME, AND NOT BY A RULE ───────────────────────────────────────────
 
-Empty means this table records accounts and no stations, so the tile does not
-appear — the difference between an absent figure and a wrong one three orders of
-magnitude out.
+	The exception used to be inferred: ChannelName counts as the station where
+	the table carries no ChannelURL, on the reasoning that a name with no URL
+	beside it cannot be an account. That holds for the two tables above and is a
+	GUESS about every other table in the warehouse — including ones not written
+	yet. A table that records pirate accounts by name only, with no URL column,
+	satisfies the rule exactly and would put its account names into a panel
+	headed "Source of Piracy", where they would look entirely plausible beside
+	ESPN and DAZN.
+
+	The cost of the guess is a wrong answer nobody can see; the cost of the list
+	is that a genuinely new broadcaster table has to be added to it. The second
+	is a line of code, noticed the first time someone looks for the panel and
+	does not find it. The first is a client reading pirate channels as
+	broadcasters.
+
+Empty means this table records accounts and no stations, so the panel and the
+tile do not appear on it — the difference between an absent figure and a wrong
+one three orders of magnitude out.
 */
-func tvChannelColumn(has func(string) bool) string {
+var tvChannelNameTables = map[string]bool{
+	"sportsurlrawdata":       true,
+	"sportssourceurlrawdata": true,
+}
+
+func tvChannelColumn(table string, has func(string) bool) string {
 	if has(colTVChannelName) {
 		return colTVChannelName
 	}
-	if has(colChannelName) && !has(colChannelURL) {
+	// Schema-qualified in configuration ("dashboards.SportsURLRawData"), so the
+	// name is taken off the end and compared without case.
+	name := table
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		name = name[i+1:]
+	}
+	if tvChannelNameTables[strings.ToLower(strings.TrimSpace(name))] && has(colChannelName) {
 		return colChannelName
 	}
 	return ""
@@ -347,7 +370,7 @@ ChannelName, which is exactly what the "Source of Piracy" panel draws. The tile
 and the chart beside it then count the same buckets, which is the point.
 */
 func tvChannelDim(ds reportsapi.Dataset) string {
-	col := tvChannelColumn(func(c string) bool { return hasColumn(ds, c) })
+	col := tvChannelColumn(ds.Table, func(c string) bool { return hasColumn(ds, c) })
 	if col == "" {
 		return ""
 	}
@@ -356,6 +379,27 @@ func tvChannelDim(ds reportsapi.Dataset) string {
 	}
 	return ""
 }
+
+/*
+dimTVChannel is the SOURCE OF PIRACY panel — the broadcaster whose feed was
+taken, as against the account that took it.
+
+Its column is resolved by tvChannelColumn rather than named here, because which
+column holds a station is a property of the table:
+
+	SportsURLRawData, SportsSourceURLRawData   ChannelName    — no account column
+	                                                            on these tables,
+	                                                            so the name is
+	                                                            the broadcaster
+	every other sports table                   TVChannelName  — ChannelName there
+	                                                            is the pirate's
+	                                                            own account
+
+One panel, two columns, and the rule that picks between them is the same one the
+TV-channel KPI tile has always used — so the tile and the chart beside it count
+the same buckets instead of two different things under one word.
+*/
+const dimTVChannel = "byTVChannel"
 
 const (
 	colTVChannelName = "TVChannelName"

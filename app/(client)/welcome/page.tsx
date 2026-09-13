@@ -192,19 +192,16 @@ function Delta({ change, good = 'up', muted, ink }: {
  * a surprise, not an affordance. These are readings; the one way into the report
  * is the button.
  */
-function MiniTile({ tone, label, value, change, good }: {
+function MiniTile({ tone, label, value }: {
   tone: { from: string; to: string; ink: string; sub: string }
   label: string
   value: string
-  change?: { absolute?: number | null; percent?: number | null } | null
-  good?: 'up' | 'down'
 }) {
   return (
     <div className="rounded-xl px-3.5 py-3 overflow-hidden shadow-card"
       style={{ background: `linear-gradient(135deg,${tone.from} 0%,${tone.to} 100%)`, color: tone.ink }}>
       <p className="text-[11.5px] font-bold leading-tight opacity-90">{label}</p>
       <p className="text-[25px] font-extrabold leading-none mt-2 tabular-nums">{value}</p>
-      <Delta change={change} good={good} muted={tone.sub} ink={tone.ink} />
     </div>
   )
 }
@@ -484,9 +481,7 @@ export default function WelcomePage() {
               {/* Named for the WINDOW, not for a calendar week. "This week"
                   read as Monday-to-today; the figures are a rolling seven days
                   ending now, which is a different period and the one the tiles
-                  below actually cover. The comparison is not restated here
-                  because every tile that has one says "compare to last week" on
-                  its own face. */}
+                  below actually cover. */}
               <h2 className="text-[15px] font-extrabold text-[#14254A] dark:text-white">
                 Last {days} days details
               </h2>
@@ -515,8 +510,7 @@ export default function WelcomePage() {
               came down", and the rest of the breakdown is a click away behind
               Open full report. Removal rate — the third figure kept — stays in
               its own card below rather than becoming a third tile, because the
-              bar and the "12,191 of 29,241 taken down" line under it are the
-              part that makes a percentage mean something.
+              bar under it is what makes a percentage mean something.
 
               The column count had to come down with them. Left at
               xl:grid-cols-5 the two tiles would have held the first two fifths
@@ -540,18 +534,14 @@ export default function WelcomePage() {
               actually rendered.
           */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-stretch">
-            <MiniTile label="Infringements identified" value={fmt(identified)}
-              change={chg?.identified} good="down" tone={TILES.identified} />
-            <MiniTile label="Removed" value={fmt(removed)}
-              change={chg?.removed} good="up" tone={TILES.removed} />
+            <MiniTile label="Infringements identified" value={fmt(identified)} tone={TILES.identified} />
+            <MiniTile label="Removed" value={fmt(removed)} tone={TILES.removed} />
 
-            {/* The rate, as a tile. It keeps the bar and the "x of y taken down"
-                line, which is the part that makes a percentage mean something —
-                a bare 41.7% is the one figure on this row a reader cannot sanity
-                check against anything. The bar's track and fill are drawn from
-                the tile's own ink rather than in orange: on a gold ground the
-                brand orange is the neighbouring tile's colour arriving inside
-                this one. */}
+            {/* The rate, as a tile. It keeps the bar, which is what makes a
+                percentage mean something visually rather than as a bare
+                41.7% — the bar's track and fill are drawn from the tile's own
+                ink rather than in orange: on a gold ground the brand orange is
+                the neighbouring tile's colour arriving inside this one. */}
             <div className="rounded-xl px-3.5 py-3 overflow-hidden shadow-card flex flex-col"
               style={{ background: `linear-gradient(135deg,${TILES.rate.from} 0%,${TILES.rate.to} 100%)`,
                        color: TILES.rate.ink }}>
@@ -565,12 +555,6 @@ export default function WelcomePage() {
                   style={{ width: `${rate === null ? 0 : Math.min(100, rate)}%`,
                            background: TILES.rate.ink }} />
               </div>
-              {/* Points, not per cent — see the note on Delta. */}
-              <Delta change={chg?.removalRatePct} good="up"
-                muted={TILES.rate.sub} ink={TILES.rate.ink} />
-              <p className="text-[10.5px] mt-1" style={{ color: TILES.rate.sub }}>
-                {fmt(removed)} of {fmt(identified)} taken down
-              </p>
             </div>
 
             {/* The queue, on the same surface as the figures beside it. Its

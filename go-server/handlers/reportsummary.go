@@ -153,6 +153,10 @@ var summaryDims = []struct {
 	{"byDomainRootAll", "Linking Domain - Identification, Google De-Indexing & Mirrors", "mirror", 5},
 	{"byDomainRootSource", "Host Domain - Identification, Removal & Mirrors", "mirror", 5},
 	{"byChannel", "Top 10 Social Media Channels - Infringements", "hbar", 4},
+	/* The BROADCASTER, not the account above it. Both panels on the summary
+	   because the two questions are both asked of it — whose feed was taken, and
+	   who took it — and merging them into one list answered neither. */
+	{"byTVChannel", "Source of Piracy", "hbar", 4},
 	{"byPlatform", "Top 10 Social Media Platforms - Identification & Removal", "column", 5},
 	// How the enforcement went: what came off entirely, and how fast the rest
 	// came down.
@@ -265,6 +269,48 @@ func envFloat(key string, def float64) float64 {
 
 // summaryPlatforms lists the enabled platforms this login may see. An empty
 // result means there is nothing to summarise and the section is not offered.
+/*
+── WHAT MAKES A PLATFORM A SUMMARY ──────────────────────────────────────────
+
+	A summary is a platform that FANS OUT: it reads the tables of several
+	channels and totals them, where every other platform reads one channel's.
+
+	It used to be recognised by its key being exactly "summary", and that is the
+	bug this function exists to remove. An admin can create as many summaries as
+	they like from Report Configuration, and on this install there are two —
+	"summary" over the unified table and "summary-sprts" over five sports
+	tables. Only the first was ever recognised, so the narrowing below and the
+	attached-channel set above BOTH skipped the sports summary:
+
+	  · it was never trimmed, so it queried a Mobile Apps table for a client
+	    with no Mobile Apps section and drew a fourth bar at zero — and folded
+	    that table's rows into Total Infringements and every merged breakdown;
+	  · and being unrecognised, it counted as one of the reader's OWN attached
+	    platforms, so its Mobile Apps channel looked attached because the
+	    summary itself read it. The guard was asking the summary to vouch for
+	    itself.
+
+	STRUCTURAL, not a name. A key prefix would fix this install and miss the
+	next summary somebody calls "sports-overview". Reading more than one channel
+	is what a summary DOES, and it is already computed — sourceChannelsFor is
+	the same derivation the narrowing compares against, so the two cannot come
+	apart.
+
+	The reserved key stays true regardless of shape: the built-in summary reads
+	one unified table and is still a summary.
+*/
+func isSummaryPlatform(p platformDef) bool {
+	if p.Key == summaryKey {
+		return true
+	}
+	// A single table cannot span two channels, and this is the common case —
+	// checked first so the ordinary platform never pays for the derivation.
+	if len(p.Tables) < 2 {
+		return false
+	}
+	return len(sourceChannelsFor(p)) > 1
+}
+
 func summaryPlatforms(claims *ipauth.Claims) []platformDef {
 	// nil means unrestricted, which is the default for every login. Both grants
 	// apply here as well — a summary must not total up a report its reader
@@ -272,7 +318,10 @@ func summaryPlatforms(claims *ipauth.Claims) []platformDef {
 	allowed := reportsAllowedForClaims(claims)
 	out := []platformDef{}
 	for _, p := range loadPlatforms() {
-		if !p.Enabled || p.Key == summaryKey {
+		/* EVERY summary is skipped, not just the reserved one. This list is
+		   what the narrowing measures a summary against, so a summary left in
+		   it vouches for its own channels — see isSummaryPlatform. */
+		if !p.Enabled || isSummaryPlatform(p) {
 			continue
 		}
 		if allowed != nil && !allowed[p.Key] {
@@ -343,7 +392,7 @@ func narrowSummaryToAttached(p platformDef, claims *ipauth.Claims) platformDef {
 	// other platform must not pay for it. This runs inside the loop over every
 	// platform in ReportsSections, so the early return is what keeps that one
 	// query rather than one per section.
-	if p.Key != summaryKey || len(p.Tables) == 0 {
+	if len(p.Tables) == 0 || !isSummaryPlatform(p) {
 		return p
 	}
 	return narrowToChannels(p, attachedChannels(summaryPlatforms(claims)), loginIDOf(claims))

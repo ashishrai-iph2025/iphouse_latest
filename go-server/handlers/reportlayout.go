@@ -126,6 +126,47 @@ func ensureLayoutSchema() {
 				log.Printf("[layout] add custom_label: %v", err)
 			}
 		}
+		/* ── "Source of Piracy" moved to the panel that draws broadcasters ────
+
+		   byChannel used to draw two different things under one key: the pirate
+		   ACCOUNT on Telegram, YouTube and social, and the BROADCASTER on the two
+		   Open Web sports tables — which carry no account at all, so their
+		   ChannelName is the station. A summary merging the platforms therefore
+		   ranked Paramount+ and DAZN beside the Telegram channels restreaming
+		   them, and clients named that card for what they saw in it: "Top 10
+		   Source of Piracy".
+
+		   The two are separate panels now. byChannel is the account, gated on a
+		   ChannelURL; byTVChannel is the broadcaster, resolved from TVChannelName
+		   or from ChannelName on the two named tables. Which leaves every saved
+		   layout row titled for broadcasters pointing at the panel that now
+		   shows accounts — so the card a client called "Source of Piracy" filled
+		   with pirate channels the day the split deployed.
+
+		   Re-keyed here, on the LABEL, because the label is the client's own
+		   statement of what the panel was for. Sort order, width and hidden flag
+		   travel with it, so the card stays where it was. UPDATE IGNORE first,
+		   so a client who has already configured byTVChannel keeps that; the
+		   DELETE then clears the stale byChannel rows the update could not move.
+		   Idempotent — after the first run nothing matches. */
+		if portalColumnExists(layoutTable, "custom_label") {
+			const broadcasterLabel = "%Source of Piracy%"
+			if _, n, err := db.Exec(
+				"UPDATE IGNORE "+layoutTable+" SET panel_key = ? WHERE panel_key = ? AND custom_label LIKE ?",
+				dimTVChannel, "byChannel", broadcasterLabel); err != nil {
+				log.Printf("[layout] move the Source of Piracy rename to the broadcaster panel: %v", err)
+			} else if n > 0 {
+				log.Printf("[layout] moved %d \"Source of Piracy\" layout row(s) from byChannel to %s — "+
+					"the account panel was carrying the broadcaster panel's name", n, dimTVChannel)
+			}
+			if _, n, err := db.Exec(
+				"DELETE FROM "+layoutTable+" WHERE panel_key = ? AND custom_label LIKE ?",
+				"byChannel", broadcasterLabel); err != nil {
+				log.Printf("[layout] clear stale Source of Piracy rows on byChannel: %v", err)
+			} else if n > 0 {
+				log.Printf("[layout] dropped %d stale byChannel row(s) already superseded by a %s layout", n, dimTVChannel)
+			}
+		}
 		/* How many rows a top-N breakdown keeps. Joined last of all.
 
 		   0 means "whatever the registry chose", which is what every existing

@@ -67,6 +67,27 @@ func platformShape(p platformDef, clientID string) string {
 	for _, k := range keys {
 		parts = append(parts, k+"="+strconv.Itoa(limits[k]))
 	}
+	/* And the values this client has asked not to be reported on — in the shape
+	   for the identical reason the row limits above are.
+
+	   These subtract from every figure the report holds, so a cached report
+	   built before a franchise was hidden answers a different question from the
+	   one now being asked. Left out, hiding one would change nothing visible
+	   until the retention window rolled — which is the exact experience the
+	   comment above describes somebody having with the top-N and concluding the
+	   control does nothing.
+
+	   Folding them in means a save simply changes the key: the new setting
+	   builds fresh and the old entries age out on their own, with no
+	   invalidation to remember to call. Already sorted and deduplicated by
+	   dimExclusionJSON, so two saves of one set produce one shape. */
+	ex := dimExclusionsFor(clientID)
+	for _, dim := range dimExclusionOrder {
+		if list := dimExclusionJSON(ex[dim]); list != "" {
+			parts = append(parts, dim+"!"+list)
+		}
+	}
+
 	sum := sha1.Sum([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:8])
 }

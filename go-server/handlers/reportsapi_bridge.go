@@ -738,6 +738,27 @@ func apiScope(s reportSpec, ds reportsapi.Dataset, q map[string]string, except s
 			v.Set(brandDomainsParam, list)
 		}
 	}
+
+	/* ── Values this client has asked not to be reported on ──────────────────
+
+	   Applied to the SCOPE, beside the genre and the workflow ceiling above, and
+	   for the identical reason: everything a section draws is built from this
+	   url.Values, so subtracting here subtracts from the KPI band, the trend,
+	   every breakdown, the raw rows and the cross-platform Summary at once —
+	   and cannot subtract from some and miss others. That is the whole of
+	   "the calculation follows what is enabled".
+
+	   NOT excepted, unlike the brand above. `except` exists so that listing a
+	   slicer's own values is not narrowed by the value already chosen; these are
+	   not a chosen value, they are values that do not exist as far as this
+	   client is concerned. Excepting them would put a hidden fixture back in the
+	   Asset dropdown — offering a choice that empties the page is the one thing
+	   the filter pane is built not to do.
+
+	   Sent only when something is hidden, so a client with nothing excluded
+	   reaches the service with no such parameter and gets the report it always
+	   got, cache key included. See dimexclusions.go. */
+	applyDimExclusions(v, strings.TrimSpace(q["clientId"]))
 	return v
 }
 
@@ -1630,8 +1651,21 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 				notice("%s needs a subscriber count, which this source does not carry.", d.Label)
 				return []map[string]any{}
 			}
-			return computeTopProfiles(rows, d.Column, subsCol,
-				firstColumnOf(ds.Columns, []string{colProfileStatus}),
+			/* The catalogue's answer first, the rows themselves where it comes
+			   back empty — see firstColumnPresent. Both the status and the
+			   name are read off the ROW there, per profile, so a dataset whose
+			   catalogue under-reports one of them still gets it from the
+			   payload in hand rather than falling all the way back to "Not
+			   Available" or a URL-derived handle. */
+			statusCol := firstColumnOf(ds.Columns, []string{colProfileStatus})
+			if statusCol == "" {
+				statusCol = firstColumnPresent(rows, []string{colProfileStatus})
+			}
+			nameCol := profileNameColumn(ds.Columns)
+			if nameCol == "" {
+				nameCol = firstColumnPresent(rows, profileNameColumns)
+			}
+			return computeTopProfiles(rows, d.Column, subsCol, statusCol, nameCol,
 				identCol, removedCol, d.Limit)
 		}
 
@@ -1708,6 +1742,30 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 				return []map[string]any{}
 			}
 			identKey, removedKey = m, ""
+		}
+		/* A panel whose REMOVAL means something narrower than the section's.
+		   Empty where the dataset cannot answer for it — the panel then draws
+		   its removal flat rather than quietly falling back to a measure with a
+		   different definition, which is the confusion this field exists to
+		   avoid. */
+		if d.APIRemoved != "" {
+			if m, ok := apiMeasureFor(d.APIRemoved, ds); ok {
+				removedKey = m
+			} else {
+				removedKey = ""
+			}
+		}
+		/* A panel whose REMOVAL means something narrower than the section's.
+		   Empty where the dataset cannot answer for it — the panel then draws
+		   its removal flat rather than quietly falling back to a measure with a
+		   different definition, which is the confusion this field exists to
+		   avoid. */
+		if d.APIRemoved != "" {
+			if m, ok := apiMeasureFor(d.APIRemoved, ds); ok {
+				removedKey = m
+			} else {
+				removedKey = ""
+			}
 		}
 
 		/* The THIRD figure, where the panel asks for one.
@@ -1876,6 +1934,10 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 				row["extra"] = numOf(r[extraKey])
 			}
 			out = append(out, row)
+		}
+		/* Table names into store names, label only — see nameAppSourceRows. */
+		if d.Key == dimAppSource {
+			out = nameAppSourceRows(out)
 		}
 		/* A CAVEAT THE DRAWERS MAKE NECESSARY — and it is two different caveats.
 

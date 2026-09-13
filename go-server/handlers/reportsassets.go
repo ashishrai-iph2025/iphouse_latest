@@ -98,6 +98,11 @@ func ReportsAssets(w http.ResponseWriter, r *http.Request) {
 	}
 	body["ok"] = true
 	body["available"] = true
+	// Which arrows the calendar draws for this client — see welcomecalendar.go.
+	// Folded in here rather than served from an endpoint of its own: the
+	// calendar already makes this one request before it can draw anything, and
+	// the nav answer needs the same client scope this handler just resolved.
+	body["nav"] = calendarNavFor(clientID)
 	OK(w, body)
 }
 

@@ -882,6 +882,15 @@ const COUNT_PANELS: Record<string, {
       { key: 'extra2', name: 'Notices' },
     ],
   },
+  /* The accounts ranked by REACH — see topprofiles.go. No list on the
+     subscriber gauge: it is one number per profile, not a set of names to
+     expand. Status comes from the row itself (`profileStatus`), the same
+     field the repeat-offender panel reads, and MirrorBars only draws that
+     column where the rows carry it. */
+  byTopProfiles: {
+    nameHead: 'Profile', removedName: 'Removed',
+    counts: [{ key: 'extra', name: 'Subscribers' }],
+  },
 }
 
 /** The root-domain naming, for the two panels that still read it directly. */
@@ -3171,6 +3180,11 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
     val: String(r.value ?? r.label ?? ''),
     urls: Number(r.urls) || 0,
     removed: Number(r.removed) || 0,
+    /* The account's OWN state, as against what was found on it — see
+       profileStatusLabel in go-server/handlers/repeatoffenders.go, which is
+       the same two words the repeat-offender panel prints. Empty on every
+       card that isn't ranking profiles, which is what `hasStatus` reads. */
+    status: String(r.profileStatus ?? '').trim(),
     counts: counts.map(c => Number(r[c.key]) || 0),
     /* The NAMES behind each count, where that count has any — the brand's mirror
        hostnames, the provider's domains. Empty for a count whose caller declared
@@ -3181,6 +3195,9 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
   }))
   if (data.length === 0) return <div className="text-sm text-gray-400 py-3">No data.</div>
 
+  // Dropped, column and all, on a card whose rows carry no such field — the
+  // same "absence over a well of nothing" rule `showMirrors` applies below.
+  const hasStatus = data.some(d => d.status !== '')
   const maxVol = Math.max(1, ...data.map(d => Math.max(d.urls, d.removed)))
   /* One scale PER COUNT, not one shared between them.
 
@@ -3208,7 +3225,8 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
      measure drawn as the big one, which is the exact misreading the separate
      scale exists to prevent. As a fraction the two shrink together and the
      ordering holds at every width. */
-  const cols = ['128px', 'minmax(0,2fr)', ...shown.map(() => 'minmax(0,1fr)')].join(' ')
+  const cols = ['128px', ...(hasStatus ? ['64px'] : []), 'minmax(0,2fr)',
+    ...shown.map(() => 'minmax(0,1fr)')].join(' ')
 
   /* ONE drawer open at a time, keyed by the row's VALUE and the COLUMN it was
      opened from.
@@ -3232,6 +3250,7 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
       <div className="grid items-end gap-3 px-1.5 pb-1.5 text-[9px] font-bold uppercase tracking-widest text-gray-400"
         style={{ gridTemplateColumns: cols }}>
         <span>{nameHead}</span>
+        {hasStatus && <span>Status</span>}
         <span>Identified / {removedName}</span>
         {shown.map(c => <span key={c.key} className="text-right">{c.name}</span>)}
       </div>
@@ -3242,6 +3261,7 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
           // Which of this row's gauges is open, if any.
           const openCount = shown.find(c => openRow === drawerKey(d.val, c.key))
           const rowTitle = `${d.label}: ${full(d.urls)} identified, ${full(d.removed)} ${removedName.toLowerCase()}${
+            hasStatus ? `, profile ${d.status.toLowerCase()}` : ''}${
             shown.map(c => `, ${full(d.counts[c.i])} ${c.name.toLowerCase()}`).join('')}`
           return (
             <div key={d.val + i}>
@@ -3265,6 +3285,20 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
                   className="text-xs text-gray-600 dark:text-gray-300 truncate text-left disabled:cursor-default">
                   {d.label}
                 </button>
+                {/* THE ACCOUNT'S OWN STATE, beside its name. "Not Available"
+                    is muted on purpose — see profileStatusLabel — because it
+                    covers both "still up" and "never told", and colouring it
+                    like a live status would make the weaker claim look like
+                    the stronger one. */}
+                {hasStatus && (
+                  <span title={rowTitle}
+                    className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded text-center
+                      whitespace-nowrap justify-self-start ${d.status === 'Suspended'
+                      ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
+                      : 'bg-gray-100 text-gray-400 dark:bg-white/5 dark:text-white/40'}`}>
+                    {d.status === 'Suspended' ? 'Suspended' : 'N/A'}
+                  </span>
+                )}
                 <button type="button" disabled={!onPick} onClick={() => onPick?.(d.val)}
                   title={rowTitle}
                   className="flex flex-col gap-1 min-w-0 disabled:cursor-default">
