@@ -78,7 +78,7 @@ func TestRecurrenceTakesTheLargestRatherThanTheSum(t *testing.T) {
 func TestAPanelWithoutTheseMeasuresDoesNotGrowThem(t *testing.T) {
 	m := map[string]int64{}
 	accumulateBreakdown(m, map[string]any{"urls": 9, "removed": 4})
-	row := mergedBreakdownRow("acme.example", m, "")
+	row := mergedBreakdownRow("byDomain", "acme.example", m, "", "")
 
 	for _, k := range []string{"mirrors", "repeats", "value"} {
 		if _, has := row[k]; has {
@@ -105,7 +105,7 @@ func TestEveryPanelMeasureSurvivesTheMerge(t *testing.T) {
 	for _, k := range []string{"mirrors", "repeats", "extra", "extra2"} {
 		m := map[string]int64{}
 		accumulateBreakdown(m, map[string]any{"urls": 10, "removed": 4, k: 7})
-		row := mergedBreakdownRow("acme.example", m, "")
+		row := mergedBreakdownRow("byDomain", "acme.example", m, "", "")
 		if got := numOf(row[k]); got == 0 {
 			t.Errorf("%q was dropped by the merge — a panel using it draws an empty column", k)
 		}
@@ -116,7 +116,7 @@ func TestEveryPanelMeasureSurvivesTheMerge(t *testing.T) {
 func TestTheMergedRowKeepsEveryMeasureItWasGiven(t *testing.T) {
 	m := map[string]int64{}
 	accumulateBreakdown(m, map[string]any{"urls": 131333, "removed": 128900, "mirrors": 28})
-	row := mergedBreakdownRow("acme.example", m, "acme.example")
+	row := mergedBreakdownRow("byDomain", "acme.example", m, "acme.example", "YouTube")
 
 	if numOf(row["mirrors"]) != 28 {
 		t.Errorf("mirrors = %v, want 28 — this is the 0-on-every-row bug", row["mirrors"])
@@ -124,6 +124,72 @@ func TestTheMergedRowKeepsEveryMeasureItWasGiven(t *testing.T) {
 	// The raw grouping value a click filters on, carried only where there is one.
 	if row["value"] != "acme.example" {
 		t.Errorf("value = %v, want the grouping value", row["value"])
+	}
+	// The account's social platform, carried only where there is one — same
+	// rule as value, and the same reason: it is not a measure accumulateBreakdown
+	// folds, so mergedBreakdownRow has to be handed it rather than read it off m.
+	if row["platform"] != "YouTube" {
+		t.Errorf("platform = %v, want %q", row["platform"], "YouTube")
+	}
+}
+
+// A panel whose rows carry no platform at all must not gain an empty column —
+// same "absence over a well of nothing" rule `value` follows above.
+func TestTheMergedRowHasNoPlatformWhenNothingCarriedOne(t *testing.T) {
+	m := map[string]int64{}
+	accumulateBreakdown(m, map[string]any{"urls": 9, "removed": 4})
+	row := mergedBreakdownRow(dimTopProfiles, "acct", m, "", "")
+	if _, has := row["platform"]; has {
+		t.Errorf("row carries platform %q though nothing put one in", row["platform"])
+	}
+}
+
+/*
+The account's own STATE folds into the vocabulary its OWN panel uses — three
+words for dimTopProfiles, two for anything else — because the two panels write
+different vocabularies into the same profileStatus field and the merge has to
+know which one it is reading back. See accumulateBreakdown's and
+mergedBreakdownRow's notes on profileStatusSeen.
+*/
+func TestTopProfilesStatusMergeKeepsThreeStates(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rows []map[string]any
+		want string
+	}{
+		{"active alone", []map[string]any{{"profileStatus": "Active"}}, "Active"},
+		{"not available alone", []map[string]any{{"profileStatus": "Not Available"}}, "Not Available"},
+		{"suspended alone", []map[string]any{{"profileStatus": "Suspended"}}, "Suspended"},
+		{"dead wins over active across sources", []map[string]any{
+			{"profileStatus": "Active"}, {"profileStatus": "Suspended"},
+		}, "Suspended"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := map[string]int64{}
+			for _, row := range tc.rows {
+				accumulateBreakdown(m, row)
+			}
+			row := mergedBreakdownRow(dimTopProfiles, "acct", m, "", "")
+			if row["profileStatus"] != tc.want {
+				t.Errorf("profileStatus = %v, want %q", row["profileStatus"], tc.want)
+			}
+		})
+	}
+}
+
+/*
+Every OTHER panel that carries profileStatus — dimRepeatOffender today — keeps
+the two-word fold. Reading it back with the three-word label would silently
+rename every "Not Available" account to "Unknown", a state a reader may already
+be filtering or exporting on.
+*/
+func TestRepeatOffenderStatusMergeStaysTwoState(t *testing.T) {
+	m := map[string]int64{}
+	accumulateBreakdown(m, map[string]any{"profileStatus": "Not Available"})
+	row := mergedBreakdownRow(dimRepeatOffender, "acct", m, "", "")
+	if row["profileStatus"] != "Not Available" {
+		t.Errorf("profileStatus = %v, want %q — dimRepeatOffender must not gain the three-word vocabulary",
+			row["profileStatus"], "Not Available")
 	}
 }
 
@@ -147,7 +213,7 @@ func TestBothMergesUseTheOneFold(t *testing.T) {
 
 		for _, call := range []string{
 			"accumulateBreakdown(breakdowns[key][label], row)",
-			"mergedBreakdownRow(label, m,",
+			"mergedBreakdownRow(key, label, m,",
 			/* The non-numeric half of the same fold. A row's LISTS — the mirror
 			   domains on the root cards — cannot live in a map of int64, so they
 			   are folded beside it, and they come apart exactly the way the

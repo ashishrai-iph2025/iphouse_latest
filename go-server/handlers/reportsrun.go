@@ -648,8 +648,9 @@ func runSpec(s reportSpec, q map[string]string, bg bool) map[string]any {
 			breakdowns[d.Key] = nameTopProfileRows(mapRows(
 				run(topProfilesSQL(s, d, where, identExpr, removedExpr, subsCol,
 					shape.firstOf([]string{colProfileStatus}),
-					shape.firstOf(profileNameColumns))),
-				"label", "value", "urls", "removed", "extra", "profileStatus"))
+					shape.firstOf(profileNameColumns),
+					shape.firstOf([]string{colPlatform}))),
+				"label", "value", "urls", "removed", "extra", "profileStatus", "platform"))
 			continue
 		}
 
@@ -1076,16 +1077,24 @@ sibling — needs no window function.
 
 `statusCol` is optional. A table recording no profile state reports every account
 as "Not Available", which is the honest answer: it does not say the accounts are
-up, it says this source cannot tell.
+up, it says this source cannot tell. Where the column IS there, this panel prints
+three states rather than the two profileStatusLabel folds elsewhere — see
+topProfileStatusLabel (topprofiles.go), which this SQL mirrors: Dead wins over
+Active, and "Not Available" covers both "no column" and "column present but
+null".
+
+`platformCol` is optional too, same fallback as `nameCol` — empty on a table
+that records one social platform only, which has nothing to disambiguate.
 */
-func topProfilesSQL(s reportSpec, d dimension, where, identExpr, removedExpr, subsCol, statusCol, nameCol string) string {
+func topProfilesSQL(s reportSpec, d dimension, where, identExpr, removedExpr, subsCol, statusCol, nameCol, platformCol string) string {
 	limit := d.Limit
 	if limit <= 0 {
 		limit = topProfileLimit
 	}
-	dead := "0"
+	dead, active := "0", "0"
 	if statusCol != "" {
 		dead = fmt.Sprintf("MAX(LOWER(TRIM(COALESCE(%s,'')))='dead')", statusCol)
+		active = fmt.Sprintf("MAX(LOWER(TRIM(COALESCE(%s,'')))='active')", statusCol)
 	}
 	/* The stored name, where the table has one — MAX rather than a GROUP BY
 	   term, so an account renamed mid-window stays ONE row. Grouping by the name
@@ -1101,16 +1110,25 @@ func topProfilesSQL(s reportSpec, d dimension, where, identExpr, removedExpr, su
 	if nameCol != "" {
 		name = fmt.Sprintf("COALESCE(MAX(NULLIF(TRIM(%s),'')),'')", nameCol)
 	}
+	// The platform, by the SAME rule as the name: first non-empty across the
+	// account's rows, since a profile URL belongs to one platform throughout.
+	platform := "''"
+	if platformCol != "" {
+		platform = fmt.Sprintf("COALESCE(MAX(NULLIF(TRIM(%s),'')),'')", platformCol)
+	}
 	return fmt.Sprintf(
 		`SELECT %s AS label, COALESCE(%s,'Unknown') AS value,
 		        %s AS urls, %s AS removed,
 		        MAX(%s) AS extra,
-		        CASE WHEN %s = 1 THEN 'Suspended' ELSE 'Not Available' END AS profileStatus
+		        CASE WHEN %s = 1 THEN 'Suspended'
+		             WHEN %s = 1 THEN 'Active'
+		             ELSE 'Not Available' END AS profileStatus,
+		        %s AS platform
 		   FROM %s %s AND %s IS NOT NULL AND %s != ''
 		  GROUP BY value
 		  ORDER BY extra DESC, urls DESC
 		  LIMIT %d`,
-		name, d.Column, identExpr, removedExpr, subsCol, dead,
+		name, d.Column, identExpr, removedExpr, subsCol, dead, active, platform,
 		s.Table, where, d.Column, d.Column, limit)
 }
 

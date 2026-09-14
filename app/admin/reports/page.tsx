@@ -1078,6 +1078,9 @@ function dimTableData(key: string, label: string, viz: string, rows: any[],
        anything inferable from the removal figure beside it. Only the panels that
        report it get the column; everything else keeps the five it had. */
     const status = rows.some(r => r.profileStatus)
+    // Which social platform the account is on — same "only the panels that
+    // carry it get the column" rule as Status, right beside it.
+    const platform = rows.some(r => r.platform)
     /* WHICH domains the provider's count is counting, next to the count.
 
        The chart answers this by opening the gauge; this is the same list where
@@ -1087,7 +1090,8 @@ function dimTableData(key: string, label: string, viz: string, rows: any[],
        column headed plain "Domains" would not say which. */
     const lists = rows.some(r => listOf(r, 'extraDomains').length > 0)
     return {
-      head: ['Name', extraLabel, ...(lists ? [`${extraLabel} list`] : []),
+      head: ['Name', ...(platform ? ['Platform'] : []), extraLabel,
+        ...(lists ? [`${extraLabel} list`] : []),
         'Identified', 'Removed', 'Removal rate',
         ...(status ? ['Status'] : []), 'Share'],
       rows: rows.map(r => {
@@ -1095,6 +1099,7 @@ function dimTableData(key: string, label: string, viz: string, rows: any[],
         const removed = Number(r.removed) || 0
         const domains = listOf(r, 'extraDomains')
         return [String(r.label ?? '—'),
+          ...(platform ? [String(r.platform ?? '—')] : []),
           /* Counted off the list wherever there is one, so the figure and the
              names behind it are read from the same array — the server already
              guarantees they agree, and this is what keeps them agreeing here. */
@@ -1106,8 +1111,9 @@ function dimTableData(key: string, label: string, viz: string, rows: any[],
           `${pct(urls, total)}%`]
       }),
       pickValues,
-      // The joined list, where there is one: column 2, straight after its count.
-      textCols: lists ? [2] : [],
+      // The joined list, where there is one: shifted a column by Platform when
+      // that is also showing, straight after its count either way.
+      textCols: lists ? [platform ? 3 : 2] : [],
     }
   }
 
@@ -3181,10 +3187,17 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
     urls: Number(r.urls) || 0,
     removed: Number(r.removed) || 0,
     /* The account's OWN state, as against what was found on it — see
-       profileStatusLabel in go-server/handlers/repeatoffenders.go, which is
-       the same two words the repeat-offender panel prints. Empty on every
-       card that isn't ranking profiles, which is what `hasStatus` reads. */
+       topProfileStatusLabel in go-server/handlers/topprofiles.go, which is
+       THREE words ('Suspended' / 'Active' / 'Not Available'), unlike the two the
+       repeat-offender panel prints from its own profileStatusLabel. Empty on
+       every card that isn't ranking profiles, which is what `hasStatus` reads. */
     status: String(r.profileStatus ?? '').trim(),
+    /* Which social platform the account is on — YouTube, Facebook, a
+       third-party feed. Empty on a single-brand table (nothing to
+       disambiguate) or a card that isn't ranking profiles, which is what
+       `hasPlatform` reads — same "absence over a well of nothing" rule the
+       status column follows. */
+    platform: String(r.platform ?? '').trim(),
     counts: counts.map(c => Number(r[c.key]) || 0),
     /* The NAMES behind each count, where that count has any — the brand's mirror
        hostnames, the provider's domains. Empty for a count whose caller declared
@@ -3198,6 +3211,7 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
   // Dropped, column and all, on a card whose rows carry no such field — the
   // same "absence over a well of nothing" rule `showMirrors` applies below.
   const hasStatus = data.some(d => d.status !== '')
+  const hasPlatform = data.some(d => d.platform !== '')
   const maxVol = Math.max(1, ...data.map(d => Math.max(d.urls, d.removed)))
   /* One scale PER COUNT, not one shared between them.
 
@@ -3225,7 +3239,9 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
      measure drawn as the big one, which is the exact misreading the separate
      scale exists to prevent. As a fraction the two shrink together and the
      ordering holds at every width. */
-  const cols = ['128px', ...(hasStatus ? ['64px'] : []), 'minmax(0,2fr)',
+  /* Wide enough for "NOT AVAILABLE", the longest of the three words this
+     column ever prints — 64px fit "SUSPENDED" but clipped the unknown case. */
+  const cols = ['128px', ...(hasStatus ? ['92px'] : []), 'minmax(0,2fr)',
     ...shown.map(() => 'minmax(0,1fr)')].join(' ')
 
   /* ONE drawer open at a time, keyed by the row's VALUE and the COLUMN it was
@@ -3260,7 +3276,7 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
           const isActive = activeVal === d.val || activeVal === d.label
           // Which of this row's gauges is open, if any.
           const openCount = shown.find(c => openRow === drawerKey(d.val, c.key))
-          const rowTitle = `${d.label}: ${full(d.urls)} identified, ${full(d.removed)} ${removedName.toLowerCase()}${
+          const rowTitle = `${d.label}${d.platform ? ` (${d.platform})` : ''}: ${full(d.urls)} identified, ${full(d.removed)} ${removedName.toLowerCase()}${
             hasStatus ? `, profile ${d.status.toLowerCase()}` : ''}${
             shown.map(c => `, ${full(d.counts[c.i])} ${c.name.toLowerCase()}`).join('')}`
           return (
@@ -3282,21 +3298,39 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
                 style={{ gridTemplateColumns: cols }}>
                 <button type="button" disabled={!onPick} onClick={() => onPick?.(d.val)}
                   title={rowTitle}
-                  className="text-xs text-gray-600 dark:text-gray-300 truncate text-left disabled:cursor-default">
-                  {d.label}
+                  className="min-w-0 text-left disabled:cursor-default">
+                  <span className="block text-xs text-gray-600 dark:text-gray-300 truncate">
+                    {d.label}
+                  </span>
+                  {/* THE PLATFORM, under the name rather than beside it — the
+                      name is already a shortening of a URL and has no room to
+                      share a line with a second fact. Muted: it identifies the
+                      row, it does not rank it, and colouring it like a measure
+                      would draw the eye to a fourth thing on a card about two. */}
+                  {hasPlatform && d.platform && (
+                    <span className="block text-[9px] text-gray-400 dark:text-white/40 truncate">
+                      {d.platform}
+                    </span>
+                  )}
                 </button>
-                {/* THE ACCOUNT'S OWN STATE, beside its name. "Not Available"
-                    is muted on purpose — see profileStatusLabel — because it
-                    covers both "still up" and "never told", and colouring it
-                    like a live status would make the weaker claim look like
-                    the stronger one. */}
+                {/* THE ACCOUNT'S OWN STATE, beside its name — three colours, not
+                    two, unlike the repeat-offender panel's badge. That one folds
+                    Active and "never told" together on purpose (profileStatusLabel);
+                    this panel ranks by reach, where a reader comparing two accounts
+                    with the same audience wants to know whether one is CONFIRMED
+                    live and the other simply unmeasured — see topProfileStatusLabel
+                    (go-server/handlers/topprofiles.go). "Not Available" stays muted,
+                    same reasoning as the fold it replaces and the same words the
+                    repeat-offender panel uses for its own unknown case: it is not a
+                    live status and must not be coloured like one. */}
                 {hasStatus && (
                   <span title={rowTitle}
                     className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded text-center
-                      whitespace-nowrap justify-self-start ${d.status === 'Suspended'
-                      ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
+                      whitespace-nowrap justify-self-start ${
+                      d.status === 'Suspended' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
+                      : d.status === 'Active' ? 'bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300'
                       : 'bg-gray-100 text-gray-400 dark:bg-white/5 dark:text-white/40'}`}>
-                    {d.status === 'Suspended' ? 'Suspended' : 'N/A'}
+                    {d.status === 'Suspended' ? 'Suspended' : d.status === 'Active' ? 'Active' : 'Not Available'}
                   </span>
                 )}
                 <button type="button" disabled={!onPick} onClick={() => onPick?.(d.val)}
@@ -4523,7 +4557,7 @@ export function RepeatOffenders({ rows, m, onPick, activeVal = '', limit = 10 }:
                  account". The bars take a share rather than a fixed width, so
                  the same panel works full-width here and half-width in a
                  summary. */
-              style={{ gridTemplateColumns: '18px 52px minmax(90px, 1fr) 92px minmax(150px, 34%)' }}>
+              style={{ gridTemplateColumns: '18px 52px minmax(90px, 1fr) 108px minmax(150px, 34%)' }}>
 
               {/* The position, so "top 10" is a fact on the card rather than a
                   claim in its title. */}
@@ -4561,7 +4595,7 @@ export function RepeatOffenders({ rows, m, onPick, activeVal = '', limit = 10 }:
                 whitespace-nowrap ${suspended
                   ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
                   : 'bg-gray-100 text-gray-400 dark:bg-white/5 dark:text-white/40'}`}>
-                {suspended ? 'Suspended' : 'N/A'}
+                {suspended ? 'Suspended' : 'Not Available'}
               </span>
 
               {/* Two thin bars from a shared baseline, 2px apart, each with its

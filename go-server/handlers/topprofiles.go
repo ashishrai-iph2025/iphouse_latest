@@ -47,10 +47,20 @@ type profileTally struct {
 	   profile renamed mid-window carries both, so the panel would otherwise
 	   flip between them depending on which row arrived last. */
 	name     string
+	/* Which social platform the account is ON — YouTube, Facebook, a
+	   third-party feed — read off the row the same way the name is: first
+	   non-empty wins, because a given profile URL belongs to exactly one
+	   platform and every row it appears on should agree. */
+	platform string
 	subs     int64
 	urls     int64
 	removed  int64
 	dead     bool
+	/* Seen explicitly ACTIVE on at least one row — kept apart from "no status
+	   column at all" and "column present but empty", which this panel reports
+	   as Not Available rather than folding into Active. See
+	   topProfileStatusLabel. */
+	active   bool
 	firstSaw int
 }
 
@@ -66,8 +76,12 @@ removal is.
 `subsCol` and `statusCol` are the audience and the account's own state. A dataset
 carrying neither gets no panel: a ranking by reach with no reach to rank on is a
 list of accounts in arbitrary order, which is worse than no card.
+
+`platformCol` is optional, like `nameCol` and `statusCol` — a dataset recording
+one social platform only (a single-brand table) has no such column, and the row
+carries no platform rather than a guessed one.
 */
-func computeTopProfiles(rows []map[string]any, urlCol, subsCol, statusCol, nameCol, identCol, removedCol string, limit int) []map[string]any {
+func computeTopProfiles(rows []map[string]any, urlCol, subsCol, statusCol, nameCol, platformCol, identCol, removedCol string, limit int) []map[string]any {
 	if urlCol == "" || subsCol == "" {
 		return []map[string]any{}
 	}
@@ -112,14 +126,25 @@ func computeTopProfiles(rows []map[string]any, urlCol, subsCol, statusCol, nameC
 		/* The ACCOUNT's state, which is not the post's. A post can come down
 		   while the account stays up. Sticky once seen dead: the column is
 		   stamped per row and a profile suspended after some of its posts were
-		   crawled carries both values across its rows. */
-		if statusCol != "" && isDead(r[statusCol]) {
-			t.dead = true
+		   crawled carries both values across its rows — Dead wins over an
+		   earlier Active for the same reason, and is checked first. */
+		if statusCol != "" {
+			switch {
+			case isDead(r[statusCol]):
+				t.dead = true
+			case isActiveStatus(r[statusCol]):
+				t.active = true
+			}
 		}
 
 		// The account's name, where the table records one.
 		if nameCol != "" && t.name == "" {
 			t.name = strings.TrimSpace(strFromAny(r[nameCol]))
+		}
+
+		// The account's platform, where the table records one.
+		if platformCol != "" && t.platform == "" {
+			t.platform = strings.TrimSpace(strFromAny(r[platformCol]))
 		}
 	}
 
@@ -135,7 +160,8 @@ func computeTopProfiles(rows []map[string]any, urlCol, subsCol, statusCol, nameC
 			// the account name rather than as a third bar, because followers and
 			// post counts are orders of magnitude apart. See HBarChart.
 			"extra":         t.subs,
-			"profileStatus": profileStatusLabel(t.dead),
+			"profileStatus": topProfileStatusLabel(t.dead, t.active),
+			"platform":      t.platform,
 			"_seen":         t.firstSaw,
 		})
 	}
@@ -161,4 +187,47 @@ func computeTopProfiles(rows []map[string]any, urlCol, subsCol, statusCol, nameC
 		delete(r, "_seen")
 	}
 	return out
+}
+
+/*
+activeStatus is the warehouse's spelling for "the account itself is still up",
+matched case-insensitively for the same reason isDead is — see isDead's comment
+on 'Dead'/'DEAD'.
+*/
+const activeStatus = "active"
+
+func isActiveStatus(v any) bool {
+	return strings.EqualFold(strings.TrimSpace(strFromAny(v)), activeStatus)
+}
+
+/*
+topProfileStatusLabel is what THIS panel prints for the account's own state —
+three words, unlike profileStatusLabel (repeatoffenders.go), which folds Active
+and "never told" together on purpose. That fold is right for the repeat-offender
+panel, which asks about PERSISTENCE and treats "still up" and "no signal" as the
+same amount of evidence either way.
+
+This panel ranks by REACH instead, where a reader comparing two accounts with
+the same audience wants to know whether one of them is CONFIRMED live and the
+other is simply unmeasured — a distinction the repeat panel has no use for and
+this one is built to draw. So the three states stay apart here rather than
+reusing the shared label.
+
+Dead wins over Active — an account does not come back from Dead, so one row
+carrying it is the account's final state however many earlier rows called it
+Active. Neither seen reads "Not Available" — the same words the repeat-offender
+panel uses for its own unknown case, deliberately: a column this table does not
+have and one that is null on every row this profile appears in are both "this
+source cannot tell", and a reader should not have to learn a second word for it
+depending which panel they are looking at.
+*/
+func topProfileStatusLabel(dead, active bool) string {
+	switch {
+	case dead:
+		return "Suspended"
+	case active:
+		return "Active"
+	default:
+		return "Not Available"
+	}
 }

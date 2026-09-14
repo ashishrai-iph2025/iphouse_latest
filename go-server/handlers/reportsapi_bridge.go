@@ -1665,7 +1665,14 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			if nameCol == "" {
 				nameCol = firstColumnPresent(rows, profileNameColumns)
 			}
-			return computeTopProfiles(rows, d.Column, subsCol, statusCol, nameCol,
+			/* Which social platform the account is on — optional, same fallback
+			   order as name and status. Empty on a single-brand table, which has
+			   nothing to disambiguate. */
+			platformCol := firstColumnOf(ds.Columns, []string{colPlatform})
+			if platformCol == "" {
+				platformCol = firstColumnPresent(rows, []string{colPlatform})
+			}
+			return computeTopProfiles(rows, d.Column, subsCol, statusCol, nameCol, platformCol,
 				identCol, removedCol, d.Limit)
 		}
 

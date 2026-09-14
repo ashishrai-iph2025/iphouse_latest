@@ -648,6 +648,9 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 	// The non-numeric half of the same fold — see breakdownSets.
 	bdSets := breakdownSets{}
 	dimValues := map[string]map[string]string{}
+	// The account's platform, the same fold as dimValues — see the note on
+	// platformValues in reportplatforms.go.
+	platformValues := map[string]map[string]string{}
 	platformRows := []map[string]any{}
 	suspensionRows := []map[string]any{}
 	noticeRows := []map[string]any{}
@@ -787,6 +790,14 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 							dimValues[key][label] = v
 						}
 					}
+					if p := strFromAny(row["platform"]); p != "" {
+						if platformValues[key] == nil {
+							platformValues[key] = map[string]string{}
+						}
+						if _, seen := platformValues[key][label]; !seen {
+							platformValues[key][label] = p
+						}
+					}
 				}
 			}
 		}
@@ -903,7 +914,7 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 	for key, byLabel := range breakdowns {
 		rows := make([]map[string]any, 0, len(byLabel))
 		for label, m := range byLabel {
-			row := mergedBreakdownRow(label, m, dimValues[key][label])
+			row := mergedBreakdownRow(key, label, m, dimValues[key][label], platformValues[key][label])
 			applyBreakdownSets(bdSets, key, label, row)
 			rows = append(rows, row)
 		}

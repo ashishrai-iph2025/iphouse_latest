@@ -1996,6 +1996,14 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	// Merging is by name — two tables spell the same asset the same way — but the
 	// id has to survive it or the panel's cross-filter has nothing to send.
 	dimValues := map[string]map[string]string{}
+	/* The account's PLATFORM, on the profile-reach panel — the same fold as
+	   `dimValues` above and for the same reason: a single string per row group,
+	   first-seen wins, because a profile URL is on one platform and every row
+	   it appears on should agree. Its own map rather than folded into
+	   dimValues, which already means something else (the grouping VALUE a
+	   click filters on) — this is a THIRD figure a row can carry, like the
+	   mirror-domain lists, and gets its own name for the same reason they do. */
+	platformValues := map[string]map[string]string{}
 	dimLabels := map[string]string{}
 	warnings := []string{}
 	// Caveats: things a reader should know about a panel that DID load.
@@ -2185,6 +2193,16 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 							dimValues[key][label] = v
 						}
 					}
+					// The account's platform, where the row carries one — see the
+					// note on platformValues above.
+					if p := strFromAny(row["platform"]); p != "" {
+						if platformValues[key] == nil {
+							platformValues[key] = map[string]string{}
+						}
+						if _, seen := platformValues[key][label]; !seen {
+							platformValues[key][label] = p
+						}
+					}
 				}
 			}
 		}
@@ -2273,7 +2291,7 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	for key, byLabel := range breakdowns {
 		rows := make([]map[string]any, 0, len(byLabel))
 		for label, m := range byLabel {
-			row := mergedBreakdownRow(label, m, dimValues[key][label])
+			row := mergedBreakdownRow(key, label, m, dimValues[key][label], platformValues[key][label])
 			applyBreakdownSets(bdSets, key, label, row)
 			rows = append(rows, row)
 		}
@@ -2728,6 +2746,31 @@ func accumulateBreakdown(dst map[string]int64, row map[string]any) {
 	if v := numOf(row["repeats"]); v > dst["repeats"] {
 		dst["repeats"] = v
 	}
+
+	/* The account's own STATE, on the profile-reach panel — carried as three
+	   0/1 flags because this map only holds numbers. "Seen" says whether any
+	   source declared a status at all, so a panel that never carries one does
+	   not gain the word "Unknown" out of nowhere; "Suspended" and "Active" are
+	   each STICKY the same way computeTopProfiles keeps them within one source
+	   — once any table has seen this account in that state it stays there
+	   across the merge, because the claim is about the ACCOUNT rather than
+	   about one table's own crawl of it. Suspended wins where sources disagree
+	   — see topProfileStatusLabel (topprofiles.go), which this defers to.
+	   Read back into words in mergedBreakdownRow.
+
+	   Without this, dimTopProfiles rows that only exist because several
+	   source tables were merged into one platform (Social Media & UGC being
+	   several distinct socials) lost the column entirely: neither summed nor
+	   listed, just absent — see breakdownmerge_test.go. */
+	if v, ok := row["profileStatus"]; ok {
+		dst["profileStatusSeen"] = 1
+		switch strFromAny(v) {
+		case "Suspended":
+			dst["profileSuspended"] = 1
+		case "Active":
+			dst["profileActive"] = 1
+		}
+	}
 }
 
 /*
@@ -2909,19 +2952,42 @@ func stringListOf(v any) []string {
 /*
 mergedBreakdownRow rebuilds one row from those totals.
 
+`key` is the dimension being merged, and it decides which of the two status
+vocabularies to read the flags back into — see the note on it below.
+
 `value` is the raw grouping value a click filters on, empty where the dimension
-has none. The extra measures are carried only where they are NON-ZERO, so a
-panel that never had a mirror count or a day count does not gain a column of
-noughts from a map that defaulted one in.
+has none. `platform` is the account's social platform, off platformValues,
+empty the same way — neither is a measure accumulateBreakdown folds, so both
+are handed in rather than read off `m`. The extra measures are carried only
+where they are NON-ZERO, so a panel that never had a mirror count or a day
+count does not gain a column of noughts from a map that defaulted one in.
 */
-func mergedBreakdownRow(label string, m map[string]int64, value string) map[string]any {
+func mergedBreakdownRow(key, label string, m map[string]int64, value, platform string) map[string]any {
 	row := map[string]any{"label": label, "urls": m["urls"], "removed": m["removed"]}
 	if value != "" {
 		row["value"] = value
 	}
+	if platform != "" {
+		row["platform"] = platform
+	}
 	for _, k := range []string{"repeats", "mirrors", "extra", "extra2"} {
 		if v := m[k]; v != 0 {
 			row[k] = v
+		}
+	}
+	/* The word back from the flags accumulateBreakdown left — see its note on
+	   profileStatusSeen. TWO vocabularies share those flags, one per panel that
+	   carries a profileStatus, and only the dimension key says which one wrote
+	   them: dimTopProfiles's rows spell three states (topProfileStatusLabel) and
+	   dimRepeatOffender's spell two (profileStatusLabel). Defaulting to the
+	   two-word form is the safe direction — a future carrier of this field that
+	   is neither gets the fold, which was every panel's behaviour before this
+	   one grew a third state, rather than silently being read as three. */
+	if m["profileStatusSeen"] != 0 {
+		if key == dimTopProfiles {
+			row["profileStatus"] = topProfileStatusLabel(m["profileSuspended"] != 0, m["profileActive"] != 0)
+		} else {
+			row["profileStatus"] = profileStatusLabel(m["profileSuspended"] != 0)
 		}
 	}
 	return row
