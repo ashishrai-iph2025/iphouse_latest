@@ -6,7 +6,7 @@ import {
   BarChart, Bar, Cell, LabelList, ComposedChart, Line,
 } from 'recharts'
 import {
-  aggregate, buildTatBuckets, inTatBucket, rowSubPlatform, rowChannelKey,
+  aggregate, buildTatBuckets, inTatBucket, rowSubPlatform, rowChannelKey, rowProfileSuspended,
   tatUrlToEnforcementMins, tatEnforcementToRemovalMins, platformDisplayName,
   type WarRoomReport as Report, type WarRoomRow, type WarRoomFilters, type TatBucket,
   type Totals, type Funnel, type Removal, type Segment, type Breakdowns, type PlatformResult,
@@ -115,26 +115,25 @@ const LOGIC = {
   openWebStats: 'Open Web identification is distinct URLs, not raw rows, since one URL can appear on many rows: "Distinct host URLs"/"domains" = unique sourceURL/domain values; "Distinct linking URLs"/"domains" = unique infringingURL/domain values (rows with no sourceURL are linking-URL rows).',
   newDomains: 'For each linking domain, takes the earliest ReportDay across all its rows and buckets that domain under that first-seen date — so a domain only counts once, on the day it was first discovered.',
   searchEngine: 'Groups Open Web rows by the searchEngine field. Identified = row count per engine; Removed = rows where the same isRemoved() logic (Dead / delisting Approved) is true.',
-  funnel: 'Identification = total identified rows. Enforced = rows with a non-empty enforcementTime. Removed = rows where isRemoved() is true (Dead/Removed status, or Open Web delisting Approved). Each stage % is stage ÷ identification; the small % next to each row is stage ÷ previous stage (conversion rate).',
   currentStatus: 'Buckets rows by removalStatus, title-cased (DEAD/Dead/dead all merge into one bucket, displayed as "Removed"); blank status becomes "Pending". Bars show identified (count in that status) vs removed (rows in that status that also satisfy isRemoved()) — for most buckets these are equal since the status IS the removal signal.',
-  hostVideo: 'removed = same Removed count as the funnel above. active = identified − removed (clamped at 0). The ring % = removed ÷ (removed + active).',
+  hostVideo: 'removed = same Removed count as the Headline KPIs\' Removal figure. active = identified − removed (clamped at 0). The ring % = removed ÷ (removed + active).',
   channelsProfiles: 'Distinct channel/profile per platform: YouTube = channelId; Facebook/Instagram/Twitter = profileUrl; Telegram = channelUrl; UGC = channelOrProfileUrl. Removed = profileRemovalStatus is "Dead" (the Active/Dead column every paged endpoint returns); Active = everything else. YouTube additionally counts isChannelSuspended as removed (fallback for older cached rows). "Subscribers impacted" sums the MAX subscriberCount seen per distinct removed profile (not summed across every row, to avoid double-counting the same profile appearing on many URLs).',
-  headlineKpi: 'The single home for the top-line numbers (the old duplicate "At a glance" grid was retired into this column). Identification/Enforced/Removal mirror the Enforcement funnel for the currently selected platform, or all platforms combined. Views sums viewCount across all identified rows.',
+  headlineKpi: 'The single home for the top-line numbers (the old duplicate "At a glance" grid was retired into this column, and the duplicate Enforcement-funnel card beside it was retired the same way). Identification = total identified rows. Enforced = rows with a non-empty enforcementTime. Removal = rows where isRemoved() is true (Dead/Removed status, or Open Web delisting Approved). Views sums viewCount across all identified rows.',
   kpiIdentification: 'Total identified row count for the current platform/filter selection (Open Web: distinct host+linking URLs instead of raw rows).',
   kpiEnforced: 'Count of rows with a non-empty enforcementTime — a notice has gone out, regardless of whether it has been actioned yet.',
   kpiRemoval: 'Count of rows where isRemoved() is true (Dead/Removed status, or Open Web delisting Approved). The % shown is removed ÷ identified.',
   kpiViews: 'Sum of viewCount across every identified row for the current selection. Not shown for Open Web, which has no view-count concept.',
-  kpiPending: 'Identified − removed, clamped at 0 — URLs that have been found but are not yet down. Same figure as the funnel’s pending stage.',
+  kpiPending: 'Identified − removed, clamped at 0 — URLs that have been found but are not yet down.',
   kpiEngagement: 'Σ likeCount + Σ commentCount across every identified row for the current selection. Not shown for Open Web, which carries no engagement metrics.',
   removalRate: 'removed ÷ identified × 100, rounded to the nearest whole percent, for the current platform/filter selection.',
   tatUrlEnf: 'For each row, minutes between (urlUploadDate ?? discoveryDoneAt) and enforcementTime. Rows missing either timestamp, or with a negative gap, are excluded. Buckets start from the 0-15/16-30/31-45/46-60/1hr+ grid and then AUTO-ADJUST to the data: empty buckets at either end are dropped, and any bucket holding less than 20% of the rows is merged into its lighter neighbour, widening that range — so a bucket is never shown with no data behind it.',
   tatEnfRem: 'For each row, minutes between enforcementTime and the effective removal timestamp, bucketed with the same auto-adjusting rules. Effective removal time = removalTime for most platforms; for Open Web, host URLs use removalTime only once Dead, linking URLs use delistingTime only once delistingStatus is Approved.',
-  breakdownReason: 'Groups rows by infringementType (blank → "Unknown"). Identified = row count per type; Removed = rows of that type where isRemoved() is true.',
-  breakdownQuality: 'Groups rows by qualityOfPrint (blank → "Unknown"). Same identified/removed split as Infringement type.',
-  breakdownLanguage: 'Groups rows by the "language" field. Facebook/Instagram/Twitter rows populate this from audioLanguage instead (copied over once at ingestion since those endpoints don’t use a generic "language" field). Blank → "Unknown".',
-  breakdownCountry: 'Groups rows by the "country" field (blank → "Unknown"). Hidden entirely when Telegram is the selected platform — Telegram rows carry no meaningful country data.',
+  breakdownReason: 'Groups rows by infringementType. A row with nothing in that field contributes no bar here — it still counts in every total and KPI, just not in this breakdown — see the ⓘ icon to list the blank ones. Identified = row count per type; Removed = rows of that type where isRemoved() is true.',
+  breakdownQuality: 'Groups rows by qualityOfPrint. Same identified/removed split as Infringement type, and the same blank-row handling.',
+  breakdownLanguage: 'Groups rows by the "language" field. Facebook/Instagram/Twitter rows populate this from audioLanguage instead (copied over once at ingestion since those endpoints don’t use a generic "language" field). Same blank-row handling as Infringement type.',
+  breakdownCountry: 'Groups rows by the "country" field. Same blank-row handling as Infringement type. Hidden entirely when Telegram is the selected platform — Telegram rows carry no meaningful country data.',
   ugcPlatforms: 'Only shown when UGC & Other is the selected platform. The UGC endpoint is queried once per platform value — TikTok, Chomikuj, ShareChat, VK, OK, Bilibili, Dailymotion, plus the residual "UGC And Other Social Media" bucket — and named fetches tag their rows directly. Residual rows carry no platform field, so theirs is derived from the media-file URL domain (tiktok.com → TikTok, vk.com → VK, ok.ru → OK, dai.ly → Dailymotion, …; an unmapped domain shows as itself; no usable URL → "UGC & Other"). Bars: Identified = row count per platform; Removed = rows where isRemoved() is true. Line (right axis): removal % = removed ÷ identified × 100. Clicking a bar cross-filters every card by that platform; clicking it again clears the filter.',
-  repeatOffenders: 'A profile/channel (channelOrProfileUrl; YouTube: channelId) is a repeat offender when at least one of its URLs was removed (marked Dead, with a removalTime) and another of its URLs was discovered AFTER that first removal — i.e. it re-uploaded post-takedown. Identified / Removed = that profile’s total URL counts under the current filters; re-uploads = its URLs discovered after its first removal. Sorted by re-uploads. Profiles with no timestamped removal, or nothing discovered afterwards, don’t qualify. Clicking a row cross-filters every card to that profile’s URLs; clicking it again clears the filter.',
+  repeatOffenders: 'Same definition as the sports dashboard’s own Repeat Offenders panel (go-server/handlers/repeatoffenders.go). A profile/channel (channelOrProfileUrl; YouTube: channelId) is a repeat offender when at least one of its URLs was removed (marked Dead, with a removalTime) and another URL went up on the SAME profile afterwards. Uploads are counted per BATCH — every URL sharing one exact upload timestamp is one submission, not one re-upload each — so a single crawl sweep of fifty URLs from one profile counts as one event, not fifty. Identified / Removed = that profile’s total URL counts under the current filters; re-uploads = its upload batches discovered after its first removal. Profile status = Suspended when any of its rows carries profileRemovalStatus=Dead or (YouTube) isChannelSuspended=true, else Not Available — the account’s own state, separate from the per-URL removal count beside it. Sorted by re-uploads. Profiles with no timestamped removal, or nothing uploaded afterwards, don’t qualify. Clicking a row cross-filters every card to that profile’s URLs; clicking it again clears the filter.',
   assetCompare: 'Only shown when multiple assets are selected. Per asset: identified = row count (Open Web: distinct host+linking URLs, same as the platform cards); removed = rows where isRemoved() is true; rate = removed ÷ identified.',
 } as const
 
@@ -429,11 +428,28 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
       .sort((x, y) => y.identified - x.identified)
   }, [rows, filters])
 
-  // ── Repeat offenders: profiles whose new URLs were discovered AFTER one of
-  // their earlier URLs was already removed. Grouped by the canonical profile
-  // identity (channelOrProfileUrl; YouTube falls back to channelId). Anchor =
-  // the profile's EARLIEST timestamped removal; every URL discovered after
-  // that anchor is a re-upload. Computed from activeRows so it cross-filters.
+  /*
+    Repeat offenders — the SAME definition the sports dashboard's own panel
+    uses (go-server/handlers/repeatoffenders.go: computeRepeatOffenders), so
+    the two cannot disagree about what "a repeat" is.
+
+    One completed cycle: content went up, it came down, and MORE went up on
+    the same profile afterwards. That "went up" is counted per UPLOAD BATCH —
+    every URL sharing one exact upload timestamp — not per row. A single
+    crawl sweep that finds fifty of a profile's URLs at once is one
+    submission, not fifty comebacks; counting rows here would report that one
+    sweep as fifty re-uploads.
+
+    Anchor = the EARLIEST removal across all of the profile's batches (a
+    batch's own removal time is the LATEST among its rows, since the request
+    isn't answered until its last URL is down). Every batch uploaded after
+    that anchor is a re-upload, whether it has itself been removed yet or
+    not — same reasoning as the sports dashboard's repeatOffences: a bar of
+    one is already a true statement about a profile that ignored a takedown.
+
+    Grouped by the canonical profile identity (channelOrProfileUrl; YouTube
+    falls back to channelId). Computed from activeRows so it cross-filters.
+  */
   const repeatOffenders = useMemo(() => {
     const isRowRemoved = (r: WarRoomRow) => {
       if (String(r.removalTime ?? '').trim()) return true
@@ -457,27 +473,52 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
       }
       g.rows.push(r)
     }
-    const out: { key: string; url: string; identified: number; removed: number; reuploads: number }[] = []
+    const out: { key: string; url: string; identified: number; removed: number; reuploads: number; profileStatus: string }[] = []
     for (const [key, g] of groups) {
       if (g.rows.length < 2) continue
-      let firstRemoval: number | null = null
+
+      const batchRemoval = new Map<number, number>() // uploadedAt -> latest removedAt within that batch
+      const batchTimes = new Set<number>()
       for (const r of g.rows) {
+        const uploaded = parseTime(String(r.urlUploadDate ?? r.discoveryDoneAt ?? r.uploadDate ?? r.createdAt ?? ''))
+        if (!uploaded) continue
+        const uKey = uploaded.getTime()
+        batchTimes.add(uKey)
         if (!isRowRemoved(r)) continue
-        const t = parseTime(r.removalTime)
-        if (t && (firstRemoval === null || t.getTime() < firstRemoval)) firstRemoval = t.getTime()
+        const removedAt = parseTime(r.removalTime)
+        if (!removedAt) continue
+        const prev = batchRemoval.get(uKey)
+        if (prev === undefined || removedAt.getTime() > prev) batchRemoval.set(uKey, removedAt.getTime())
+      }
+
+      let firstRemoval: number | null = null
+      for (const t of batchRemoval.values()) {
+        if (firstRemoval === null || t < firstRemoval) firstRemoval = t
       }
       if (firstRemoval === null) continue
+
       let reuploads = 0
-      for (const r of g.rows) {
-        const d = parseTime(String(r.urlUploadDate ?? r.discoveryDoneAt ?? r.uploadDate ?? r.createdAt ?? ''))
-        if (d && d.getTime() > firstRemoval) reuploads++
+      for (const uploadedAt of batchTimes) {
+        if (uploadedAt > firstRemoval) reuploads++
       }
       if (!reuploads) continue
+
+      /* The ACCOUNT'S own state, as against one of its posts being removed —
+         same profileRemovalStatus (Dead/Active/blank) with isChannelSuspended
+         as YouTube's fallback that the Channels/Profiles card reads (see
+         rowProfileSuspended). Any row saying so is enough: an account does
+         not come back from Dead, so one row carrying it is the profile's
+         final state however many earlier rows were written while it was
+         still up. Mirrors profileStatusLabel in
+         go-server/handlers/repeatoffenders.go — same two words, same rule. */
+      const profileStatus = g.rows.some(rowProfileSuspended) ? 'Suspended' : 'Not Available'
+
       out.push({
         key, url: g.url,
         identified: g.rows.length,
         removed: g.rows.filter(isRowRemoved).length,
         reuploads,
+        profileStatus,
       })
     }
     return out.sort((a, b) => b.reuploads - a.reuploads || b.identified - a.identified)
@@ -494,9 +535,11 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
       return { ...prev, platform: next, subPlatform: next === 'ugc and other social media' ? prev.subPlatform : '' }
     })
 
-  // ── "Unknown" inspector ─────────────────────────────────────────────────
-  // A segment labelled Unknown means rows arrived with that field blank/null.
-  // Clicking the inspect icon on such a segment opens a modal listing the
+  // ── Blank-value inspector ────────────────────────────────────────────────
+  // segsFrom (lib/warroom.ts) drops any row with nothing in the field being
+  // grouped by, rather than drawing it as a displayed "Unknown" bar — so this
+  // is the only way left to see that the gap exists at all. The ⓘ-style icon
+  // in each breakdown panel's header (admin only) opens a modal listing the
   // MarkScan IDs behind it, so the gap can be traced back at the source.
   const [inspect, setInspect] = useState<{ dim: FilterDim; title: string } | null>(null)
   const DIM_FIELD: Record<FilterDim, (r: WarRoomRow) => string> = {
@@ -571,12 +614,6 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
     views: p.totals.views,
     engagement: p.totals.engagement,
   }))
-  const funnelExportRows = [
-    { stage: 'Identification', value: f.discovered },
-    { stage: 'Enforced',       value: f.enforced },
-    { stage: 'Removed',        value: f.removed },
-    { stage: 'Pending',        value: f.pending },
-  ]
   const urlDonutExportRows = [
     { state: 'Removed', value: rem.urlRemoved },
     { state: 'Pending', value: rem.urlPending },
@@ -642,19 +679,8 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
      three that remain grow instead of leaving a gap. */
   const funnelStatusRow = (
     <div className={`grid grid-cols-1 gap-3 items-stretch ${
-      activePlatform === 'internet' ? 'md:grid-cols-3' : 'md:grid-cols-2 xl:grid-cols-4'} ${fullWidthBlocks ? 'mt-3' : ''}`}>
+      activePlatform === 'internet' ? 'md:grid-cols-2' : 'md:grid-cols-3'} ${fullWidthBlocks ? 'mt-3' : ''}`}>
 
-      <div className="flex flex-col">
-        <Label info={admin && <InfoTip text={LOGIC.funnel} />}
-          action={<ExportButton label="Enforcement funnel" rows={funnelExportRows} columns={[
-            { key: 'stage', label: 'Stage' }, { key: 'value', label: 'URLs' },
-          ]} />}>
-          Enforcement funnel
-        </Label>
-        <Card className="mt-1 overflow-hidden flex-1 flex flex-col">
-          <FunnelView f={f} />
-        </Card>
-      </div>
       <div className="flex flex-col">
         <Label info={admin && <InfoTip text={LOGIC.hostVideo} />}
           action={<ExportButton label="Host URLs and Media Files" rows={urlDonutExportRows} columns={[
@@ -995,6 +1021,7 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
             action={<ExportButton label="Repeat offenders" rows={repeatOffenders} columns={[
               { key: 'url', label: 'Channel / profile' }, { key: 'identified', label: 'Identified' },
               { key: 'removed', label: 'Removed' }, { key: 'reuploads', label: 'Re-uploads after takedown' },
+              { key: 'profileStatus', label: 'Profile status' },
             ]} />}>
             Repeat offenders — profiles re-uploading after removal · click a row to filter
           </Label>
@@ -1217,7 +1244,7 @@ function UgcPlatformChart({ data, active, onSelect }: {
       Rows are clickable and cross-filter the whole report by that profile;
       clicking the active row again clears the filter. ─────────────────── */
 function RepeatOffendersCard({ data, active, onSelect }: {
-  data: { key: string; url: string; identified: number; removed: number; reuploads: number }[]
+  data: { key: string; url: string; identified: number; removed: number; reuploads: number; profileStatus: string }[]
   active?: string
   onSelect: (key: string) => void
 }) {
@@ -1254,14 +1281,31 @@ function RepeatOffendersCard({ data, active, onSelect }: {
             className={`grid items-center gap-2.5 rounded-lg px-1.5 py-1 text-left transition-all hover:bg-[#14254A]/5 dark:hover:bg-white/5 ${
               isActive ? 'bg-[#14254A]/5 ring-1 ring-[#14254A]/40 dark:bg-white/5 dark:ring-white/20' : ''} ${dimmed ? 'opacity-40' : ''}`}
             style={{ gridTemplateColumns: 'minmax(140px, 320px) 1fr auto auto' }}>
-            <span className="text-xs text-gray-600 truncate" title={d.url}>
-              {isLink(d.url) ? (
-                <a href={d.url} target="_blank" rel="noopener noreferrer"
-                  onClick={e => e.stopPropagation()}
-                  className="hover:text-[#FC934C] hover:underline">
-                  {pretty(d.url)}
-                </a>
-              ) : pretty(d.url)}
+            <span className="text-xs text-gray-600 flex items-center gap-1.5 min-w-0">
+              <span className="truncate" title={d.url}>
+                {isLink(d.url) ? (
+                  <a href={d.url} target="_blank" rel="noopener noreferrer"
+                    onClick={e => e.stopPropagation()}
+                    className="hover:text-[#FC934C] hover:underline">
+                    {pretty(d.url)}
+                  </a>
+                ) : pretty(d.url)}
+              </span>
+              {/* The ACCOUNT'S own state — Dead/Active (profileRemovalStatus),
+                  isChannelSuspended as YouTube's fallback — as against one of
+                  its posts being removed, which the bars beside this already
+                  show. Same two words as the sports dashboard's
+                  profileStatusLabel: "Suspended" is the only state a reader
+                  can act on; anything else (Active, blank, a field this
+                  platform doesn't carry) is "we were never told" and printed
+                  the same as each other rather than inviting more trust in
+                  one than the other. */}
+              <span className="flex-shrink-0 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full whitespace-nowrap"
+                style={d.profileStatus === 'Suspended'
+                  ? { background: '#14254A1A', color: NAVY_TEXT }
+                  : { background: '#9ca3af22', color: '#6b7280' }}>
+                {d.profileStatus}
+              </span>
             </span>
             <span className="flex flex-col gap-1">
               <span className="h-1.5 rounded" style={{ width: `${(d.identified / max) * 100}%`, minWidth: 2, background: NAVY }} />
@@ -1317,44 +1361,6 @@ function TrendChart({ data }: { data: { date: string; identified: number; remove
         <Area type="monotone" dataKey="removed"    name="Removed"    stroke={ORANGE} fill="url(#wrOrange)" strokeWidth={2.2} dot={false} />
       </AreaChart>
     </ResponsiveContainer>
-  )
-}
-
-/* ── Enforcement funnel ───────────────────────────────────────────────── */
-function FunnelView({ f }: { f: Funnel }) {
-  const stages = [
-    { k: 'Identification', v: f.discovered },
-    { k: 'Enforced',       v: f.enforced },
-    { k: 'Removed',        v: f.removed },
-  ]
-  const max = Math.max(1, f.discovered)
-  return (
-    <div className="flex-1 flex flex-col">
-      {stages.map((st, i) => {
-        const pct  = Math.round((st.v / max) * 100)
-        const conv = i === 0 ? null : Math.round((st.v / (stages[i - 1].v || 1)) * 100)
-        const last = i === stages.length - 1
-        return (
-          <div key={st.k}
-            className="flex-1 grid items-center gap-3 px-5 py-3.5 border-b border-gray-100 last:border-0"
-            style={{ gridTemplateColumns: '110px 1fr 52px' }}>
-            <div className="text-xs font-semibold text-gray-600">{st.k}</div>
-            <div className="h-7 rounded-lg bg-gray-100 overflow-hidden">
-              <div className="h-full rounded-lg flex items-center min-w-[40px] transition-all"
-                style={{
-                  width: `${Math.max(pct, 4)}%`,
-                  background: last
-                    ? `linear-gradient(90deg,#d97b2e,${ORANGE})`
-                    : `linear-gradient(90deg,${NAVY},#1e3a6e)`,
-                }}>
-                <span className="text-xs font-bold text-white px-2.5 whitespace-nowrap">{nf(st.v)}</span>
-              </div>
-            </div>
-            <div className="text-[11px] font-bold text-gray-400 text-right">{conv === null ? '—' : `${conv}%`}</div>
-          </div>
-        )
-      })}
-    </div>
   )
 }
 
@@ -1524,7 +1530,17 @@ function SegmentBars({ title, data, dim, active, onSelect, onInspect, info, clas
           <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full"
             style={{ background: '#FC934C22', color: ORANGE_TEXT }}>filtered</span>
         )}
-        <span className="ml-auto flex items-center">
+        <span className="ml-auto flex items-center gap-1">
+          {onInspect && (
+            <span role="button" tabIndex={0} title="See the IDs with nothing in this field — excluded from the bars above"
+              onClick={() => onInspect(dim, title)}
+              onKeyDown={e => { if (e.key === 'Enter') onInspect(dim, title) }}
+              className="flex-shrink-0 w-4 h-4 grid place-items-center rounded-full text-gray-400 hover:text-[#14254A] hover:bg-[#14254A]/10 transition-colors">
+              <svg width="10" height="10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <circle cx="12" cy="12" r="9" /><path strokeLinecap="round" d="M12 8h.01M12 11v5" />
+              </svg>
+            </span>
+          )}
           <ExportButton label={exportLabel ?? title} columns={SEGMENT_EXPORT_COLS} rows={segs} />
         </span>
       </div>
@@ -1535,25 +1551,12 @@ function SegmentBars({ title, data, dim, active, onSelect, onInspect, info, clas
           {segs.slice(0, 10).map(sg => {
             const isActive = sg.key === active
             const dimmed   = hasActive && !isActive
-            const isUnknown = sg.label.trim().toLowerCase() === 'unknown'
             return (
               <button key={sg.key} onClick={() => onSelect(dim, sg.key)}
                 className={`grid items-center gap-2.5 rounded-lg px-1.5 py-1 text-left transition-all hover:bg-[#14254A]/5 dark:hover:bg-white/5 ${
                   isActive ? 'bg-[#14254A]/5 ring-1 ring-[#14254A]/40 dark:bg-white/5 dark:ring-white/20' : ''} ${dimmed ? 'opacity-40' : ''}`}
                 style={{ gridTemplateColumns: '96px 1fr auto' }}>
-                <span className="text-xs text-gray-600 truncate flex items-center gap-1" title={sg.label}>
-                  <span className="truncate">{sg.label}</span>
-                  {isUnknown && onInspect && (
-                    <span role="button" tabIndex={0} title="See the IDs behind this blank value"
-                      onClick={e => { e.stopPropagation(); onInspect(dim, title) }}
-                      onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); onInspect(dim, title) } }}
-                      className="flex-shrink-0 w-4 h-4 grid place-items-center rounded-full text-gray-400 hover:text-[#14254A] hover:bg-[#14254A]/10 transition-colors">
-                      <svg width="10" height="10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                        <circle cx="12" cy="12" r="9" /><path strokeLinecap="round" d="M12 8h.01M12 11v5" />
-                      </svg>
-                    </span>
-                  )}
-                </span>
+                <span className="text-xs text-gray-600 truncate" title={sg.label}>{sg.label}</span>
                 <span className="flex flex-col gap-1">
                   <span className="h-1.5 rounded" style={{ width: `${(sg.identified / max) * 100}%`, minWidth: 2, background: NAVY }} />
                   <span className="h-1.5 rounded" style={{ width: `${(sg.removed    / max) * 100}%`, minWidth: 2, background: ORANGE }} />

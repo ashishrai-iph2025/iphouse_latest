@@ -221,6 +221,46 @@ func WarRoomStream(w http.ResponseWriter, r *http.Request) {
 	send("done", payload)
 }
 
+// fullPullDecision is why one asset's fetch this round is a full pull rather
+// than an incremental delta, split out so the reason can be logged (and
+// tested) without re-deriving it from the same five values twice.
+type fullPullDecision struct {
+	full, widened, extended bool
+}
+
+/*
+decideFullPull is full when forced, the asset is new, there's nothing stored
+yet, or the requested window reaches OUTSIDE what the stored dataset is known
+complete over — on EITHER side. An incremental (updatedSince) pull can never
+backfill a row that was already settled in MarkScan before the store first
+asked about its date, regardless of which side of the window that row falls
+on: its own updatedAt predates lastFetch, so nothing about it looks "changed
+since" to an incremental request.
+
+WIDENED — the start moved earlier than the dataset's known-complete start.
+Unchanged from before this function existed: a report window moved further
+back in time used to silently show the same counts no matter how far the user
+went, because an incremental pull only ever adds forward from lastFetch.
+
+EXTENDED — the end-side twin, and the gap that let a report window moved
+FORWARD silently show empty instead of widened.
+
+coverageEnd is "" exactly when the dataset's last full pull was itself
+open-ended — there is no boundary to have fallen behind, because an open pull
+plus the incremental refreshes since keep reaching for "now" on their own. It
+holds a date only when a PAST pull was explicitly bounded, the way a fixed
+report window ("2026-08-11 → 2026-08-31") is — and that pull's promise covers
+nothing past its own end date. A later request reaching further than that —
+an explicit end date past it, or no end date at all, which reaches for
+everything — is asking about a day nothing has ever fetched.
+*/
+func decideFullPull(mode string, hasData bool, existing int, coverageStart, coverageEnd, wantStart, wantEnd string) fullPullDecision {
+	widened := wantStart != "" && (coverageStart == "" || wantStart < coverageStart)
+	extended := coverageEnd != "" && (wantEnd == "" || wantEnd > coverageEnd)
+	full := mode == "full" || !hasData || existing == 0 || widened || extended
+	return fullPullDecision{full: full, widened: widened && hasData, extended: extended && hasData}
+}
+
 // processWarRoom holds the actual fan-out + aggregation logic shared by the
 // plain and streaming endpoints. onProgress (nilable) is invoked around each
 // platform's fetch, tagged with the asset it belongs to.
@@ -247,19 +287,19 @@ func processWarRoom(ctx context.Context, token string, ownerID int64, body warRo
 		}
 
 		key := fmt.Sprintf("u%d:%s", ownerID, store.Key(assetName))
-		lastFetch, coverageStart, existing, hasData := warStore.Meta(ctx, key)
+		lastFetch, coverageStart, coverageEnd, existing, hasData := warStore.Meta(ctx, key)
 
-		// Full when forced, asset is new, there's nothing stored yet, or the
-		// requested window starts BEFORE the stored dataset's coverage — an
-		// incremental (updatedSince) pull can never backfill historical rows
-		// the original pull's startDate excluded, so widening the date range
-		// used to silently show the same counts no matter how far back the
-		// user went.
-		widened := body.StartDate != "" &&
-			(coverageStart == "" || body.StartDate < coverageStart)
-		assetFull := body.Mode == "full" || !hasData || existing == 0 || widened
-		if widened && hasData {
+		decision := decideFullPull(body.Mode, hasData, existing, coverageStart, coverageEnd, body.StartDate, body.EndDate)
+		assetFull := decision.full
+		if decision.widened {
 			log.Printf("[warroom] asset=%q window widened (%s < %q) — forcing full re-pull", assetName, body.StartDate, coverageStart)
+		}
+		if decision.extended {
+			end := body.EndDate
+			if end == "" {
+				end = "open-ended"
+			}
+			log.Printf("[warroom] asset=%q window extended (%s past coverage end %q) — forcing full re-pull", assetName, end, coverageEnd)
 		}
 		if assetFull {
 			anyFull = true
@@ -270,9 +310,20 @@ func processWarRoom(ctx context.Context, token string, ownerID int64, body warRo
 
 		reqBody := map[string]any{"assetName": assetName}
 		if assetFull {
-			reqBody["startDate"] = body.StartDate
-			if body.EndDate != "" {
-				reqBody["endDate"] = body.EndDate
+			/* body.StartDate/EndDate are calendar days on the report's IST
+			   business calendar (the date-range control sends bare
+			   "YYYY-MM-DD"), but MarkScan's startDate/endDate filter against
+			   UTC instants. Sending the bare day as-is is read as UTC
+			   midnight — 5h30m after the IST midnight the picker meant — and
+			   the pull opens that late, missing every row from the first
+			   5.5 hours of the requested start day. See MarkScanDayRange. */
+			start, end, ok := markscan.MarkScanDayRange(body.StartDate, body.EndDate)
+			if !ok {
+				return nil, &apiErr{422, "startDate/endDate must be YYYY-MM-DD"}
+			}
+			reqBody["startDate"] = start
+			if end != "" {
+				reqBody["endDate"] = end
 			}
 		} else {
 			reqBody["updatedSince"] = markscan.MarkScanTime(lastFetch)
@@ -312,13 +363,16 @@ func processWarRoom(ctx context.Context, token string, ownerID int64, body warRo
 				_ = warStore.Upsert(ctx, key, rows)
 			}
 		}
-		// Record coverage: a full pull covers from its startDate; an
-		// incremental keeps the coverage the stored dataset already had.
-		newCoverage := coverageStart
+		// Record coverage: a full pull covers exactly the window it
+		// requested, start and end (end stays "" for an open-ended pull,
+		// same meaning as before); an incremental keeps the coverage the
+		// stored dataset already had on both sides.
+		newCoverageStart, newCoverageEnd := coverageStart, coverageEnd
 		if assetFull {
-			newCoverage = body.StartDate
+			newCoverageStart = body.StartDate
+			newCoverageEnd = body.EndDate
 		}
-		_ = warStore.SetMeta(ctx, key, fetchStart, newCoverage)
+		_ = warStore.SetMeta(ctx, key, fetchStart, newCoverageStart, newCoverageEnd)
 		totalPulled += countRows(fetched)
 	}
 

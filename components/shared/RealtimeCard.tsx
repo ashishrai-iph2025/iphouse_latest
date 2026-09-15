@@ -37,6 +37,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import InfoDot from '@/components/shared/InfoDot'
 import SearchableSelect from '@/components/ui/SearchableSelect'
+import { istNow } from '@/lib/warroom'
 
 export interface RealtimePlatform {
   key: string
@@ -104,7 +105,10 @@ before this existed — the dates then come from the page, exactly as they did.
 function windowDates(hours: number): { start: string; end: string } | null {
   if (hours <= 0) return null
   const days = Math.max(1, Math.ceil(hours / 24))
-  const end = new Date()
+  // istNow, not `new Date()` — MarkScan's dates are the report's IST calendar
+  // (see lib/warroom.ts); a UTC "now" would end this window a day early for
+  // the 5.5 hours after IST midnight, breaking parity with the report below.
+  const end = istNow()
   const start = new Date(end)
   start.setUTCDate(start.getUTCDate() - (days - 1))
   const iso = (d: Date) => d.toISOString().slice(0, 10)

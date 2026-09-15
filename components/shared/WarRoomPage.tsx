@@ -8,7 +8,7 @@ import Breadcrumb from '@/components/ui/Breadcrumb'
 import WarRoomReport from '@/components/shared/WarRoomReport'
 import WarRoomComparison from '@/components/shared/WarRoomComparison'
 import {
-  streamWarRoom, fetchWarRoom, fetchWarRoomClients, fetchWarRoomClientToken,
+  streamWarRoom, fetchWarRoom, fetchWarRoomClients, fetchWarRoomClientToken, istNow,
   type WarRoomReport as Report, type WarRoomRow, type WarRoomMeta,
   type ClientOption, type WarRoomProgressEvent,
 } from '@/lib/warroom'
@@ -46,8 +46,11 @@ const ORANGE_GRADIENT = 'linear-gradient(135deg,#FFC82B,#FC934C)'
 // Comparison, which anchors its "first N days" windows on it.
 interface Opt { key: string; label: string; warRoomStartDate?: string; warRoomEndDate?: string }
 
+// istNow (not `new Date()`) — the report's calendar is IST, see its comment
+// in lib/warroom.ts. Using the browser's UTC clock here would name the wrong
+// calendar day for 5.5 hours after IST midnight, shifting this default window.
 function isoDaysAgo(n: number) {
-  const d = new Date(); d.setUTCDate(d.getUTCDate() - n); return d.toISOString().slice(0, 10)
+  const d = istNow(); d.setUTCDate(d.getUTCDate() - n); return d.toISOString().slice(0, 10)
 }
 
 // Quick date filters. Each preset means "the last N days of available data",
@@ -78,7 +81,9 @@ function shiftIso(iso: string, days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
-const todayIso = () => new Date().toISOString().slice(0, 10)
+// Same IST reasoning as isoDaysAgo above — this feeds rangeAnchor's fallback
+// and cap, so a UTC "today" would let the picker reach one day too far.
+const todayIso = () => istNow().toISOString().slice(0, 10)
 
 // Default asset when landing on the page: the only asset if there is just one,
 // otherwise the asset with the latest warRoomEndDate (assets without an end

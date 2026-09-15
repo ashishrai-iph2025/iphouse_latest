@@ -21,9 +21,13 @@ Which titles a sports report is allowed to name.
 	There is no genre on the fact table to filter by. A genre is a property of the
 	TITLE, recorded once in mediascan.AssetGenre and never repeated on the rows.
 	That is the same shape as FranchiseName and MatchDay, and those reach a report
-	because reports_api joins the master onto the four sports tables (see
-	internal/api/assetattrs.go in that service). The mobile-apps table is not one
-	of the four and carries none of them.
+	because reports_api joins the master onto every dataset whose entry names an
+	AssetIDCol (see internal/api/assetattrs.go in that service) — the four sports
+	tables, and now the mobile-apps dataset too. Genre could not be handled the
+	same way: it is a MANY-valued set on the master (mediascan.AssetGenre), where
+	FranchiseName and MatchDay are single columns on mediascan.Asset itself, so
+	the generic join exposes those two directly and this file exists only for the
+	one attribute the join cannot carry.
 
 	/v1/masters/assets does carry it. `Genre` on an asset row is a comma-joined
 	SET of readable names — Sports, Movies, Television, Originals — an asset can

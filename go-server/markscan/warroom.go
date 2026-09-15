@@ -720,9 +720,16 @@ type segAgg struct {
 
 func newSegAgg() *segAgg { return &segAgg{byKey: map[string]*Segment{}} }
 
+// A blank label is a data gap (the field was never populated for this row),
+// not a value — folding it into a displayed "Unknown" bucket used to make a
+// missing-data problem look like a real answer sitting beside Hindi, HDCAM
+// and the rest. Rows with nothing in the field still count everywhere else
+// (totals, KPIs); they just contribute no bar to THIS breakdown, the same way
+// a row with no country contributes nothing to a countries panel that only
+// draws countries.
 func addSeg(a *segAgg, label string, removed bool) {
 	if strings.TrimSpace(label) == "" {
-		label = "Unknown"
+		return
 	}
 	// Use lowercase as the map key so "Dead" and "DEAD" are the same bucket.
 	normKey := strings.ToLower(label)
@@ -885,17 +892,53 @@ func firstNonEmptyVal(r map[string]any, keys ...string) any {
 // correctly sitting in the store — "rows stored" >> "rows shown"). The fields
 // below are a safety net, tried only when neither preferred field is present, so
 // a platform's rows still get a usable day instead of disappearing outright.
+//
+// THE DAY IS TAKEN ON THE REPORT'S IST CALENDAR, NOT THE RAW STRING'S OWN DATE.
+//
+// Every field above is a UTC instant ("2026-08-11T02:15:00.000Z"), like every
+// other MarkScan timestamp — see MarkScanDayRange. Slicing its first ten
+// characters names the UTC day, which is the wrong calendar day for the 5h30m
+// after IST midnight: a row uploaded at 2026-08-10T19:00:00.000Z is
+// 2026-08-11 00:30 IST — it belongs to the 11th — but the naive slice named it
+// "2026-08-10". A reader whose window started on the 11th had that row
+// silently excluded, in exactly the hours right after midnight a live reader
+// is most likely to be watching. Shifting the parsed instant by reportTZShift
+// before formatting is the same correction istToday and MarkScanDayRange
+// already apply; this is the third and last place a bare UTC slice was
+// standing in for it.
 func ReportDay(r map[string]any) string {
 	for _, k := range []string{
 		"urlUploadDate", "URLUploadDate", "discoveryDoneAt", "DiscoveryDoneAt",
 		"uploadDate", "UploadDate", "enforcementTime", "removalTime", "createdAt", "CreatedAt",
 	} {
 		s := strFrom(r[k])
-		if len(s) >= 10 {
-			return s[:10]
+		if len(s) < 10 {
+			continue
 		}
+		if t, ok := parseReportInstant(s); ok {
+			return t.Add(reportTZShift).Format("2006-01-02")
+		}
+		// Unparseable as any known timestamp shape — fall back to the raw
+		// slice rather than dropping the row's day entirely.
+		return s[:10]
 	}
 	return ""
+}
+
+// parseReportInstant recovers the actual TIME of day off a row's raw
+// timestamp, unlike parseReportDay below — which exists only to compare bare
+// calendar-day QUERY bounds and deliberately discards time of day by design.
+// Reuses reportDateLayouts: time.Parse rejects a layout that doesn't consume
+// the whole string, so a bare "2006-01-02" layout simply fails (rather than
+// truncating) against a full timestamp and falls through to a layout that
+// matches it whole.
+func parseReportInstant(value string) (time.Time, bool) {
+	for _, layout := range reportDateLayouts {
+		if t, err := time.Parse(layout, value); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func dayOf(r map[string]any) string { return ReportDay(r) }
@@ -970,6 +1013,77 @@ func toInt(v any) (int, bool) {
 // MarkScanTime formats a time for the MarkScan request bodies (ISO-8601 UTC).
 func MarkScanTime(t time.Time) string {
 	return t.UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+/*
+reportTZShift converts a UTC instant into the report's business calendar.
+
++05:30, and named to agree with the two other places this offset is written:
+handlers/realtime.go's reportTZShift (which istToday and rollingScope build
+on) and lib/warroom.ts's IST_OFFSET_MS. Redeclared here rather than imported —
+handlers already imports this package, so the reverse would cycle — but it is
+the same rule, and the three must not drift apart from each other.
+*/
+const reportTZShift = 330 * time.Minute
+
+/*
+MarkScanDayRange turns a report-calendar (IST) date range into the UTC instant
+bounds MarkScan's Paged endpoints actually filter by.
+
+WHY A BARE DATE IS THE WRONG THING TO SEND.
+
+startDay/endDay are calendar days on the report's IST business calendar — the
+same "2026-08-11" a reader picked on the date-range control. MarkScan's
+startDate/endDate filter against stored UTC instants, so a bare
+"2026-08-11" sent as-is is read as 2026-08-11T00:00:00Z — UTC midnight, which
+is 5h30m AFTER the IST midnight the reader meant. The window then opens 5.5
+hours late and misses every row uploaded in the first 5.5 hours of the
+requested start day (IST 00:00-05:30, which is still the PREVIOUS UTC day) —
+undercounting the report by exactly the rows a reader is most likely to
+notice are missing, because they are the most recent ones. A manual request
+built with the correct UTC bounds (istDayStart(startDay) through one
+millisecond before istDayStart(endDay+1)) returns the true total; this
+function is what makes the portal's own fetch build the same bounds.
+
+endDay may be empty — callers already treat body.EndDate as optional (an
+open-ended pull) — in which case `end` comes back empty too and is left off
+the request the same way MarkScanTime's caller already does for updatedSince.
+
+`ok` is false only when a day string is not "YYYY-MM-DD" at all, which is a
+caller bug (the front end always sends toISOString().slice(0,10)) rather than
+a data condition to fail open on.
+*/
+func MarkScanDayRange(startDay, endDay string) (start, end string, ok bool) {
+	istDayStart := func(day string) (time.Time, bool) {
+		t, err := time.Parse("2006-01-02", day)
+		if err != nil {
+			return time.Time{}, false
+		}
+		// t is UTC-located midnight on `day` with no offset applied (time.Parse's
+		// zero-value zone for a layout with no zone spec) — subtracting the
+		// report's UTC offset turns "IST midnight on day" into the UTC instant
+		// it actually is, the same conversion istToday runs in reverse.
+		return t.Add(-reportTZShift), true
+	}
+
+	s, ok := istDayStart(startDay)
+	if !ok {
+		return "", "", false
+	}
+	start = MarkScanTime(s)
+	if endDay == "" {
+		return start, "", true
+	}
+	e, ok := istDayStart(endDay)
+	if !ok {
+		return "", "", false
+	}
+	// The last instant still on endDay's report calendar: one millisecond
+	// before the following day's IST midnight, not endDay's own UTC midnight —
+	// which is 5h30m early and would cut the last 5.5 hours of the requested
+	// end day off the window.
+	end = MarkScanTime(e.AddDate(0, 0, 1).Add(-time.Millisecond))
+	return start, end, true
 }
 
 // logf is a thin wrapper so aggregation issues surface without a hard dep.

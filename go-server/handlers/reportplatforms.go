@@ -273,8 +273,9 @@ var (
 		   A franchise and a match day are properties of the TITLE, recorded once
 		   on mediascan.Asset and never repeated on the fact rows — so these are
 		   columns the reports API produces by joining the master (see
-		   internal/api/assetattrs.go in that service), offered on the four
-		   sports tables and on nothing else.
+		   internal/api/assetattrs.go in that service), offered on every dataset
+		   whose registry entry names an AssetIDCol — the four raw sports tables,
+		   and the Mobile Apps dashboard table as well.
 
 		   Which is exactly why they need no special handling here: a table that
 		   does not carry them matches no candidate, and a report that is not

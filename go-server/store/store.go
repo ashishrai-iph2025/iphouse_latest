@@ -32,12 +32,24 @@ type Store interface {
 	Upsert(ctx context.Context, key string, rows []Row) error
 	// Reset clears every stored row and metadata for an asset key.
 	Reset(ctx context.Context, key string) error
-	// Meta returns the last successful fetch time, the startDate the stored
-	// dataset covers from (YYYY-MM-DD, "" if unknown), and stored row count.
-	Meta(ctx context.Context, key string) (lastFetch time.Time, coverageStart string, count int, ok bool)
+	/* Meta returns the last successful fetch time, the date range the stored
+	   dataset is known COMPLETE over (YYYY-MM-DD, "" if unknown on either
+	   end), and stored row count.
+
+	   coverageEnd exists for the same reason coverageStart does — see
+	   handlers/warroom.go's widened/extended checks — but the failure it
+	   guards against runs the OTHER direction. An incremental pull
+	   (updatedSince=lastFetch) only ever catches rows that changed since the
+	   last pull; it can never backfill a row that was already old in
+	   MarkScan before this store ever asked for it. A full pull scoped to
+	   startDate..endDate is a promise that everything in that window has
+	   been asked for at least once — a later request whose window reaches
+	   past endDate is asking about territory that promise never covered, and
+	   needs a full pull of its own rather than a delta. */
+	Meta(ctx context.Context, key string) (lastFetch time.Time, coverageStart, coverageEnd string, count int, ok bool)
 	// SetMeta records the last successful fetch time and the coverage
-	// startDate for an asset key.
-	SetMeta(ctx context.Context, key string, lastFetch time.Time, coverageStart string) error
+	// start/end dates for an asset key.
+	SetMeta(ctx context.Context, key string, lastFetch time.Time, coverageStart, coverageEnd string) error
 	// Kind reports the active backend ("redis" or "memory") for diagnostics.
 	Kind() string
 }
@@ -160,26 +172,27 @@ func (s *redisStore) Reset(ctx context.Context, key string) error {
 type metaBlob struct {
 	LastFetch     time.Time `json:"lastFetch"`
 	CoverageStart string    `json:"coverageStart"`
+	CoverageEnd   string    `json:"coverageEnd"`
 	Count         int       `json:"count"`
 }
 
-func (s *redisStore) Meta(ctx context.Context, key string) (time.Time, string, int, bool) {
+func (s *redisStore) Meta(ctx context.Context, key string) (time.Time, string, string, int, bool) {
 	raw, err := s.rdb.Get(ctx, s.metaKey(key)).Bytes()
 	if err != nil {
 		return s.mem.Meta(ctx, key)
 	}
 	var mb metaBlob
 	if json.Unmarshal(raw, &mb) != nil {
-		return time.Time{}, "", 0, false
+		return time.Time{}, "", "", 0, false
 	}
 	// count reflects the live hash length, not the stale meta snapshot.
 	n, _ := s.rdb.HLen(ctx, s.rowsKey(key)).Result()
-	return mb.LastFetch, mb.CoverageStart, int(n), true
+	return mb.LastFetch, mb.CoverageStart, mb.CoverageEnd, int(n), true
 }
 
-func (s *redisStore) SetMeta(ctx context.Context, key string, lastFetch time.Time, coverageStart string) error {
-	_ = s.mem.SetMeta(ctx, key, lastFetch, coverageStart)
-	b, _ := json.Marshal(metaBlob{LastFetch: lastFetch, CoverageStart: coverageStart})
+func (s *redisStore) SetMeta(ctx context.Context, key string, lastFetch time.Time, coverageStart, coverageEnd string) error {
+	_ = s.mem.SetMeta(ctx, key, lastFetch, coverageStart, coverageEnd)
+	b, _ := json.Marshal(metaBlob{LastFetch: lastFetch, CoverageStart: coverageStart, CoverageEnd: coverageEnd})
 	if err := s.rdb.Set(ctx, s.metaKey(key), b, rowTTL).Err(); err != nil {
 		log.Printf("[warroom store] redis SetMeta failed (%v) — kept in memory", err)
 	}
@@ -191,6 +204,7 @@ func (s *redisStore) SetMeta(ctx context.Context, key string, lastFetch time.Tim
 type memMeta struct {
 	lastFetch     time.Time
 	coverageStart string
+	coverageEnd   string
 }
 
 type memStore struct {
@@ -240,19 +254,19 @@ func (s *memStore) Reset(_ context.Context, key string) error {
 	return nil
 }
 
-func (s *memStore) Meta(_ context.Context, key string) (time.Time, string, int, bool) {
+func (s *memStore) Meta(_ context.Context, key string) (time.Time, string, string, int, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	m, ok := s.meta[key]
 	if !ok {
-		return time.Time{}, "", 0, false
+		return time.Time{}, "", "", 0, false
 	}
-	return m.lastFetch, m.coverageStart, len(s.data[key]), true
+	return m.lastFetch, m.coverageStart, m.coverageEnd, len(s.data[key]), true
 }
 
-func (s *memStore) SetMeta(_ context.Context, key string, lastFetch time.Time, coverageStart string) error {
+func (s *memStore) SetMeta(_ context.Context, key string, lastFetch time.Time, coverageStart, coverageEnd string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.meta[key] = memMeta{lastFetch: lastFetch, coverageStart: coverageStart}
+	s.meta[key] = memMeta{lastFetch: lastFetch, coverageStart: coverageStart, coverageEnd: coverageEnd}
 	return nil
 }

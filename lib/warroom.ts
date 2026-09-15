@@ -252,7 +252,16 @@ export function shiftIsoDays(iso: string, days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
-export const todayIsoDay = (): string => new Date().toISOString().slice(0, 10)
+// The report's calendar is IST (+05:30) system-wide — see go-server's
+// reportTZShift/istToday (handlers/realtime.go) for the backend half of the
+// same rule. Deriving "today" from the browser's own UTC clock instead names
+// the wrong calendar day for the 5.5 hours after IST midnight (the UTC
+// evening of the previous day), which silently shifts every default
+// date-range boundary — and every "Identified" count — built on it.
+export const IST_OFFSET_MS = 330 * 60 * 1000
+export const istNow = (): Date => new Date(Date.now() + IST_OFFSET_MS)
+
+export const todayIsoDay = (): string => istNow().toISOString().slice(0, 10)
 
 export type WarRoomMode = 'auto' | 'full' | 'incremental'
 
@@ -472,6 +481,18 @@ export const rowChannelKey = (r: WarRoomRow): string =>
 const profileDead = (r: WarRoomRow): boolean =>
   String(r.profileRemovalStatus ?? '').trim().toLowerCase() === 'dead'
 
+/*
+rowProfileSuspended is whether the ACCOUNT itself is down, as against one of
+its posts being removed — profileRemovalStatus's own Dead/Active/blank column,
+with isChannelSuspended as the fallback YouTube's older cached rows carry
+instead. Exported so the repeat-offenders panel (WarRoomReport.tsx) reports
+the same Suspended/Not Available state this file's own Channels/Profiles card
+does — two readings of the same field disagreeing about whether an account is
+still up would be worse than not showing the state at all.
+*/
+export const rowProfileSuspended = (r: WarRoomRow): boolean =>
+  profileDead(r) || (!!String(r.channelId ?? '').trim() && !!r.isChannelSuspended)
+
 // Fallback chain mirrors the backend's ReportDay: not every platform populates
 // urlUploadDate/discoveryDoneAt, so rows without either would otherwise get no
 // day at all and drop out of date-bucketed views (trend chart, TAT).
@@ -480,10 +501,17 @@ export const rowDay = (r: WarRoomRow): string => {
   return s.length >= 10 ? s.slice(0, 10) : ''
 }
 
+// A blank field is a data gap, not a value — bucketing it as a displayed
+// "Unknown" segment used to make a missing-data problem look like a real
+// answer sitting beside Hindi, HDCAM and the rest. Skipped here rather than
+// relabelled: the row still counts everywhere else (totals, KPIs), it just
+// contributes no bar to THIS breakdown. Mirrors addSeg in
+// go-server/markscan/warroom.go, which builds the same panels server-side.
 function segsFrom(rows: WarRoomRow[], pick: (r: WarRoomRow) => string): Segment[] {
   const map = new Map<string, Segment>()
   for (const r of rows) {
-    const raw = (pick(r) || 'Unknown').trim()
+    const raw = pick(r).trim()
+    if (!raw) continue
     const normKey = raw.toLowerCase() // case-insensitive dedup key
     let s = map.get(normKey)
     if (!s) {
@@ -533,8 +561,7 @@ function aggregateSet(rows: WarRoomRow[]): {
     if (chKey) {
       let cs = channels.get(chKey)
       if (!cs) { cs = { suspended: false, subs: 0 }; channels.set(chKey, cs) }
-      const chRemoved = profileDead(r) || (!!String(r.channelId ?? '').trim() && !!r.isChannelSuspended)
-      if (chRemoved) cs.suspended = true
+      if (rowProfileSuspended(r)) cs.suspended = true
       const s = num(r.subscriberCount)
       if (s > cs.subs) cs.subs = s
     }
