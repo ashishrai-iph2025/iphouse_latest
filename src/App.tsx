@@ -24,9 +24,12 @@ const DashboardPage        = lazy(() => import('@/app/(client)/dashboard/page'))
 const InfringementPage     = lazy(() => import('@/app/(client)/infringement/page'))
 // The staff report in scoped mode — see app/(client)/reports/page.tsx.
 const ClientReportsPage    = lazy(() => import('@/app/(client)/reports/page'))
-/* The client landing page for a Reports login — see the redirect in
-   app/(client)/dashboard/page.tsx. Not a nav item: it is reached by signing in,
-   or via the logo, which routes through /dashboard. */
+// Same report, scoped + narrowed to VOD platforms — see app/(client)/report-vod/page.tsx.
+const ClientVODReportsPage = lazy(() => import('@/app/(client)/report-vod/page'))
+/* The client landing page for a login holding the Calendar grant — see the
+   redirect in app/(client)/dashboard/page.tsx. Also its own nav tab
+   (lib/navItems.tsx), reached directly rather than through /dashboard when
+   clicked there. */
 const WelcomePage          = lazy(() => import('@/app/(client)/welcome/page'))
 const InfringementPlatPage = lazy(() => import('@/app/(client)/infringement/[platform]/page'))
 const InfringementCatPage  = lazy(() => import('@/app/(client)/infringement/category/page'))
@@ -616,6 +619,7 @@ export default function App() {
           <Route path="/welcome"                  element={<WelcomePage />} />
           <Route path="/war-room"                 element={<WarRoomPage />} />
           <Route path="/reports"                  element={<ClientReportsPage />} />
+          <Route path="/report-vod"               element={<ClientVODReportsPage />} />
           <Route path="/infringement"             element={<InfringementPage />} />
           {/* Three segments, so it never competes with /infringement/:platform. */}
           <Route path="/infringement/category/:category" element={<InfringementCategoryRoute />} />
@@ -655,6 +659,9 @@ export default function App() {
           <Route path="/admin/email-templates"            element={<EmailTemplatesPage />} />
           <Route path="/admin/email-event-types"         element={<EmailEventTypesPage />} />
           <Route path="/admin/reports"                   element={<AdminReportsPage />} />
+          {/* Staff preview of the VOD Reports page — same component, unscoped
+              (staff pick the client) and narrowed to VOD platforms. */}
+          <Route path="/admin/report-vod"                element={<AdminReportsPage vod />} />
           <Route path="/admin/report-config"             element={<ReportConfigPage />} />
           <Route path="/admin/modules"                    element={<ModulesPage />} />
           <Route path="/admin/dashboard-modules"          element={<DashboardModulesPage />} />

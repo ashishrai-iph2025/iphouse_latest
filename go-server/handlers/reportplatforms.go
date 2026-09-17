@@ -1258,11 +1258,21 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 	for k, expr := range sportsHeadlineKPIs(shape) {
 		s.ExtraKPI[k] = expr
 	}
-	if shape.has("ChannelStatus") && shape.has("ChannelURL") {
-		// 'Dead' is the warehouse's spelling for a suspended channel. It was
-		// previously matched as LIKE '%Suspend%', which no row satisfies — hence
-		// the tile reading a flat zero.
-		s.ExtraKPI["channelsSuspended"] = "COUNT(DISTINCT CASE WHEN ChannelStatus = 'Dead' THEN ChannelURL END)"
+	if shape.has("RemovalChannelStatus") && shape.has("ChannelURL") {
+		/* RemovalChannelStatus, not ChannelStatus — the CHANNEL's own status,
+		   distinct from RemovalStatus which is about the row (the URL/post).
+		   A post can come down while its channel stays up, and a channel can
+		   be suspended with its posts still listed. Matching on ChannelStatus
+		   here was a column mix-up: it happened to be present on the same
+		   tables, so the query ran, and it read a flat (or near-flat) zero
+		   because that column mostly carries 'Active'/'Dead' about something
+		   else entirely.
+
+		   'Dead' is the warehouse's spelling for suspended. It was previously
+		   matched as LIKE '%Suspend%', which no row satisfies either — see
+		   rowmetrics.go's colRemovalChannelStatus for the row-walk twin of
+		   this expression, which is what the API-bridge path actually runs. */
+		s.ExtraKPI["channelsSuspended"] = "COUNT(DISTINCT CASE WHEN RemovalChannelStatus = 'Dead' THEN ChannelURL END)"
 	}
 	for _, c := range extraKPICandidates {
 		if _, filled := s.ExtraKPI[c.Key]; filled {
@@ -2803,13 +2813,17 @@ a set smaller than the summed count:
     union is then RIGHT and the sum double-counted — a brand's mirror domains
     across two platforms.
 
-  - A MISSING LIST. One source carried a count with no list at all, because the
+  - A SHORT LIST. A source carried a count with no list at all, because the
     figure came from the service rather than from the row walk that produces the
-    names. The count is then right and the list is a fragment.
+    names — or it carried a list already shorter than its OWN count, because
+    that table's own row-walk was capped before reconciledList ever saw it. The
+    count from that source is right either way and its contribution to the list
+    is a fragment.
 
 The two look identical once the sets are merged, and guessing wrong either
-overstates a gauge or prints a drawer that does not add up to it. So the rows
-say which case it is on the way in.
+overstates a gauge or claims a union is complete when it is not. So the rows
+say which case it is on the way in — accumulateBreakdownSet compares each
+source's own list length against its own count, not just checking for absence.
 */
 type breakdownSet struct {
 	members map[string]bool
@@ -2852,14 +2866,18 @@ accumulateBreakdownSet unions one row's lists into the totals for its label.
 Keyed by panel and label the same way the numbers are, so a row assembled from
 two tables ends with the union of what each of them saw under it.
 
-A row carrying the COUNT but not the LIST marks the set partial — see
-breakdownSet. A row carrying neither says nothing either way: a panel that has
-no such measure at all must not be reported as having lost its list.
+A row's list marks the set partial wherever it cannot vouch for the count
+beside it: carrying no list at all, or carrying one already shorter than its
+own count — see reconciledList, upstream of this, where a single table's own
+row-walk can itself fall short of what that table's exact COUNT(DISTINCT)
+answered. A row carrying neither says nothing either way: a panel that has no
+such measure at all must not be reported as having lost its list.
 */
 func accumulateBreakdownSet(dst breakdownSets, key, label string, row map[string]any) {
 	for _, field := range breakdownSetFields {
 		vals := stringListOf(row[field])
-		hasCount := numOf(row[breakdownSetKeys[field]]) > 0
+		count := numOf(row[breakdownSetKeys[field]])
+		hasCount := count > 0
 		if len(vals) == 0 && !hasCount {
 			continue
 		}
@@ -2869,9 +2887,8 @@ func accumulateBreakdownSet(dst breakdownSets, key, label string, row map[string
 			set = &breakdownSet{members: map[string]bool{}}
 			dst[k] = set
 		}
-		if len(vals) == 0 {
+		if hasCount && int64(len(vals)) < count {
 			set.partial = true
-			continue
 		}
 		for _, v := range vals {
 			if v = strings.TrimSpace(v); v != "" {
@@ -2883,23 +2900,29 @@ func accumulateBreakdownSet(dst breakdownSets, key, label string, row map[string
 
 /*
 applyBreakdownSets puts the lists back on the rebuilt row — and RE-DERIVES the
-count from each, except where it cannot.
+count from the union, but only where every source vouches for its own share of
+it.
 
 The count is the reason for the re-derivation. These figures are SUMMED across
-sources, which is exactly right while each source holds different values: within
-one platform it does, because the linking card reads InfringingDomain and the
-host card SourceDomain and no row is in both. Across PLATFORMS that guarantee is
-gone — two platforms reading tables that both carry a source domain would each
-count the same hostname, and the sum would say 14 mirrors over a list of 12.
+sources elsewhere (accumulateBreakdown), which is exactly right while each
+source holds different values: within one platform it does, because the
+linking card reads InfringingDomain and the host card SourceDomain and no row
+is in both. Across PLATFORMS that guarantee is gone — two platforms reading
+tables that both carry a source domain would each count the same hostname, and
+the naive sum would say 14 mirrors over a list of 12. So where the union is
+whole, its size is the more trustworthy figure and REPLACES the sum.
 
-A count a reader can now check against a list has to agree with it. So where the
-whole list is in hand the count is its size; on the disjoint case — every case
-measured so far — that is the same number it already was.
+WHERE IT IS NOT — a source contributed a count with no list, or a list already
+short of its own count — the union cannot be trusted to be complete either, and
+recomputing the count from it would repeat the exact mistake this mechanism
+exists to prevent, just from the other side: a smaller, confident-looking
+number standing in for a bigger true one. The pre-summed count stands
+untouched in that case.
 
-AND WHERE IT IS NOT IN HAND, THE LIST GOES rather than the count. A partial list
-under a larger count is the failure this whole mechanism exists to prevent, just
-with the two halves the other way round: the count stands, the drawer is not
-offered, and the card is exactly what it was before it had one.
+THE LIST STILL GOES, complete or not — see reconciledList, the single-table
+call this mirrors. A partial union is a lower bound a reader can act on; the
+caller compares its length against the count beside it to say so, the same way
+it does for the single-table case.
 
 Sorted, so a report run twice over one window lists a row's values in the same
 order both times. Volume order does not survive a union; alphabetical is the
@@ -2911,17 +2934,15 @@ func applyBreakdownSets(sets breakdownSets, key, label string, row map[string]an
 		if set == nil || len(set.members) == 0 {
 			continue
 		}
-		if set.partial {
-			delete(row, field)
-			continue
-		}
 		out := make([]string, 0, len(set.members))
 		for v := range set.members {
 			out = append(out, v)
 		}
 		sort.Strings(out)
 		row[field] = out
-		row[breakdownSetKeys[field]] = int64(len(out))
+		if !set.partial {
+			row[breakdownSetKeys[field]] = int64(len(out))
+		}
 	}
 }
 

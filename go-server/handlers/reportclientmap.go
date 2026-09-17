@@ -200,27 +200,68 @@ mayOpenReports gates the client-facing report on the same module grant that puts
 it in the nav (module_permission.pageName = 'Reports'). Hiding a nav item is not
 access control — without this, the endpoint would answer a login whose company
 was never given the module.
+
+A thin, scope-less wrapper over mayOpenReport, kept so every call site that
+only ever means the original Reports page — most of them — does not have to
+name a scope it does not have an opinion about.
 */
 func mayOpenReports(claims *ipauth.Claims) bool {
+	return mayOpenReport(claims, "")
+}
+
+/*
+mayOpenReport is mayOpenReports' scope-aware form: the same gate, against
+either module — reportsPageName for the original Reports page, reportVODPageName
+for VOD Reports. The two are independent grants (a login can hold one without
+the other), which is why every endpoint that can be asked for either page
+must call this rather than the unscoped wrapper above.
+*/
+func mayOpenReport(claims *ipauth.Claims, scope string) bool {
 	if isStaff(claims) {
 		return true
 	}
 	if claims == nil {
 		return false
 	}
+	page := reportsPageName
+	if scope == scopeVOD {
+		page = reportVODPageName
+	}
 	row, err := db.QueryOne(`
 		SELECT COUNT(*) AS c
 		  FROM user_module_permission_test u
 		  JOIN module_permission m ON m.Id = u.moduleId
 		 WHERE u.loginId = ? AND u.allowed = 1 AND m.status = 0 AND m.pageName = ?`,
-		claims.LoginID, reportsPageName)
+		claims.LoginID, page)
 	return err == nil && row != nil && numOf(row["c"]) > 0
+}
+
+/*
+mayOpenAnyReportsPage is for endpoints that are not THEMSELVES about one
+page's data — a reading preference, a chart shape — and so have no scope of
+their own to ask mayOpenReport for. Their content carries no client figures
+(see ReportVizPrefsGet/Save and UserReportLayout), so gating on "holds either
+page" rather than picking one is not a data-leak risk the way narrowing the
+figures would be; it only decides whether the feature responds at all to a
+login that holds VOD Reports but not Reports, or the other way round.
+*/
+func mayOpenAnyReportsPage(claims *ipauth.Claims) bool {
+	return mayOpenReports(claims) || mayOpenReport(claims, scopeVOD)
 }
 
 // reportsPageName is the module identifier the nav and the grant both key on.
 // Seeded by ensureReportsModule so an admin has something to grant rather than
 // having to invent the exact spelling.
 const reportsPageName = "Reports"
+
+/*
+reportVODPageName is reportsPageName's twin for the VOD Reports page.
+
+Not seeded by an ensure* function the way reportsPageName is: the module row
+already exists (Id 17, created by hand on /admin/modules before this page did),
+so there is nothing to create at boot — only to key access checks on.
+*/
+const reportVODPageName = "report-vod"
 
 var reportsModuleOnce sync.Once
 

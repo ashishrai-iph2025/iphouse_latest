@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useSession } from '@/lib/auth-client'
-import { Navigate } from '@/lib/router'
+import { Navigate, useSearchParams } from '@/lib/router'
 import { useModuleAccess } from '@/lib/moduleAccess'
 import { firstAllowedHref } from '@/lib/navItems'
 import DashboardClient from '@/components/client/DashboardClient'
@@ -18,30 +18,32 @@ interface Module {
 }
 
 export default function DashboardPage() {
-  /* Dashboard and Reports show the same figures, and a login gets exactly one
-     of them — Reports wins where it is granted. See UserNav, which is where the
-     rule is decided and which this reads through allowedModuleNames.
-
-     A login holding the LANDING PAGE lands on it: the week in summary and the
-     programme calendar, with the full report one click away. A DASHBOARD login
-     is untouched and still falls through to DashboardClient at the foot of this
-     file — the two grants keep their own landing pages.
+  /* A login holding the LANDING PAGE lands on it: the week in summary and the
+     programme calendar, with the full report one click away. A DASHBOARD-only
+     login is untouched and still falls through to DashboardClient at the foot
+     of this file — the two grants keep their own landing pages where a login
+     holds only one of them.
 
      It used to be the Reports grant that sent people here, from when /welcome
      was not something an admin could grant separately. It is now, so sending a
      Reports login to a page it may not hold would be a redirect straight into
      the guard's refusal notice. The page decides, and the page is "welcome".
 
-     The redirect matters because EVERY login lands here: sign-in, client
-     selection, e-mail verification and the War Room's own fallback all send
-     people to /dashboard. Suppressing it in the nav alone would leave a
-     Reports login sitting on a page its nav no longer offers.
+     The redirect matters because EVERY GENERIC landing lands here: sign-in,
+     client selection, e-mail verification, the logo and the War Room's own
+     fallback all send people to plain /dashboard with no signal about why.
+     Welcome wins there whenever it is granted — that is the whole point of
+     giving a login the landing page.
 
-     /welcome has a nav tab of its own now (lib/navItems.tsx), so the menu
-     leads back to it directly; the logo still links to /dashboard, which lands
-     here and redirects again, so that route home is unchanged. */
+     The one exception is `viaNav` below: a reader who has just clicked the
+     Dashboard tab itself has already chosen, and sending that click back to
+     Welcome would make the tab permanently unreachable for any login holding
+     both grants. See the `nav` marker on the Dashboard NAV_ITEM in
+     lib/navItems.tsx for where that signal comes from. */
   const { allowedModules, allowedModuleNames } = useModuleAccess()
   const { data: session } = useSession()
+  const params = useSearchParams()
+  const viaNav = params.get('nav') === '1'
   const [modules,     setModules]     = useState<Module[]>([])
   const [userLogo,    setUserLogo]    = useState('userimg.jpg')
   const [companyLogo, setCompanyLogo] = useState('default-company-logo.png')
@@ -62,7 +64,10 @@ export default function DashboardPage() {
   if (allowedModuleNames === null) return null
   /* Matched on pageName, not on the module's name: the name is an admin's label
      and changes, the key is what the nav, the guard and the page all join on. */
-  if ((allowedModules ?? []).some(m => m.pageName === 'welcome')) {
+  const granted = allowedModules ?? []
+  const hasDashboard = granted.some(m => m.pageName === 'dashboard')
+  const hasWelcome = granted.some(m => m.pageName === 'welcome')
+  if (hasWelcome && !(viaNav && hasDashboard)) {
     return <Navigate to="/welcome" replace />
   }
 
@@ -73,8 +78,7 @@ export default function DashboardPage() {
      Checked against allowedModules (pageName) rather than the names, because
      pageName is what the nav matches on and the seeded row's name and pageName
      disagree. */
-  const granted = allowedModules ?? []
-  if (!granted.some(m => m.pageName === 'dashboard')) {
+  if (!hasDashboard) {
     const target = firstAllowedHref(granted)
     if (target) return <Navigate to={target} replace />
 

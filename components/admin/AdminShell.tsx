@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { usePathname } from '@/lib/router'
 import { signOut, useSession } from '@/lib/auth-client'
-import { ThemeProvider, useTheme } from '@/lib/ThemeContext'
+import { ThemeProvider } from '@/lib/ThemeContext'
 import { ThemeCustomizerProvider } from '@/lib/ThemeCustomizerContext'
 import ThemeCustomizer from '@/components/ui/ThemeCustomizer'
 import ClientAccessSearch from './ClientAccessSearch'
@@ -84,8 +84,6 @@ function AdminShellInner({ children }: { children: React.ReactNode }) {
   const [sidebarOpen,     setSidebarOpen]     = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [hovered,          setHovered]          = useState(false)
-  const { theme, toggle } = useTheme()
-  const isDark = theme === 'dark'
 
   // When collapsed, hovering the rail temporarily expands it (as an overlay, so
   // page content never shifts); it collapses again when the pointer leaves.
@@ -243,14 +241,13 @@ function AdminShellInner({ children }: { children: React.ReactNode }) {
             {/* The same full-screen control as the client bar: staff read these
                 reports too, off the same wide grid. */}
             <FullscreenToggle />
-            {/* Dark / Light toggle — plain icon, no box */}
-            <button
-              onClick={toggle}
-              title={isDark ? 'Switch to Light mode' : 'Switch to Dark mode'}
-              className="text-xl leading-none cursor-pointer bg-transparent border-0 p-0 hover:opacity-70 transition-opacity"
-            >
-              {isDark ? '☀️' : '🌙'}
-            </button>
+            {/* Small anchored popover, not the client shell's offcanvas — see
+                ThemeCustomizer.tsx. Only colour mode does anything here;
+                sidebar/header are client-only, so its 'admin' context hides
+                them. Colour mode lives in there now, so the separate Dark /
+                Light button that used to sit next to it — the same setting
+                twice — is gone. */}
+            <ThemeCustomizer context="admin" />
             {/* User info — plain text, no box */}
             <div className="hidden sm:flex flex-col items-end leading-tight">
               <span className="text-sm font-bold text-[#14254A] dark:text-white truncate max-w-[160px]">{user?.name || (isSuperAdmin ? 'Super Admin' : 'Admin')}</span>
@@ -274,8 +271,6 @@ function AdminShellInner({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
-
-      <ThemeCustomizer />
     </div>
   )
 }

@@ -11,28 +11,8 @@ import Portal from '@/components/ui/Portal'
 import { useMasterData } from '@/lib/masterDataContext'
 import {
   categorizePlatforms, categoryOf, platformLabel, isOpenWebPlatform, OPEN_WEB_URL_TYPES,
-  type PlatformCategoryKey, type OpenWebUrlType,
+  ALL_PLATFORMS_CATEGORY, type PlatformCategoryKey, type OpenWebUrlType,
 } from '@/lib/platformCategories'
-
-const ICON_COLORS = ['#0078D4','#FC934C','#16A34A','#DC2626','#7C3AED','#F59E0B','#0891B2','#DB2777']
-
-/** 14px line icon per category — lets the cards be scanned without reading. */
-function CategoryIcon({ k }: { k: PlatformCategoryKey | 'all' }) {
-  const p: Record<PlatformCategoryKey | 'all', React.ReactNode> = {
-    'all':         <><circle cx="12" cy="12" r="9" /><path d="M12 7v10M7 12h10" /></>,
-    'open-web':    <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18" /></>,
-    'social-ugc':  <><circle cx="9" cy="8" r="3" /><path d="M2.5 19a6.5 6.5 0 0 1 13 0" /><path d="m16 6 5 2.5-5 2.5z" /></>,
-    'mobile-apps': <><rect x="7" y="2.5" width="10" height="19" rx="2.5" /><path d="M11 18.5h2" /></>,
-    'messenger':   <><path d="M21 4 3 11l5 2 2 6 4-4 5 3z" /></>,
-    'other':       <><rect x="4" y="4" width="7" height="7" rx="1.5" /><rect x="13" y="4" width="7" height="7" rx="1.5" /><rect x="4" y="13" width="7" height="7" rx="1.5" /><rect x="13" y="13" width="7" height="7" rx="1.5" /></>,
-  }
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
-      {p[k]}
-    </svg>
-  )
-}
 
 // Platforms visible in the catalogue but not yet searchable — clicking them
 // shows a "Coming Soon" notice instead of running a search.
@@ -71,6 +51,11 @@ export default function InfringementPage() {
   // '' = the whole catalogue, which is what this page showed before categories
   // existed; a category key narrows the tile grid below to that group.
   const [category,  setCategory]  = useState<PlatformCategoryKey | ''>('')
+  // The category picker + platform tile grid below are opt-in — a reader who
+  // just wants "every platform" (the default search anyway) never needs them
+  // on screen at all. Off by default; purely a visibility toggle, so turning
+  // it off again does not clear whatever category/platform was already chosen.
+  const [showPlatforms, setShowPlatforms] = useState(false)
 
   const { platforms, assets } = useMasterData()
 
@@ -130,19 +115,23 @@ export default function InfringementPage() {
   }
 
   /**
-   * A search runs one of two ways.
+   * A search runs one of three ways, narrowest first.
    *
    * With a platform chosen it is unchanged: one platform, its own page, the
    * columns that platform has always had.
    *
-   * Without one it is the whole category — every searchable platform under it,
-   * on a page that keeps them apart. They cannot share a table: each upstream
-   * endpoint returns its own shape, so one table would mean picking a lowest
-   * common denominator and dropping the rest.
+   * With a category chosen (and no platform within it) it is every searchable
+   * platform under that category — unchanged from before, reachable now by
+   * clicking a category card below rather than by a required dropdown.
+   *
+   * With neither chosen — the default now — it is EVERY searchable platform in
+   * the catalogue, on the same category-results page ALL_PLATFORMS_CATEGORY
+   * names specially. They cannot share a table: each upstream endpoint returns
+   * its own shape, so one table would mean picking a lowest common denominator
+   * and dropping the rest.
    */
   async function handleSearch(e: React.FormEvent) {
     e.preventDefault()
-    if (!category) { setError('Please choose a category'); return }
     setError('')
     setLoading(true)
     try {
@@ -151,7 +140,17 @@ export default function InfringementPage() {
       if (range.to)   params.set('endDate',   range.to)
       if (assetName) params.set('assetName', assetName)
 
-      if (!platform) {
+      if (platform) {
+        if (isComingSoon(platform)) { setComingSoon(platform); return }
+        params.set('platform', platform)
+        // Only meaningful for Open Web; every other platform has one kind of URL.
+        if (openWeb && urlType !== 'all') params.set('urlType', urlType)
+        const slug = PLATFORM_PAGE_MAP[platform as Platform] || platform.replace(/\s+/g, '-').toLowerCase()
+        router.push(`/infringement/${slug}?${params}`)
+        return
+      }
+
+      if (category) {
         if (searchableInCategory.length === 0) {
           setError(`No searchable platform under ${activeCatLabel} yet`)
           return
@@ -160,12 +159,8 @@ export default function InfringementPage() {
         return
       }
 
-      if (isComingSoon(platform)) { setComingSoon(platform); return }
-      params.set('platform', platform)
-      // Only meaningful for Open Web; every other platform has one kind of URL.
-      if (openWeb && urlType !== 'all') params.set('urlType', urlType)
-      const slug = PLATFORM_PAGE_MAP[platform as Platform] || platform.replace(/\s+/g, '-').toLowerCase()
-      router.push(`/infringement/${slug}?${params}`)
+      // Nothing picked: every searchable platform, category or not.
+      router.push(`/infringement/category/${ALL_PLATFORMS_CATEGORY}?${params}`)
     } finally {
       setLoading(false)
     }
@@ -179,7 +174,7 @@ export default function InfringementPage() {
         <Breadcrumb items={[{ label: 'Find Infringements' }, { label: 'Infringement Search' }]} />
         <div className="sm:text-right">
           <h1 className="text-xl font-bold text-[#14254A]">Infringement Search</h1>
-          <p className="text-brand-muted text-sm">Select a platform and date range to fetch infringement data.</p>
+          <p className="text-brand-muted text-sm">Select an asset and date range to search every platform, or pick one below.</p>
         </div>
       </div>
 
@@ -197,47 +192,24 @@ export default function InfringementPage() {
           )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end gap-3 lg:gap-4">
-            {/* Category first: it is the question a client actually has ("where
-                was our content posted?"), and it narrows a 21-item platform list
-                to a handful. */}
-            <div className="sm:col-span-1 lg:flex-[2] lg:min-w-[170px]">
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
-                Category <span className="text-[#FC934C]">*</span>
-              </label>
+            {/* Platform (a category — Open Web, UGC & Social Media, …) sits
+                here now, a peer of Asset and Date Range rather than tucked
+                into the Supported Platforms panel below. Choosing one there
+                still narrows that panel's list to match (see `shown`). */}
+            <div className="sm:col-span-1 lg:flex-[2] lg:min-w-[180px]">
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Platform</label>
               <SearchableSelect
                 options={categories.map(c => ({ key: c.key, label: c.label }))}
                 value={category}
                 onChange={v => pickCategory(v as PlatformCategoryKey | '')}
-                placeholder="Choose a category…" emptyLabel="– Choose a category –" />
+                placeholder="All platforms…"
+                emptyLabel="– All platforms –" />
             </div>
 
-            {/* The dependent picker. It only exists once a category is chosen,
-                and it is optional: Open Web defaults to both kinds of URL, and a
-                category with a single platform has already filled it in. */}
-            {category && (
-              <div className="sm:col-span-1 lg:flex-[2] lg:min-w-[190px]">
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
-                  {openWeb ? 'URL Type' : 'Platform'}
-                  <span className="ml-1 font-semibold normal-case tracking-normal text-gray-300">optional</span>
-                </label>
-                {openWeb ? (
-                  /* Open Web is one upstream platform carrying two kinds of URL,
-                     so its dependent choice is which kind — not which platform. */
-                  <SearchableSelect
-                    options={OPEN_WEB_URL_TYPES.map(t => ({ key: t.key, label: t.label }))}
-                    value={urlType}
-                    onChange={v => setUrlType((v || 'all') as OpenWebUrlType)}
-                    placeholder="All URLs" emptyLabel="– All URLs –" />
-                ) : (
-                  <SearchableSelect
-                    options={shown}
-                    value={platform}
-                    onChange={pickPlatform}
-                    placeholder={`All ${activeCatLabel}…`}
-                    emptyLabel={`– ${activeCatLabel} –`} />
-                )}
-              </div>
-            )}
+            {/* No dependent Specific Platform / URL Type field here any more
+                — the Supported Platforms panel below is the one place that
+                choice is made now (as cards), not duplicated as a dropdown
+                up here too. */}
 
             <div className="sm:col-span-1 lg:flex-[2] lg:min-w-[180px]">
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Asset Name</label>
@@ -273,23 +245,30 @@ export default function InfringementPage() {
 
           {/* What the current selection will search, in words. The pill row that
               used to sit here is gone: it asked the same question as the URL Type
-              dropdown above, and two controls for one value can disagree. */}
-          {category && (
-            <p className="text-[11px] text-gray-400 mt-3 pt-3 border-t border-gray-100">
-              {openWeb
-                ? OPEN_WEB_URL_TYPES.find(t => t.key === urlType)?.hint
-                : platform
-                  ? <>Searching <b className="text-[#14254A]">{selectedLabel}</b>.</>
-                  : searchableInCategory.length > 0
-                    /* Leaving the platform empty is a real search now, not a
-                       missing answer — so the line says what it will do rather
-                       than asking for one more click. */
-                    ? <>Searching all <b className="text-[#14254A]">{searchableInCategory.length} {activeCatLabel}</b>{' '}
-                        platform{searchableInCategory.length === 1 ? '' : 's'} — each one gets its own table,
-                        because their results carry different fields. Pick a platform above for a single one.</>
-                    : <>No searchable platform under {activeCatLabel} yet.</>}
-            </p>
-          )}
+              dropdown above, and two controls for one value can disagree.
+
+              Always shown now, not just once a category is picked: with
+              neither a category nor a platform chosen, Search still runs — over
+              everything — and that default is exactly the case most worth
+              stating rather than leaving silent. */}
+          <p className="text-[11px] text-gray-400 mt-3 pt-3 border-t border-gray-100">
+            {category
+              ? (openWeb
+                  ? OPEN_WEB_URL_TYPES.find(t => t.key === urlType)?.hint
+                  : platform
+                    ? <>Searching <b className="text-[#14254A]">{selectedLabel}</b>.</>
+                    : searchableInCategory.length > 0
+                      /* Leaving the platform empty is a real search now, not a
+                         missing answer — so the line says what it will do rather
+                         than asking for one more click. */
+                      ? <>Searching all <b className="text-[#14254A]">{searchableInCategory.length} {activeCatLabel}</b>{' '}
+                          platform{searchableInCategory.length === 1 ? '' : 's'} — each one gets its own table,
+                          because their results carry different fields. Pick a platform below for a single one.</>
+                      : <>No searchable platform under {activeCatLabel} yet.</>)
+              : <>Searching all <b className="text-[#14254A]">{searchableInCategory.length} platforms</b> — each
+                  one gets its own table, because their results carry different fields. Pick a category or a
+                  platform below to narrow it to one.</>}
+          </p>
         </form>
       </div>
 
@@ -303,80 +282,89 @@ export default function InfringementPage() {
               </svg>
               Supported Platforms
             </h2>
-            <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-[#14254A]/5 text-[#14254A]">
-              {shown.length} of {platforms.length} platforms
-            </span>
-          </div>
-
-          {/* ── Category cards ── */}
-          <div className="px-5 pt-5">
-            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Category</div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-              {[{ key: '' as const, label: 'All platforms', count: platforms.length },
-                ...categories.map(c => ({ key: c.key, label: c.label, count: c.platforms.length }))
-              ].map(c => {
-                const on = category === c.key
-                return (
-                  <button key={c.key || 'all'} type="button" onClick={() => pickCategory(c.key)}
-                    aria-pressed={on}
-                    className={`group text-left rounded-xl px-2.5 py-2 border transition-all ${
-                      on
-                        ? 'border-[#14254A] bg-[#14254A] shadow-md'
-                        : 'border-[#14254A]/10 bg-white hover:border-[#FC934C]/50 hover:bg-[#FC934C]/[0.06]'
-                    }`}>
-                    <span className="flex items-center gap-1.5">
-                      <span className={on ? 'text-[#FFC82B]' : 'text-[#14254A]/35 group-hover:text-[#FC934C]'}>
-                        <CategoryIcon k={(c.key || 'all') as PlatformCategoryKey | 'all'} />
-                      </span>
-                      <span className={`text-[11px] font-bold leading-tight ${on ? 'text-white' : 'text-[#14254A]'}`}>
-                        {c.label}
-                      </span>
-                    </span>
-                    <span className={`mt-1 block text-[9px] font-semibold uppercase tracking-wide tabular-nums ${
-                      on ? 'text-white/50' : 'text-gray-400'}`}>
-                      {c.count} platform{c.count === 1 ? '' : 's'}
-                    </span>
-                  </button>
-                )
-              })}
+            <div className="flex items-center gap-3">
+              {showPlatforms && (
+                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-[#14254A]/5 text-[#14254A]">
+                  {openWeb ? `${OPEN_WEB_URL_TYPES.length} URL types` : `${shown.length} of ${platforms.length} platforms`}
+                </span>
+              )}
+              {/* Off by default — see showPlatforms above. */}
+              <button type="button" onClick={() => setShowPlatforms(s => !s)}
+                aria-pressed={showPlatforms}
+                className="flex items-center gap-2 text-xs font-semibold text-gray-500 hover:text-[#14254A] transition-colors">
+                Filter by platform
+                <span className={`relative flex-shrink-0 rounded-full transition-colors ${showPlatforms ? 'bg-[#FC934C]' : 'bg-gray-200'}`}
+                  style={{ width: '34px', height: '19px' }}>
+                  <span className={`absolute top-[2.5px] left-[2.5px] w-3.5 h-3.5 rounded-full bg-white shadow transition-transform ${showPlatforms ? 'translate-x-[15px]' : ''}`} />
+                </span>
+              </button>
             </div>
           </div>
 
-          {/* ── Platform tiles for the active category ── */}
+          {/* ── Cards for the Platform field's current category: which URL
+                 type for Open Web (it is one upstream platform, not a list of
+                 them), or which specific platform for everything else. The
+                 category picker that used to live here moved into the search
+                 form above, so this panel only ever reflects that choice now,
+                 never sets it — and it's the ONE place either of these two is
+                 picked, not duplicated as a dropdown up there too. ── */}
+          {showPlatforms && (
           <div className="p-5">
-            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
-              {activeCatLabel}
+            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">
+              {openWeb ? 'URL Type' : activeCatLabel}
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-              {shown.map((p, i) => (
-                <button
-                  key={p.key}
-                  onClick={e => {
-                    if (isComingSoon(p.key)) { setComingSoon(p.label); return }
-                    pickPlatform(p.key); scrollShellToTop(e.currentTarget)
-                  }}
-                  className={`relative flex flex-col items-center p-4 rounded-xl border-2 transition-all hover:-translate-y-0.5 text-center group ${
-                    platform === p.key
-                      ? 'border-[#14254A] bg-[#14254A]/5 shadow-sm'
-                      : 'border-gray-100 hover:border-[#FC934C]/50 hover:bg-orange-50/50'
-                  }`}
-                >
-                  {isComingSoon(p.key) && (
-                    <span className="absolute top-2 right-2 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-[#FC934C]/15 text-[#d97b2e] border border-[#FC934C]/30">
-                      Soon
-                    </span>
-                  )}
-                  <span className={`w-9 h-9 rounded-xl flex items-center justify-center text-white text-sm font-bold mb-2 shadow-sm ${isComingSoon(p.key) ? 'opacity-60' : ''}`}
-                    style={{ background: ICON_COLORS[i % ICON_COLORS.length] }}>
-                    {p.label.charAt(0).toUpperCase()}
-                  </span>
-                  <span className={`text-xs font-semibold leading-tight transition-colors ${
-                    platform === p.key ? 'text-[#14254A]' : 'text-gray-600 group-hover:text-[#14254A]'
-                  }`}>{p.label}</span>
-                </button>
-              ))}
-            </div>
+            {openWeb ? (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {OPEN_WEB_URL_TYPES.map(t => {
+                  const on = urlType === t.key
+                  return (
+                    <button key={t.key} type="button"
+                      onClick={() => setUrlType(t.key)}
+                      className={`relative text-left p-4 rounded-xl border-2 transition-all hover:-translate-y-0.5 hover:shadow-md ${
+                        on ? 'border-[#14254A] bg-[#14254A]/5 shadow-sm' : 'border-gray-100 hover:border-[#FC934C]/50 hover:bg-orange-50/30'
+                      }`}>
+                      {on && (
+                        <svg className="absolute top-3 right-3 w-4 h-4 text-[#14254A]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      )}
+                      <span className={`block text-sm font-bold ${on ? 'text-[#14254A]' : 'text-gray-700'}`}>{t.label}</span>
+                      <span className="block text-xs text-gray-400 leading-snug mt-1">{t.hint}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                {shown.map(p => {
+                  const on = platform === p.key
+                  const soon = isComingSoon(p.key)
+                  return (
+                    <button key={p.key} type="button"
+                      onClick={e => {
+                        if (soon) { setComingSoon(p.label); return }
+                        pickPlatform(p.key); scrollShellToTop(e.currentTarget)
+                      }}
+                      className={`relative text-left p-4 rounded-xl border-2 transition-all hover:-translate-y-0.5 hover:shadow-md ${
+                        on ? 'border-[#14254A] bg-[#14254A]/5 shadow-sm' : 'border-gray-100 hover:border-[#FC934C]/50 hover:bg-orange-50/30'
+                      }`}>
+                      {soon ? (
+                        <span className="absolute top-3 right-3 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-[#FC934C]/15 text-[#d97b2e] border border-[#FC934C]/30">
+                          Soon
+                        </span>
+                      ) : on && (
+                        <svg className="absolute top-3 right-3 w-4 h-4 text-[#14254A]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      )}
+                      <span className={`block text-sm font-bold truncate pr-5 ${on ? 'text-[#14254A]' : 'text-gray-700'}`}>{p.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
           </div>
+          )}
         </div>
       )}
 

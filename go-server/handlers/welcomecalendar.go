@@ -41,11 +41,15 @@ func ensureCalendarNavSchema() {
 			CREATE TABLE IF NOT EXISTS ` + calendarNavTable + ` (
 			  client_id     VARCHAR(64)  NOT NULL DEFAULT '',
 			  show_previous TINYINT(1)   NOT NULL DEFAULT 0,
+			  -- The shipped answer, for a portal with nothing configured: NEXT
+			  -- only, so a reader can look ahead to a future month (an
+			  -- upcoming release, a fixture not yet aired) but a past month
+			  -- stays a deliberate, per-client or per-admin choice rather
+			  -- than open by default. Only the shared default row
+			  -- (client_id = '') is created with this on; a client row an
+			  -- admin creates explicitly starts from whatever they ticked on
+			  -- the form.
 			  show_next     TINYINT(1)   NOT NULL DEFAULT 0,
-			  -- The shipped answer: every direction, for a portal with nothing
-			  -- configured. Only the shared default row (client_id = '') is
-			  -- created with this on; a client row an admin creates explicitly
-			  -- starts from whatever they ticked on the form.
 			  complete      TINYINT(1)   NOT NULL DEFAULT 0,
 			  updated_by    VARCHAR(191) NOT NULL DEFAULT '',
 			  updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -55,11 +59,12 @@ func ensureCalendarNavSchema() {
 			return
 		}
 		// The shared default row, seeded once so a portal with nobody having
-		// touched this screen still ships with every direction open — the
-		// answer the calendar gave before this setting existed.
+		// touched this screen ships with Next open — see the show_next
+		// column's own comment for why that, and not Complete, is the
+		// shipped answer now.
 		if _, _, err := db.Exec(
 			"INSERT IGNORE INTO "+calendarNavTable+
-				" (client_id, show_previous, show_next, complete) VALUES ('', 0, 0, 1)"); err != nil {
+				" (client_id, show_previous, show_next, complete) VALUES ('', 0, 1, 0)"); err != nil {
 			log.Printf("[calendar-nav] seed default row: %v", err)
 		}
 	})
@@ -190,14 +195,15 @@ func WelcomeCalendarSave(w http.ResponseWriter, r *http.Request) {
 ── DELETE /api/admin/report-welcome-calendar?clientId= ──────────────────────
 
 	Drop a client's own row, putting them back on the shared default. With no
-	clientId this resets the shared row itself, back to every direction open.
+	clientId this resets the shared row itself, back to the shipped default —
+	Next only, same as the seed above and for the same reason.
 */
 func WelcomeCalendarReset(w http.ResponseWriter, r *http.Request) {
 	ensureCalendarNavSchema()
 	clientID := strings.TrimSpace(r.URL.Query().Get("clientId"))
 	if clientID == "" {
 		if _, _, err := db.Exec(
-			"UPDATE "+calendarNavTable+" SET show_previous=0, show_next=0, complete=1 WHERE client_id=''"); err != nil {
+			"UPDATE "+calendarNavTable+" SET show_previous=0, show_next=1, complete=0 WHERE client_id=''"); err != nil {
 			Fail(w, 500, "Could not reset this calendar setting")
 			return
 		}

@@ -1,13 +1,9 @@
 ﻿'use client'
 import AdminPageHeader from './AdminPageHeader'
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import PaginationBar, { PER_PAGE } from './PaginationBar'
 import AdminModal from './AdminModal'
-import {
-  enforceDashboardReports, selectAllRespectingRule, hasBothDashboardAndReports,
-  DASHBOARD_REPORTS_HINT,
-} from '@/lib/moduleExclusivity'
 
 interface UserRow {
   userId: number
@@ -21,6 +17,7 @@ interface UserRow {
 interface ModuleRow {
   Id: number
   ModuleName: string
+  pageName?: string
   status: number
 }
 
@@ -91,31 +88,17 @@ export default function UserModulePermissionsClient({ users, modules }: Props) {
     setLoadingPerms(false)
   }
 
-  /* Module ids paired with their names, for the Dashboard/Reports rule —
-     the picker works in ids and the rule is about names. */
-  const moduleNames = useMemo(
-    () => modules.map(m => ({ id: m.Id, name: m.ModuleName })), [modules])
-
   function toggleModule(id: number) {
     setChecked(prev => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id); else next.add(id)
-      // Dashboard and Reports are one entitlement — see lib/moduleExclusivity.
-      return new Set(enforceDashboardReports([...next], id, moduleNames))
+      return next
     })
   }
 
   async function savePermissions(e: React.FormEvent) {
     e.preventDefault()
     if (!modalUser) return
-    /* A selection can arrive here without passing through a toggle — an
-       existing grant made before this rule was added is loaded straight into
-       the form. Refused rather than silently corrected, because quietly
-       dropping a module the admin can see ticked is worse than saying so. */
-    if (hasBothDashboardAndReports([...checked], moduleNames)) {
-      showToast(DASHBOARD_REPORTS_HINT, 'error')
-      return
-    }
     setSaving(true)
     const res = await fetch('/api/admin/user-module-permissions', {
         credentials: 'include',
@@ -144,13 +127,10 @@ export default function UserModulePermissionsClient({ users, modules }: Props) {
       })
       return
     }
-    /* Everything the rule allows, which is everything except Dashboard when
-       Reports is among them. Ticking both here would have produced, in one
-       click, exactly the selection every other interaction prevents. */
     setChecked(prev => {
       const next = new Set(prev)
       visibleModules.forEach(m => next.add(m.Id))
-      return new Set(selectAllRespectingRule([...next], moduleNames))
+      return next
     })
   }
 
@@ -260,7 +240,6 @@ export default function UserModulePermissionsClient({ users, modules }: Props) {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-xs text-gray-500">Check modules to grant access. Unchecked = no access.</p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">{DASHBOARD_REPORTS_HINT}</p>
                   </div>
                   {visibleModules.length > 0 && (
                     <button type="button" onClick={toggleAll}

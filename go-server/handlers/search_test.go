@@ -29,6 +29,23 @@ func TestSearchAttemptsTakesAnExplicitPlatformAsGiven(t *testing.T) {
 	}
 }
 
+func TestUrlFormatsTriesTheBareURLThenATrailingSlash(t *testing.T) {
+	got := urlFormats("https://example.com/page")
+	want := []string{"https://example.com/page", "https://example.com/page/"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// A URL that already ends in a slash has only one spelling to try — the two
+// forms would be identical, so the second is not a real fallback at all.
+func TestUrlFormatsSkipsTheFallbackWhenAlreadySlashTerminated(t *testing.T) {
+	got := urlFormats("https://example.com/page/")
+	if len(got) != 1 || got[0] != "https://example.com/page/" {
+		t.Fatalf("got %v, want a single entry unchanged", got)
+	}
+}
+
 func TestSearchRecordTreatsAnEmptyResponseAsNoRecord(t *testing.T) {
 	for _, data := range []any{
 		nil,

@@ -65,3 +65,49 @@ func TestDashboardModuleKeyMatchesPlatformLabel(t *testing.T) {
 		})
 	}
 }
+
+/*
+The safety property the VOD Reports page stands on: a grant can never widen
+past its backstop, no matter what it names.
+
+reportsAllowedForClaims resolves both maps from the database (the VOD grant
+from report_user_access_vod, the backstop from the dcp_module catalogue), but
+the RULE — intersect, and treat "unrestricted" as "unrestricted within the
+backstop" rather than "unrestricted, full stop" — does not need a database to
+be wrong in, which is exactly why it is worth pinning on its own.
+*/
+func TestIntersectAllowedNeverExceedsTheBackstop(t *testing.T) {
+	backstop := map[string]bool{"open-web": true, "telegram": true}
+
+	t.Run("a restricted grant is trimmed to what the backstop admits", func(t *testing.T) {
+		allowed := map[string]bool{"open-web": true, "open-web-sports": true}
+		got := intersectAllowed(allowed, backstop)
+		if !got["open-web"] || got["open-web-sports"] || len(got) != 1 {
+			t.Errorf("got %v, want exactly {open-web: true} — the Sports platform "+
+				"must not survive even though the grant named it", got)
+		}
+	})
+
+	t.Run("an unrestricted grant (nil) is the backstop, not everything", func(t *testing.T) {
+		got := intersectAllowed(nil, backstop)
+		if got == nil {
+			t.Fatal("got nil — an unrestricted VOD grant must resolve to the VOD " +
+				"backstop, not to \"no restriction at all\"")
+		}
+		if !got["open-web"] || !got["telegram"] || len(got) != len(backstop) {
+			t.Errorf("got %v, want exactly the backstop %v", got, backstop)
+		}
+	})
+
+	t.Run("a grant naming nothing the backstop admits ends up empty, not nil", func(t *testing.T) {
+		allowed := map[string]bool{"open-web-sports": true}
+		got := intersectAllowed(allowed, backstop)
+		if got == nil {
+			t.Fatal("got nil — an empty result must still read as \"restricted to " +
+				"nothing\", not as \"unrestricted\"")
+		}
+		if len(got) != 0 {
+			t.Errorf("got %v, want empty", got)
+		}
+	})
+}

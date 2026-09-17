@@ -638,6 +638,30 @@ export const GROUP_ORDER = [...FIELD_GROUPS.map(g => g.title), 'Other']
 export const isCountKey = (key: string) =>
   /(count|views|likes|comments|subscribers|followers|members|shares)$/i.test(key)
 
+/** The clip/video's own runtime, as MarkScan names it across the platforms
+    seen so far — Facebook sends `videoLength`, and the UGC endpoint behind
+    TikTok/Vk/Ok/ShareChat/Dailymotion/Bilibili/Chomikuj sends bare
+    `duration` (confirmed against a real Ok.ru row: duration=6750 on a
+    "Full Pirate Content" record — 1 hr 52 min 30 sec, a real movie's
+    length, not a listing's or anything else's). Both read in SECONDS. */
+export const isVideoLengthKey = (key: string) => /^(videoLength|videoDuration|duration)$/i.test(key)
+
+/** A video's runtime in SECONDS, at whatever precision MarkScan measured it
+    to (e.g. 60.627), read out to the second — the resolution a viewer of the
+    clip would actually notice, unlike formatDuration's whole minutes below,
+    which exists for a turnaround measured in them. */
+export function formatVideoLength(totalSeconds: number): string {
+  const s = Math.round(totalSeconds)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const r = s % 60
+  const parts: string[] = []
+  if (h > 0) parts.push(`${h} hr`)
+  if (m > 0) parts.push(`${m} min`)
+  if (r > 0 || parts.length === 0) parts.push(`${r} sec`)
+  return parts.join(' ')
+}
+
 /* ── The record's chronology ────────────────────────────────────────────────
 
 	Five stamps tell a row's whole story — found, notice sent, de-indexed, DMCA
@@ -961,6 +985,14 @@ export function DetailValue({ fieldKey, value, onPreview }: {
       <a href={String(value)} target="_blank" rel="noopener noreferrer"
         className="text-[#0078D4] dark:text-[#7cc0ff] hover:underline break-all">{String(value)}</a>
     )
+  }
+  /* MarkScan sends the clip's runtime as a bare number of seconds (e.g.
+     60.627) with no unit attached, which read as just that number — "60.627"
+     beside a label saying "Video Length" answers a different question than
+     the one being asked. Read out to hours/minutes/seconds instead, at
+     whichever units the clip actually needs — see formatVideoLength. */
+  if (isVideoLengthKey(fieldKey) && isFinite(Number(value))) {
+    return <span className="tabular-nums">{formatVideoLength(Number(value))}</span>
   }
   /* A yes/no field, answered — see isFlagKey. Set in the same muted weight as
      the rest rather than as a coloured chip: these are facts about the record's

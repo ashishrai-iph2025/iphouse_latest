@@ -311,11 +311,11 @@ func isSummaryPlatform(p platformDef) bool {
 	return len(sourceChannelsFor(p)) > 1
 }
 
-func summaryPlatforms(claims *ipauth.Claims) []platformDef {
+func summaryPlatforms(claims *ipauth.Claims, scope string) []platformDef {
 	// nil means unrestricted, which is the default for every login. Both grants
 	// apply here as well — a summary must not total up a report its reader
 	// cannot open.
-	allowed := reportsAllowedForClaims(claims)
+	allowed := reportsAllowedForClaims(claims, scope)
 	out := []platformDef{}
 	for _, p := range loadPlatforms() {
 		/* EVERY summary is skipped, not just the reserved one. This list is
@@ -387,7 +387,7 @@ is derived from this list.
 Leaves every other platform untouched, and leaves a summary whose sources are
 already a subset exactly as it was.
 */
-func narrowSummaryToAttached(p platformDef, claims *ipauth.Claims) platformDef {
+func narrowSummaryToAttached(p platformDef, claims *ipauth.Claims, scope string) platformDef {
 	// Checked before the lookup: summaryPlatforms is a database read, and every
 	// other platform must not pay for it. This runs inside the loop over every
 	// platform in ReportsSections, so the early return is what keeps that one
@@ -395,7 +395,7 @@ func narrowSummaryToAttached(p platformDef, claims *ipauth.Claims) platformDef {
 	if len(p.Tables) == 0 || !isSummaryPlatform(p) {
 		return p
 	}
-	return narrowToChannels(p, attachedChannels(summaryPlatforms(claims)), loginIDOf(claims))
+	return narrowToChannels(p, attachedChannels(summaryPlatforms(claims, scope)), loginIDOf(claims))
 }
 
 // attachedChannels is the set of channels a reader's platforms cover, derived

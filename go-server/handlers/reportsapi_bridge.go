@@ -1021,6 +1021,38 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 	   the one dataset that carries the columns for it. */
 	wantRows := needsRowRemovals(ds) && (hasProfileColumns(ds) || !aggRemovals)
 
+	/* hasChannelColumns is unconditional, unlike the profile term above: a
+	   channel-identity table (Telegram) never has RemovalStatus gate this,
+	   because a SUM(Subscribers) service measure is wrong for the exact same
+	   reason it is wrong on a profile table — one account, counted once per
+	   post — whether or not the dataset happens to also declare `removed`.
+	   See the KPI block below, which replaces rather than adds. */
+	wantRows = wantRows || hasChannelColumns(ds)
+
+	/* Same reasoning, for two more figures no aggregate reaches: views on the
+	   rows that came down, and how many distinct channels were suspended.
+	   Both are declared on the spec (inferSpec, reportplatforms.go) as SQL
+	   the warehouse path would run — meaningless here, where there is no SQL
+	   engine to run it against, so the string is read only as "this dataset
+	   has the columns for it" and the number itself comes from the row walk
+	   instead (computeRowMetrics). A service that later declares its own
+	   measure for either is asked FIRST and wins outright — see the KPI
+	   block below — so this only forces a read where nothing faster answers
+	   it. */
+	wantViewsImpacted := s.ExtraKPI["viewsImpacted"] != ""
+	if wantViewsImpacted {
+		if _, served := apiMeasureFor("viewsImpacted", ds); served {
+			wantViewsImpacted = false
+		}
+	}
+	wantChannelsSuspended := s.ExtraKPI["channelsSuspended"] != ""
+	if wantChannelsSuspended {
+		if _, served := apiMeasureFor("channelsSuspended", ds); served {
+			wantChannelsSuspended = false
+		}
+	}
+	wantRows = wantRows || wantViewsImpacted || wantChannelsSuspended
+
 	/* The repeat-offenders panel needs the same rows for a different reason:
 	   "how many distinct days did this account appear on" is not a measure the
 	   service declares, and a breakdown cannot be grouped by two things at
@@ -1176,7 +1208,10 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			rowMx = computeRowMetrics(rows, dateColOf(ds), groupCols)
 			haveRowMx = true
 			if capped {
-				notice("Profile figures were counted over the first %d rows of this window.", len(rows))
+				// Not only profile figures any more — views-impacted and
+				// channels-suspended are counted off this same capped walk
+				// now too (see wantViewsImpacted / wantChannelsSuspended).
+				notice("Some figures were counted over the first %d rows of this window.", len(rows))
 			}
 		}
 	}
@@ -1239,6 +1274,16 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 				kpi["viewsImpacted"] = numOf(deadSum[vm])
 			}
 		}
+		/* Neither of the above answered it: no removal-status FILTER on this
+		   dataset (aggRemovals false, typically because it already declares
+		   its own `removed` measure — the happy path for Removed, and the
+		   one case the deadSum shortcut above cannot also cover) and no
+		   dedicated measure the service answers under either. The rows are
+		   read anyway once that is so — see wantViewsImpacted — so the same
+		   SUM comes off that walk instead of being left at zero. */
+		if _, already := kpi["viewsImpacted"]; !already && haveRowMx && wantViewsImpacted {
+			kpi["viewsImpacted"] = rowMx.viewsImpacted
+		}
 		if n := atomic.LoadInt64(&tvChannels); n >= 0 {
 			kpi["totalTVChannels"] = n
 		}
@@ -1268,6 +1313,29 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			   the service's SUM would report one profile's followers once per
 			   post it made. Replaced rather than added, like the two above. */
 			kpi["totalSubscribers"] = rowMx.totalSubscribers
+		} else if haveRowMx && hasChannelColumns(ds) {
+			/* The exact same replacement, for a table that records the account
+			   as a CHANNEL instead of a PROFILE — Telegram. `else if` because
+			   the two identities are never both present on one table (see
+			   rowMetrics' own comment on why they are kept as separate
+			   fields), so this can never double-write a tile the branch above
+			   already set. */
+			kpi["impactedSubscribers"] = rowMx.channelImpactedSubscribers
+			kpi["totalSubscribers"] = rowMx.channelTotalSubscribers
+		}
+
+		/* ── Views impacted, and suspended channels — from the rows ─────────
+
+		   Only where nothing already answered them: the generic loop above
+		   already asked the service directly (`wantViewsImpacted` /
+		   `wantChannelsSuspended` are false wherever that succeeded), and
+		   `viewsImpacted` also has the deadSum-aggregate path below it,
+		   which is faster where the dataset offers a removal FILTER — see
+		   its own comment. This is the fallback for what is left: a dataset
+		   that declares neither a matching measure nor a filter, where the
+		   rows are the only place these numbers exist at all. */
+		if haveRowMx && wantChannelsSuspended {
+			kpi["channelsSuspended"] = rowMx.channelsSuspended
 		}
 
 		/* ── Titles in scope, on a report that may only name some of them ──
@@ -1883,9 +1951,6 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		}
 
 		out := make([]map[string]any, 0, len(rows))
-		// How many rows ended up with a domain list — which is what decides
-		// WHICH caveat the cap deserves. See the notice below.
-		listsCarried := 0
 		for _, r := range rows {
 			row := map[string]any{
 				// label is what the reader sees, value is what a click filters
@@ -1916,17 +1981,16 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 
 				   Uncapped, the two are the same set by construction and the
 				   list is simply the names behind the number. Capped, the walk
-				   saw a subset — and a drawer of eleven under a gauge reading
-				   seventeen is a card contradicting itself.
+				   saw a subset — eleven names under a gauge reading seventeen.
 
-				   So they are checked against each other rather than assumed to
-				   agree: the list is carried only when its length IS the count.
-				   The gauge keeps the exact figure either way; what varies is
-				   whether it opens. */
+				   Carried anyway: reconciledList hands back whatever the walk
+				   found, and the drawer reads "at least 11 of 17" rather than
+				   claiming the eleven are all of them. The gauge keeps the
+				   exact figure either way; what varies is whether the drawer
+				   can say COMPLETE or only AT LEAST. */
 				row["extra"] = v
 				if list := reconciledList(extraListFromRows[strFromAny(r["label"])], v); list != nil {
 					row["extraDomains"] = list
-					listsCarried++
 				}
 			} else if v, ok := extraFromRows[strFromAny(r["label"])]; ok {
 				/* No service answer, so the walk supplies both — and here they
@@ -1935,7 +1999,6 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 				row["extra"] = v
 				if list := reconciledList(extraListFromRows[strFromAny(r["label"])], v); list != nil {
 					row["extraDomains"] = list
-					listsCarried++
 				}
 			} else if extraKey != "" {
 				row["extra"] = numOf(r[extraKey])
@@ -1946,32 +2009,21 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		if d.Key == dimAppSource {
 			out = nameAppSourceRows(out)
 		}
-		/* A CAVEAT THE DRAWERS MAKE NECESSARY — and it is two different caveats.
+		/* A CAVEAT THE DRAWERS MAKE NECESSARY.
 
-		   The row walk has always been capped. What that costs depends on which
-		   road supplied the count:
-
-		     · the SERVICE answered, so the count is exact over the whole window
-		       and only the LISTS fell short. reconciledList then withheld every
-		       one of them and the gauges do not open. Silence here would leave a
-		       reader who saw the domains yesterday wondering where they went.
-
-		     · nothing answered, so the walk supplied both and both understate.
-		       That was already true before these drawers existed; it is only
-		       sayable now, because a reader can finally see a domain missing.
+		   The row walk has always been capped, and every drawer on this panel is
+		   built from it. The gauge stays exact regardless — it is the service's
+		   own COUNT(DISTINCT) — but a drawer opened from a capped walk can be
+		   showing a LOWER BOUND rather than the whole list, and a reader
+		   comparing two providers needs to know that before treating "11" as
+		   "all of them".
 
 		   Raised only where this panel has domain lists at all. Every other panel
 		   the walk feeds is untouched. */
 		if extraRowsCapped && len(extraListFromRows) > 0 {
-			if listsCarried > 0 {
-				notice("%s was counted over the first %d rows of this window, so a "+
-					"provider's domain list can be short of domains it genuinely carries.",
-					d.Label, extraRowsScanned)
-			} else {
-				notice("%s covers more than the %d rows its domain lists are read over, "+
-					"so the counts are exact but the gauges do not open in this window.",
-					d.Label, extraRowsScanned)
-			}
+			notice("%s was counted over the first %d rows of this window, so a "+
+				"provider's domain list here can be a lower bound rather than the "+
+				"whole of what it carries.", d.Label, extraRowsScanned)
 		}
 
 		// Where the dataset carries no name beside the id — or carries the column

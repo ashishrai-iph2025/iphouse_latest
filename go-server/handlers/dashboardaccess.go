@@ -203,6 +203,65 @@ func loadDashModules() []dashModule {
 }
 
 /*
+vodDashModules is the catalogue slice the VOD Reports picker offers — every
+dcp_module row categorised "VOD", already resolved to its report_platform by
+loadDashModules.
+
+Filtered here rather than by adding a parameter to loadDashModules: every
+existing caller wants the whole catalogue (the Reports picker's category
+tabs let an admin browse all three), and this is the one caller that wants
+exactly one slice of it, permanently. Category compared exactly, not
+case-insensitively, matching how the value is written — see
+DASHBOARD_CATEGORIES in lib/dashboardCategories.ts, which both ends of this
+already have to agree on byte-for-byte or a module silently stops sorting
+into its tab.
+*/
+func vodDashModules() []dashModule {
+	all := loadDashModules()
+	out := make([]dashModule, 0, len(all))
+	for _, m := range all {
+		if m.Category == "VOD" {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+/*
+vodOnlyPlatformKeys is the hard backstop the VOD Reports page checks a
+platform against before ever drawing it — every report_platform NOT claimed by
+a Sports- or War-Room-categorised module in the catalogue.
+
+report_platform carries no category column of its own (see the note on
+dashboardModuleKey above); VOD is what a platform is when nothing in the
+catalogue has claimed it as something narrower, the same "default" reasoning
+vodDashModules uses for the picker. Built independently of whatever the VOD
+grant (reportsAllowedForVOD) happens to hold, and checked IN ADDITION to it:
+the grant says what a login is ALLOWED to see, this says what the page
+CATEGORICALLY may ever show, and a stale or hand-edited grant row naming a
+Sports platform must not be enough on its own to draw Sports data on a page
+whose whole reason to exist is that it is not that.
+*/
+func vodOnlyPlatformKeys() map[string]bool {
+	claimed := map[string]bool{}
+	for _, m := range loadDashModules() {
+		if m.PlatformKey == "" {
+			continue
+		}
+		if strings.EqualFold(m.Category, "Sports") || strings.EqualFold(m.Category, "War Room") {
+			claimed[m.PlatformKey] = true
+		}
+	}
+	out := map[string]bool{}
+	for _, p := range loadPlatforms() {
+		if !claimed[p.Key] {
+			out[p.Key] = true
+		}
+	}
+	return out
+}
+
+/*
 ── ONE GRANT, TWO WAYS OF LOOKING AT IT ──────────────────────────────────────
 
 There used to be two allow-lists here — a platform list per loginId from Report
@@ -242,17 +301,21 @@ reads and writes.
 writePlatformGrant stores one allow-list against one login row — one company. A
 nil list clears the restriction, which is the absence of rows.
 
+`table` selects which grant this writes: reportAccessTable for Reports,
+reportAccessVODTable for VOD Reports — see reportAccessVODTable's own comment
+for why they are two tables rather than one scoped by a column.
+
 Deliberately the same shape of write as ReportAccessSave: delete the rows, then
 insert the list in one statement, with the sentinel standing in for "restricted
 to nothing" so it stays distinguishable from "never restricted".
 */
-func writePlatformGrant(id int64, keys []string, who string) error {
+func writePlatformGrant(table string, id int64, keys []string, who string) error {
 	valid := map[string]bool{}
 	for _, p := range loadPlatforms() {
 		valid[p.Key] = true
 	}
 	if _, _, err := db.Exec(
-		"DELETE FROM "+reportAccessTable+" WHERE login_id = ?", id); err != nil {
+		"DELETE FROM "+table+" WHERE login_id = ?", id); err != nil {
 		return err
 	}
 	if keys == nil {
@@ -276,7 +339,7 @@ func writePlatformGrant(id int64, keys []string, who string) error {
 		return nil
 	}
 	_, _, err := db.Exec(
-		"INSERT IGNORE INTO "+reportAccessTable+" (login_id, report_key, granted_by) VALUES "+
+		"INSERT IGNORE INTO "+table+" (login_id, report_key, granted_by) VALUES "+
 			strings.Join(cols, ", "), args...)
 	return err
 }
@@ -287,19 +350,85 @@ reports may THIS session see, or nil for all of them.
 
 One lookup now. The session names its login row, and that row carries the list
 both admin screens write.
+
+`scope` selects WHICH grant — scopeVOD for the VOD Reports page, "" (or
+anything else) for the original Reports page — the same constant and the same
+meaning as the admin picker's dashAccessScope. The two are independent grants
+on independent tables (see reportAccessVODTable) precisely so a login can hold
+different modules on each; resolving the wrong one here is a data leak between
+the two pages, not a cosmetic bug, which is why every caller of this function
+must have a scope in hand rather than assuming "Reports".
+
+The VOD answer is additionally bounded by vodOnlyPlatformKeys, INSIDE this
+function rather than left to each caller to remember. That backstop exists so
+a stale or hand-edited grant row naming a Sports platform cannot draw Sports
+data on the VOD page; putting it here means every caller gets it for free,
+including the "nil means unrestricted" case — an unrestricted VOD grant must
+still mean "every VOD platform", never "every platform, Sports included".
 */
-func reportsAllowedForClaims(claims *ipauth.Claims) map[string]bool {
+func reportsAllowedForClaims(claims *ipauth.Claims, scope string) map[string]bool {
 	if claims == nil {
 		return nil
+	}
+	if scope == scopeVOD {
+		return intersectAllowed(reportsAllowedForVOD(claims.LoginID), vodOnlyPlatformKeys())
 	}
 	return reportsAllowedFor(claims.LoginID)
 }
 
 /*
+intersectAllowed bounds a grant by a backstop it may never exceed.
+
+Pulled out of reportsAllowedForClaims as its own pure function because it is
+the one line in this file that IS the safety property — everything else is
+plumbing to get two maps to this point — and a property worth stating gets
+its own name and its own test rather than living inline where a future edit
+could reshape it without anyone noticing what rule they changed.
+
+nil `allowed` (unrestricted) returns the backstop whole, never nil: an
+unrestricted VOD grant must still mean "every VOD platform", not "every
+platform" — nil propagating through here would silently widen it to Sports.
+*/
+func intersectAllowed(allowed, backstop map[string]bool) map[string]bool {
+	if allowed == nil {
+		return backstop
+	}
+	out := map[string]bool{}
+	for k := range allowed {
+		if backstop[k] {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+/*
+scopeVOD is the `scope`/`page` value that selects the VOD Reports grant
+instead of the Reports one — the only recognised non-default value. Anything
+else (including empty) is the original, unscoped behaviour, so an old client
+that has never heard of `scope` keeps working exactly as before.
+*/
+const scopeVOD = "vod"
+
+// dashAccessScope resolves a request's `scope` into the catalogue it should
+// offer and the table it should read/write — the one branch point shared by
+// both methods below, so GET and POST cannot disagree about what "vod" means.
+func dashAccessScope(scope string) (mods []dashModule, allowedFor func(int64) map[string]bool, table string) {
+	if scope == scopeVOD {
+		return vodDashModules(), reportsAllowedForVOD, reportAccessVODTable
+	}
+	return loadDashModules(), reportsAllowedFor, reportAccessTable
+}
+
+/*
 ── GET/POST /api/admin/dashboard-access ──────────────────────────────────────
 
-GET  ?loginUsername=…  → the catalogue, plus what this account currently holds.
-POST { loginUsername, modules: [ids] | null }
+GET  ?loginId=…&scope=vod  → the catalogue, plus what this account currently holds.
+POST { loginId, modules: [ids] | null, scope: "vod" }
+
+`scope` selects which page's grant this reads or writes — omitted or anything
+but "vod" means the Reports page, exactly as before scope existed. See
+scopeVOD and reportAccessVODTable.
 
 `modules: null` clears the restriction and restores every report, which is the
 state every account starts in. An empty list is a different and equally real
@@ -317,7 +446,7 @@ func DashboardAccess(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		mods := loadDashModules()
+		mods, allowedFor, _ := dashAccessScope(r.URL.Query().Get("scope"))
 		out := make([]map[string]any, 0, len(mods))
 		for _, m := range mods {
 			out = append(out, map[string]any{
@@ -334,7 +463,7 @@ func DashboardAccess(w http.ResponseWriter, r *http.Request) {
 		/* The stored grant, resolved back into the modules that express it —
 		   which is what makes this picker agree with the User access tab
 		   instead of being a second opinion about the same account. */
-		grant := reportsAllowedFor(loginID)
+		grant := allowedFor(loginID)
 		restricted := grant != nil
 
 		var allowed []int64
@@ -382,12 +511,15 @@ func DashboardAccess(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			LoginID int64    `json:"loginId"`
 			Modules *[]int64 `json:"modules"`
+			Scope   string   `json:"scope"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.LoginID == 0 {
 			Fail(w, 422, "loginId is required")
 			return
 		}
+
+		mods, allowedFor, table := dashAccessScope(body.Scope)
 
 		who := ""
 		if claims != nil {
@@ -396,7 +528,7 @@ func DashboardAccess(w http.ResponseWriter, r *http.Request) {
 
 		if body.Modules == nil {
 			// Unrestricted: the ABSENCE of rows is the state, for this company.
-			if err := writePlatformGrant(body.LoginID, nil, who); err != nil {
+			if err := writePlatformGrant(table, body.LoginID, nil, who); err != nil {
 				Fail(w, 500, "Could not update report access")
 				return
 			}
@@ -409,7 +541,6 @@ func DashboardAccess(w http.ResponseWriter, r *http.Request) {
 		   nothing contributes nothing rather than being stored as itself: it
 		   would grant no report, and it would outlive the catalogue row it was
 		   named for. */
-		mods := loadDashModules()
 		byID := map[int64]dashModule{}
 		for _, m := range mods {
 			byID[m.ID] = m
@@ -435,7 +566,7 @@ func DashboardAccess(w http.ResponseWriter, r *http.Request) {
 				expressible[m.PlatformKey] = true
 			}
 		}
-		for k := range reportsAllowedFor(body.LoginID) {
+		for k := range allowedFor(body.LoginID) {
 			if k != reportAccessNone && !expressible[k] {
 				wanted[k] = true
 			}
@@ -447,7 +578,7 @@ func DashboardAccess(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Strings(keys)
 
-		if err := writePlatformGrant(body.LoginID, keys, who); err != nil {
+		if err := writePlatformGrant(table, body.LoginID, keys, who); err != nil {
 			Fail(w, 500, "Could not save report access")
 			return
 		}

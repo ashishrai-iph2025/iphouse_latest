@@ -148,14 +148,14 @@ func TestSummaryIsNeverNarrowedToNothing(t *testing.T) {
 // business.
 func TestOnlyTheSummaryIsNarrowed(t *testing.T) {
 	in := mobileAppsPlatform()
-	got := narrowSummaryToAttached(in, nil)
+	got := narrowSummaryToAttached(in, nil, "")
 	if tablesOf(got) != tablesOf(in) {
 		t.Errorf("a non-summary platform was narrowed: %s", tablesOf(got))
 	}
 	// A summary with no sources configured has nothing to trim, and must not
 	// reach the database to find that out.
 	empty := platformDef{Key: summaryKey}
-	if got := narrowSummaryToAttached(empty, nil); len(got.Tables) != 0 {
+	if got := narrowSummaryToAttached(empty, nil, ""); len(got.Tables) != 0 {
 		t.Errorf("an empty summary gained tables: %s", tablesOf(got))
 	}
 }

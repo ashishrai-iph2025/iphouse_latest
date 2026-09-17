@@ -54,6 +54,20 @@ const (
 	colProfileStatus = "RemovalProfileStatus"
 	colProfileURL    = "ProfileURL"
 	colSubscriberCnt = "Subscribers"
+	colViews = "Views"
+	// The CHANNEL's own status — a different question from colRemovalStatus,
+	// which is about the ROW (the URL/post). A post can come down while the
+	// channel that carried it stays up, and a channel can be suspended with
+	// its posts still listed, so this is read from its own column rather
+	// than inferred from the row's — the exact same reasoning colProfileStatus
+	// already applies to profiles, RemovalChannelStatus is its counterpart for
+	// tables that record the account as a CHANNEL instead. Mirrors
+	// channelsSuspended's SQL expression in reportplatforms.go's inferSpec —
+	// that string is only ever used as an availability flag in the API-bridge
+	// path, never executed there, because there is no SQL engine on that side
+	// to run it against; this is the row-walk equivalent that actually
+	// produces the number. See runSpecViaAPI in reportsapi_bridge.go.
+	colRemovalChannelStatus = "RemovalChannelStatus"
 )
 
 /*
@@ -131,6 +145,35 @@ type rowMetrics struct {
 	   client is up against, where impactedSubscribers is the reach enforcement
 	   has taken off the table. Same max-per-profile rule, ungated. */
 	totalSubscribers int64
+
+	// Views on the rows that came down — SUM(Views) WHERE isDead(RemovalStatus).
+	// Same predicate `removed` above is counted under; see removedRowTest in
+	// reportplatforms.go, which is the SQL-side twin of this walk.
+	viewsImpacted int64
+
+	/* ── The CHANNEL identity ─────────────────────────────────────────────
+
+	   A table that records the account as a CHANNEL rather than a PROFILE —
+	   Telegram, which carries ChannelURL/RemovalChannelStatus and no
+	   ProfileURL/RemovalProfileStatus at all — needs the exact same three
+	   figures counted the exact same way (MAX subscriber snapshot per unique
+	   account, never summed per post), just off a different pair of columns.
+	   Kept as their own fields rather than reusing the profile ones above:
+	   the two identities never coexist on one table, but keeping them
+	   separate means a caller can never mix a channel count into a profile
+	   tile by accident. */
+
+	// COUNT(DISTINCT ChannelURL) WHERE isDead(RemovalChannelStatus). A
+	// channel with no ChannelURL on any of its rows cannot be identified, so
+	// it is not counted — same reasoning colProfileURL already applies to
+	// profiles.
+	channelsSuspended int64
+	// Sum of each suspended channel's largest Subscribers snapshot — the
+	// channel-identity twin of impactedSubscribers.
+	channelImpactedSubscribers int64
+	// Sum of EVERY channel's largest Subscribers snapshot, suspended or not —
+	// the channel-identity twin of totalSubscribers.
+	channelTotalSubscribers int64
 }
 
 /*
@@ -143,6 +186,15 @@ disappearing, which reads as "this report does not measure that".
 */
 func hasProfileColumns(ds reportsapi.Dataset) bool {
 	return hasColumn(ds, colProfileStatus) && hasColumn(ds, colProfileURL)
+}
+
+// hasChannelColumns is hasProfileColumns' twin for a table that records the
+// account as a CHANNEL instead — Telegram, which carries no ProfileURL at
+// all. The two are checked separately rather than either/or-ed together,
+// because a table could in principle carry both, and each identity's figures
+// have to be counted off its own pair of columns.
+func hasChannelColumns(ds reportsapi.Dataset) bool {
+	return hasColumn(ds, colRemovalChannelStatus) && hasColumn(ds, colChannelURL)
 }
 
 /*
@@ -188,10 +240,13 @@ func computeRowMetrics(rows []map[string]any, dateCol string, groupCols []string
 	   written, so the same profile carries different numbers on different rows,
 	   and the largest is the one that reflects the account at its reach. */
 	var profileSubs, allSubs map[string]int64
+	// The channel-identity twins of profileSubs/allSubs — see hasChannelColumns.
+	var channelSubsSuspended, channelSubsAll map[string]int64
 
 	for _, r := range rows {
 		if isDead(r[colRemovalStatus]) {
 			m.removed++
+			m.viewsImpacted += numOf(r[colViews])
 			if dateCol != "" {
 				if d := strings.TrimSpace(strFromAny(r[dateCol])); d != "" {
 					// The service buckets a day as a date; a datetime column
@@ -204,6 +259,35 @@ func computeRowMetrics(rows []map[string]any, dateCol string, groupCols []string
 			}
 			for _, c := range groupCols {
 				m.removedByCol[c][groupValue(r[c])]++
+			}
+		}
+
+		/* ── THE AUDIENCE, PER CHANNEL ─────────────────────────────────────
+		   Same MAX-per-account rule as the profile block below, off
+		   ChannelURL/RemovalChannelStatus instead — see hasChannelColumns. */
+		if url := strings.TrimSpace(strFromAny(r[colChannelURL])); url != "" {
+			if channelSubsAll == nil {
+				channelSubsAll = map[string]int64{}
+			}
+			if subs := numOf(r[colSubscriberCnt]); subs > channelSubsAll[url] {
+				channelSubsAll[url] = subs
+			}
+		}
+
+		/* The CHANNEL's own status — a different question from the row's
+		   RemovalStatus above. A post can come down while the channel that
+		   carried it stays up, and a channel can be suspended with its posts
+		   still listed, so this is read from its own column. */
+		if isDead(r[colRemovalChannelStatus]) {
+			url := strings.TrimSpace(strFromAny(r[colChannelURL]))
+			if url != "" {
+				if channelSubsSuspended == nil {
+					channelSubsSuspended = map[string]int64{}
+				}
+				subs := numOf(r[colSubscriberCnt])
+				if cur, seen := channelSubsSuspended[url]; !seen || subs > cur {
+					channelSubsSuspended[url] = subs
+				}
 			}
 		}
 
@@ -254,6 +338,14 @@ func computeRowMetrics(rows []map[string]any, dateCol string, groupCols []string
 	m.profilesSuspended = int64(len(profileSubs))
 	for _, subs := range allSubs {
 		m.totalSubscribers += subs
+	}
+
+	for _, subs := range channelSubsSuspended {
+		m.channelImpactedSubscribers += subs
+	}
+	m.channelsSuspended = int64(len(channelSubsSuspended))
+	for _, subs := range channelSubsAll {
+		m.channelTotalSubscribers += subs
 	}
 	return m
 }
@@ -310,7 +402,8 @@ the warehouse:
 	SportsURLRawData                ChannelName     326 names — ESPN, TNT Sports…
 	SportsSourceURLRawData          ChannelName     318 names
 	Agg_Daily_Youtube_MasterNew     ChannelName             the YouTube account
-	SocialMedia_Sports_Raw          none
+	SocialMedia_Sports_Raw          TVChannelName    landed 2026-09-13 — see the
+	                                                 reports_api registry
 
 TVChannelName IS THE ANSWER WHEREVER IT EXISTS. Two tables do not have it and
 are not going to — the two Open Web sports raw tables, where ChannelName is the

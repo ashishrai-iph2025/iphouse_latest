@@ -72,14 +72,27 @@ interface DashModuleRow {
 const sameIds = (a: number[], b: Set<number>) =>
   a.length === b.size && a.every(id => b.has(id))
 
-export default function LoginDashboardAccess({ loginId, clientName }: {
+export default function LoginDashboardAccess({ loginId, clientName, scope, pageLabel }: {
   /** The login row for the company selected above — what this grant is keyed
       on, and what makes it change when the picker changes. */
   loginId: number
   /** That company's name, so the copy can say which client is being narrowed
       rather than leaving it to be inferred from a picker further up. */
   clientName?: string
+  /** Which grant this narrows — 'vod' for the VOD Reports page's own,
+      independent grant, omitted for the original Reports page. Threaded
+      straight through to the API; see dashAccessScope in
+      go-server/handlers/dashboardaccess.go, the one place both ends of this
+      pairing are decided. */
+  scope?: 'vod'
+  /** The page this component's own copy names — "Reports" by default, "VOD
+      Reports" when scope="vod". Kept as its own prop rather than derived from
+      `scope` so the two callers in LoginModuleAccess state the pairing once,
+      in one place, instead of this component guessing a label from a code. */
+  pageLabel?: string
 }) {
+  const label = pageLabel ?? 'Reports'
+  const scopeQS = scope ? `&scope=${scope}` : ''
   const [modules,    setModules]    = useState<DashModuleRow[]>([])
   /* Two flags, not one. `serverRestricted` is what is stored; `restricted` is
      where the switch is. They part company for exactly one useful moment —
@@ -102,7 +115,7 @@ export default function LoginDashboardAccess({ loginId, clientName }: {
     setLoading(true); setErr(''); setNote('')
     try {
       const res = await fetch(
-        `/api/admin/dashboard-access?loginId=${loginId}`,
+        `/api/admin/dashboard-access?loginId=${loginId}${scopeQS}`,
         { credentials: 'include' })
       const data = await res.json()
       if (!data?.success) { setErr(data?.error || 'Could not read report access'); return }
@@ -123,13 +136,24 @@ export default function LoginDashboardAccess({ loginId, clientName }: {
       for (const r of rows) {
         if (allowed.includes(r.moduleId)) seed.add((r.category || '').trim() || UNFILED)
       }
+      /* Nothing granted yet, so nothing to recover a category from. A catalogue
+         with exactly one category in it — always true for the VOD Reports
+         picker, whose catalogue is pre-filtered to VOD alone (see
+         vodDashModules in go-server/handlers/dashboardaccess.go) — has no real
+         "choose a category" question, so open on the one that exists rather
+         than making the admin click the only button available. */
+      if (seed.size === 0) {
+        const allCats = new Set<string>()
+        for (const r of rows) allCats.add((r.category || '').trim() || UNFILED)
+        if (allCats.size === 1) seed.add([...allCats][0])
+      }
       setCats(seed)
     } catch {
       setErr('Could not read report access')
     } finally {
       setLoading(false)
     }
-  }, [loginId])
+  }, [loginId, scopeQS])
 
   useEffect(() => { load() }, [load])
 
@@ -239,6 +263,7 @@ export default function LoginDashboardAccess({ loginId, clientName }: {
         body: JSON.stringify({
           loginId,
           modules: nextRestricted ? [...picked] : null,
+          scope,
         }),
       })
       const data = await res.json().catch(() => ({}))
@@ -288,7 +313,7 @@ export default function LoginDashboardAccess({ loginId, clientName }: {
           </p>
 
           <p className="text-[11px] text-gray-500 dark:text-white/50 mt-1.5 leading-relaxed">
-            Narrows the <strong>Reports</strong> page to chosen modules from the
+            Narrows the <strong>{label}</strong> page to chosen modules from the
             dashboard module catalogue. Everything else about the report — the figures,
             the filters, the layout — is unchanged; this only decides which reports are
             in the sidebar and which the server will serve.
@@ -296,11 +321,16 @@ export default function LoginDashboardAccess({ loginId, clientName }: {
 
           {/* Said plainly, because two screens editing one thing is the sort of
               arrangement people discover by making a change that appears to
-              undo someone else's. */}
-          <p className="text-[11px] text-gray-500 dark:text-white/50 mt-1.5 leading-relaxed">
-            This is the same grant as <strong>Report Configuration › User access</strong> —
-            one list, shown two ways. Ticking here ticks there, and the reverse.
-          </p>
+              undo someone else's. True only for the Reports grant — VOD
+              Reports has no Report Configuration tab reading its table yet,
+              and claiming a sync that does not exist would be worse than
+              saying nothing. */}
+          {!scope && (
+            <p className="text-[11px] text-gray-500 dark:text-white/50 mt-1.5 leading-relaxed">
+              This is the same grant as <strong>Report Configuration › User access</strong> —
+              one list, shown two ways. Ticking here ticks there, and the reverse.
+            </p>
+          )}
 
           {/* Which client this is about, named rather than left to the picker
               two sections up — this control is far enough below it that "the

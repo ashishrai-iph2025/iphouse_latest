@@ -65,7 +65,7 @@ func ensureVizPrefSchema() {
 */
 func ReportVizPrefsGet(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
-	if claims == nil || !mayOpenReports(claims) {
+	if claims == nil || !mayOpenAnyReportsPage(claims) {
 		Fail(w, 403, "The Reports module is not enabled for this account")
 		return
 	}
@@ -100,7 +100,7 @@ func ReportVizPrefsGet(w http.ResponseWriter, r *http.Request) {
 */
 func ReportVizPrefsSave(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
-	if claims == nil || !mayOpenReports(claims) {
+	if claims == nil || !mayOpenAnyReportsPage(claims) {
 		Fail(w, 403, "The Reports module is not enabled for this account")
 		return
 	}

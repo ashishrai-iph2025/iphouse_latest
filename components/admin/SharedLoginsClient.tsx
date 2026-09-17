@@ -8,6 +8,7 @@ import SearchableSelect from '@/components/ui/SearchableSelect'
 import LoginSecurityPanel from './LoginSecurityPanel'
 import LoginClientAdmin from './LoginClientAdmin'
 import LoginModuleAccess, { type LoginAssignment } from './LoginModuleAccess'
+import LoginThemeLayout from './LoginThemeLayout'
 import ReportLoader from '@/components/shared/ReportLoader'
 
 interface LoginGroup {
@@ -156,6 +157,15 @@ const ShieldIcon = () => (
     <path d="M12 3l7 3v6c0 4.5-3 7.7-7 9-4-1.3-7-4.5-7-9V6z" />
   </svg>
 )
+const PaletteIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" {...ICON}>
+    <path d="M12 3a9 9 0 1 0 0 18c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.4-.5-.8-.5-1.3 0-1.1.9-2 2-2H17a4 4 0 0 0 4-4c0-4.4-4-7.4-9-7.4z" />
+    <circle cx="7.5" cy="11" r="1" fill="currentColor" stroke="none" />
+    <circle cx="9.5" cy="7" r="1" fill="currentColor" stroke="none" />
+    <circle cx="14.5" cy="7" r="1" fill="currentColor" stroke="none" />
+    <circle cx="16.5" cy="11" r="1" fill="currentColor" stroke="none" />
+  </svg>
+)
 
 /*
  * The company↔login pairs the access panel works in.
@@ -204,9 +214,10 @@ function parseAssignments(raw: string | null, masterUsers: MasterUser[]): LoginA
 
 /* ── The panes ─────────────────────────────────────────────────────────────
  *
- * One editor, five concerns: who this person is, how they sign in, which
- * companies they may read, which screens they get on each, and what the
- * security policy currently says about the account.
+ * One editor, six concerns: who this person is, how they sign in, which
+ * companies they may read, which screens they get on each, what their portal
+ * looks like on each, and what the security policy currently says about the
+ * account.
  *
  * They used to be five cards stacked in one column half a window wide, which
  * made the drawer a scroll — and the two that arrived last, module access and
@@ -227,7 +238,7 @@ function parseAssignments(raw: string | null, masterUsers: MasterUser[]): LoginA
  * render, so React unmounts the subtree to mount a fresh one — the <input> DOM
  * nodes with it, which is why typing one character used to drop focus.
  */
-type PaneKey = 'person' | 'signin' | 'access' | 'modules' | 'security'
+type PaneKey = 'person' | 'signin' | 'access' | 'modules' | 'layout' | 'security'
 
 const PANES: {
   key: PaneKey; label: string; icon: () => JSX.Element
@@ -238,8 +249,9 @@ const PANES: {
   { key: 'person',   label: 'Person',        icon: PersonIcon },
   { key: 'signin',   label: 'Sign-in',       icon: KeyIcon    },
   { key: 'access',   label: 'Companies',     icon: UsersIcon  },
-  { key: 'modules',  label: 'Module access', icon: GridIcon,   editOnly: true },
-  { key: 'security', label: 'Security',      icon: ShieldIcon, editOnly: true },
+  { key: 'modules',  label: 'Module access', icon: GridIcon,    editOnly: true },
+  { key: 'layout',   label: 'Portal layout', icon: PaletteIcon, editOnly: true },
+  { key: 'security', label: 'Security',      icon: ShieldIcon,  editOnly: true },
 ]
 
 function PersonSection({ form, setForm }: {
@@ -1109,6 +1121,10 @@ export default function SharedLoginsClient() {
                         assignments={parseAssignments(editTarget.assignments, masterUsers)}
                         pendingUserIds={form.userIds}
                         loginUsername={editTarget.login_username} />
+                    </div>
+                    <div className={pane === 'layout' ? '' : 'hidden'}>
+                      <LoginThemeLayout
+                        assignments={parseAssignments(editTarget.assignments, masterUsers)} />
                     </div>
                     <div className={pane === 'security' ? '' : 'hidden'}>
                       <LoginSecurityPanel loginId={editTarget.loginId} />

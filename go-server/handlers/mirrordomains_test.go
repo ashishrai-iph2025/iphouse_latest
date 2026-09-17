@@ -165,18 +165,19 @@ func TestStringListOfReadsListsAndOnlyLists(t *testing.T) {
 }
 
 /*
-── A LIST THAT CANNOT ACCOUNT FOR ITS COUNT IS DROPPED ──────────────────────
+── A LIST THAT CANNOT ACCOUNT FOR ITS COUNT IS SHOWN AS A LOWER BOUND ───────
 
 The provider cards get their domain list from a walk over raw rows, and their
 domain COUNT from either that same walk or from the service — whichever
 answered. Where the service answered, the row carries the count and no list.
 
 Merge such a row with one that does carry a list and the union is a fragment:
-eight names under a gauge reading twenty-nine. The count is the trustworthy half
-there, so it stands and the drawer is not offered — the card goes back to being
-exactly what it was before it had one.
+two names under a gauge reading twenty-nine. The count is the trustworthy half
+there, so it is left alone rather than shrunk to match — but the two names are
+still worth having, and the drawer now offers them rather than nothing. See
+reconciledList, the single-table version of the same call.
 */
-func TestAPartialListIsDroppedRatherThanShown(t *testing.T) {
+func TestAPartialUnionIsShownWithoutShrinkingTheCount(t *testing.T) {
 	sets := breakdownSets{}
 	// One source walked the rows and has the names.
 	accumulateBreakdownSet(sets, "byHSPNotices", "Netulu Incorporated", map[string]any{
@@ -188,12 +189,13 @@ func TestAPartialListIsDroppedRatherThanShown(t *testing.T) {
 	row := map[string]any{"label": "Netulu Incorporated", "extra": int64(29)}
 	applyBreakdownSets(sets, "byHSPNotices", "Netulu Incorporated", row)
 
-	if _, has := row["extraDomains"]; has {
-		t.Errorf("a two-name list survived under a count of 29: %v", row["extraDomains"])
+	got := stringListOf(row["extraDomains"])
+	if len(got) != 2 {
+		t.Errorf("extraDomains = %v, want the two names carried through as a lower bound", got)
 	}
 	if numOf(row["extra"]) != 29 {
-		t.Errorf("extra = %v, want the summed 29 left alone — the count is the half "+
-			"that is still trustworthy here", row["extra"])
+		t.Errorf("extra = %v, want the summed 29 left alone — a two-name fragment must "+
+			"not shrink the count that is still trustworthy here", row["extra"])
 	}
 }
 
@@ -277,7 +279,7 @@ func TestTheProviderCountIsTheSizeOfItsList(t *testing.T) {
 }
 
 /*
-── THE GAUGE ONLY OPENS WHERE WHAT OPENS ACCOUNTS FOR IT ────────────────────
+── THE GAUGE OPENS ON WHATEVER OF IT THE WALK CAN VOUCH FOR ─────────────────
 
 The provider cards' domain COUNT comes from the service — an exact
 COUNT(DISTINCT) over the window — and their domain LIST from this bridge's walk
@@ -287,21 +289,26 @@ Measured on the live warehouse on 12 September 2026: the breakdown endpoint DOES
 return `domains` (Netulu Incorporated 17, BestDC Limited 54 for DAZN's
 1–11 September window), and the same window holds 5,136 rows — so the walk is
 complete and the two agree exactly. A window over the whole 836,669-row host
-table would not be, and that is the case this guards.
+table would not be — the case this now hands over as a lower bound instead of
+withholding.
 */
-func TestAGaugeOpensOnlyOnAListThatAccountsForIt(t *testing.T) {
+func TestAGaugeOpensOnWhateverTheWalkCanVouchFor(t *testing.T) {
 	three := []string{"a.example", "b.example", "c.example"}
 
 	// The live case: the walk saw everything the service counted.
 	if got := reconciledList(three, 3); len(got) != 3 {
 		t.Errorf("a complete list was withheld: %v", got)
 	}
-	/* The capped case: seventeen counted, eleven seen. The count is the
-	   trustworthy half, so it stands alone rather than over a short drawer. */
-	if got := reconciledList(three, 17); got != nil {
-		t.Errorf("a three-name list was offered under a count of 17: %v", got)
+	/* The capped case: seventeen counted, three seen. Offered anyway, as a
+	   lower bound — the caller is what compares len(list) against count and
+	   says "at least 3 of 17" rather than claiming completeness. */
+	if got := reconciledList(three, 17); len(got) != 3 {
+		t.Errorf("a partial list was withheld rather than offered as a lower bound: %v", got)
 	}
-	// And a list somehow LONGER than its count is just as unreconciled.
+	/* A list LONGER than its count is a different failure — the walk saw MORE
+	   distinct values than a correct exact count over the same rows could, so
+	   the two disagree about the data rather than about how much of it each
+	   saw. That is still dropped outright. */
 	if got := reconciledList(three, 2); got != nil {
 		t.Errorf("a three-name list was offered under a count of 2: %v", got)
 	}

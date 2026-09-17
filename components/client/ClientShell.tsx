@@ -1,5 +1,6 @@
 ﻿'use client'
 
+import { useState } from 'react'
 import { usePathname } from '@/lib/router'
 import ClientNavbar from './ClientNavbar'
 import ImpersonationBanner from './ImpersonationBanner'
@@ -7,12 +8,10 @@ import SideNav from './SideNav'
 import IdleTimeoutGuard from '@/components/shared/IdleTimeoutGuard'
 import Footer from '@/components/ui/Footer'
 import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner'
-import ThemeCustomizer from '@/components/ui/ThemeCustomizer'
 import { MasterDataProvider } from '@/lib/masterDataContext'
 import { ModuleAccessProvider } from '@/lib/moduleAccess'
 import { ThemeProvider } from '@/lib/ThemeContext'
 import { ThemeCustomizerProvider, useCustomizer } from '@/lib/ThemeCustomizerContext'
-import { isSidebarLayout } from '@/lib/navItems'
 
 interface Props {
   children: React.ReactNode
@@ -35,47 +34,60 @@ their own padding, so bypassing the wrapper costs nothing.
    figures strung out across it, which is the band-of-empty-page problem above
    in reverse: not too little room, too much. Inside the measure it reads as one
    page instead of a wall. */
-const FULL_WIDTH_PAGES = ['/dashboard', '/war-room', '/reports']
+const FULL_WIDTH_PAGES = ['/dashboard', '/war-room', '/reports', '/report-vod']
 
 function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const fullWidth = FULL_WIDTH_PAGES.includes(pathname)
-  const { layoutWidth, navLayout, navbarStyle } = useCustomizer()
+  const { sidebarEnabled, headerVisible } = useCustomizer()
 
-  const sidebar = isSidebarLayout(navLayout)
-  const isRightSide = navLayout === 'menu-aside' || navLayout === 'rtl'
-  const noHeader = sidebar && navLayout === 'without-header'
+  /* headerVisible only means anything with the sidebar on — with it off, the
+     nav tabs themselves live in the header (ClientNavbar's row 2), so hiding
+     it there would take the only way to navigate with it. */
+  const showHeader = !sidebarEnabled || headerVisible
 
-  const maxW = layoutWidth === 'boxed' ? 'max-w-6xl' : 'max-w-screen-2xl'
+  // The sidebar drawer's open/closed state on mobile, where SideNav is
+  // normally off-screen entirely — lifted here rather than owned by either
+  // component, since the trigger for it lives in ClientNavbar (the header's
+  // own hamburger, repurposed) while the drawer itself lives in SideNav, and
+  // they're siblings with no other way to talk to each other.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
-  if (sidebar) {
+  if (sidebarEnabled) {
+    /* The sidebar spans the full height on the far left; the header sits in
+       the column to its RIGHT, not above it — it used to run the page's full
+       width, above the sidebar, which put its logo directly over the
+       sidebar's own logo one row down. Mirrors AdminShell.tsx's own
+       sidebar/right-column split. ImpersonationBanner stays outside that
+       split, full width, since it is a page-level alert rather than
+       something the header/sidebar distinction applies to. */
     return (
-      <div className="flex flex-col layout-container" style={{ minHeight: '100dvh' }}>
+      <div className="flex flex-col layout-container" style={{ height: '100dvh' }}>
         <ImpersonationBanner />
-        {/* Top header (logo + profile) – hidden for without-header layout */}
-        {!noHeader && <ClientNavbar />}
+        <div className="flex flex-1 min-h-0 overflow-hidden flex-row">
+          <SideNav mobileOpen={mobileNavOpen} onOpenChange={setMobileNavOpen} />
 
-        {/* Directly under the header and outside the scrolling body, for the
-            same reason as the admin shell: it must not scroll away. */}
-        <PasswordExpiryBanner />
-
-        {/* Body: sidebar + main content */}
-        <div className={`flex flex-1 min-h-0 overflow-hidden ${isRightSide ? 'flex-row-reverse' : 'flex-row'}`}>
-          <SideNav />
-
-          <main className="flex-1 flex flex-col overflow-auto bg-[#eef2f7] dark:bg-[#0f1f3d]">
-            {fullWidth ? (
-              children
-            ) : (
-              <div className={`w-full mx-auto px-3 sm:px-5 lg:px-8 py-4 sm:py-6 ${maxW}`}>
-                {children}
-              </div>
+          <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+            {showHeader && (
+              <ClientNavbar sidebarMobileOpen={mobileNavOpen} onSidebarMobileOpenChange={setMobileNavOpen} />
             )}
-            <Footer />
-          </main>
-        </div>
 
-        <ThemeCustomizer />
+            {/* Directly under the header and outside the scrolling body, for
+                the same reason as the admin shell: it must not scroll away. */}
+            <PasswordExpiryBanner />
+
+            <main className="flex-1 flex flex-col overflow-auto bg-[#eef2f7] dark:bg-[#0f1f3d]">
+              {fullWidth ? (
+                children
+              ) : (
+                <div className="w-full mx-auto px-3 sm:px-5 lg:px-8 py-4 sm:py-6 max-w-screen-2xl">
+                  {children}
+                </div>
+              )}
+              <Footer />
+            </main>
+          </div>
+        </div>
       </div>
     )
   }
@@ -104,13 +116,12 @@ function Shell({ children }: { children: React.ReactNode }) {
         {fullWidth ? (
           children
         ) : (
-          <div className={`w-full mx-auto px-3 sm:px-5 lg:px-10 py-4 sm:py-6 ${maxW}`}>
+          <div className="w-full mx-auto px-3 sm:px-5 lg:px-10 py-4 sm:py-6 max-w-screen-2xl">
             {children}
           </div>
         )}
         <Footer />
       </main>
-      <ThemeCustomizer />
     </div>
   )
 }

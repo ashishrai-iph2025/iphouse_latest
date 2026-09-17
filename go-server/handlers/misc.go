@@ -189,8 +189,6 @@ func UserNav(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	/* Dashboard and Reports are one entitlement with two faces — see
-	   effectiveNavModules for the rule and why it lives there. */
 	granted := make([]string, 0, len(allowed))
 	byName := make(map[string]map[string]any, len(allowed))
 	for _, row := range allowed {
@@ -691,36 +689,8 @@ func postJSONWithBearer(url, token string, payload any) (map[string]any, error) 
 	return result, nil
 }
 
-/*
-── Dashboard and Reports are one entitlement with two faces ──────────────────
-
-	They present the same client's figures, so a login never gets both:
-
-	  Reports granted        Reports. Dashboard is dropped even where it was
-	                         also ticked — two nav items for the same numbers
-	                         are two places to disagree and a choice that means
-	                         nothing to the person making it.
-	  Reports not granted    Dashboard, IF it was granted. Otherwise neither.
-
-	Dashboard is a permission like any other. It was briefly a floor — synthesised
-	for every login that had not been given Reports — which meant the nav showed a
-	module nobody had granted and an admin could not take it away. A permission
-	that cannot be withheld is not a permission, and "nothing granted" is a
-	legitimate state: it says the account is not set up yet, which is worth seeing
-	rather than papering over.
-
-	So the rule now only ever REMOVES. Nothing is invented here.
-
-	Decided HERE, on the read, rather than when the permissions are saved. This
-	endpoint is what the nav and every client-side gate consult, so the rule
-	holds for grants written before it existed and for anything inserted
-	straight into the table — neither of which a save-time check would reach.
-
-	Everything else passes through in the order it was granted.
-*/
 const (
-	// The module_permission ModuleName the exclusivity rule is written in, and
-	// the one the admin pickers compare against (lib/moduleExclusivity.ts).
+	// The module_permission ModuleName the admin pickers compare against.
 	dashboardModuleName = "Dashboard"
 
 	/* The identifier the nav keys on — NAV_ITEMS in lib/navItems.tsx.
@@ -732,34 +702,10 @@ const (
 	dashboardPageName = "dashboard"
 )
 
-func effectiveNavModules(granted []string) []string {
-	hasReports := false
-	for _, n := range granted {
-		if strings.EqualFold(n, reportsPageName) {
-			hasReports = true
-			break
-		}
-	}
-
-	out := make([]string, 0, len(granted))
-	for _, n := range granted {
-		// The one subtraction: Reports supersedes Dashboard where both are
-		// ticked. Where Reports is absent, Dashboard stands or falls on its
-		// own grant like everything else in the list.
-		if hasReports && strings.EqualFold(n, dashboardModuleName) {
-			continue
-		}
-		out = append(out, n)
-	}
-	return out
-}
-
 /*
 navEntries turns the resolved module NAMES into the nav payload.
 
-Split out of UserNav so it can be tested. The exclusivity rule had a test and
-this did not, which is precisely where the Dashboard tab went missing: the rule
-was choosing correctly and the assembly was mislabelling the answer.
+Split out of UserNav so it can be tested.
 
 `byName` is the granted rows keyed by lower-cased ModuleName; `dropByParent` is
 the admin-configured dropdown children keyed by pageName.
@@ -767,10 +713,10 @@ the admin-configured dropdown children keyed by pageName.
 /*
 mayOpenDashboard reports whether this login may read the dashboard's contents.
 
-Keyed on ModuleName rather than pageName, matching effectiveNavModules and the
-admin pickers — the seeded row's pageName is "DashboardAccess", which is exactly
-the mismatch that hid the tab, and repeating it here would hand a 403 to every
-login that legitimately has the grant.
+Keyed on ModuleName rather than pageName and the admin pickers — the seeded
+row's pageName is "DashboardAccess", which is exactly the mismatch that hid
+the tab, and repeating it here would hand a 403 to every login that
+legitimately has the grant.
 
 Staff pass: they administer these dashboards and reach them from /admin.
 */
@@ -797,7 +743,7 @@ func navEntries(
 	dropByParent map[string][]map[string]any,
 ) []map[string]any {
 	modules := []map[string]any{}
-	for _, name := range effectiveNavModules(granted) {
+	for _, name := range granted {
 		/* Dashboard is emitted with the pageName the NAV keys on, never with
 		   whatever the module_permission row happens to carry.
 
@@ -808,11 +754,10 @@ func navEntries(
 		   so the client dropped it and a login granted Dashboard saw no
 		   Dashboard.
 
-		   Matched by NAME because that is what the grant, the exclusivity rule
-		   and the admin pickers are all written in. Only the identifier is
-		   overridden; the row still supplies the label and the order, so
-		   renaming or reordering on /admin/modules moves this tab like any
-		   other. */
+		   Matched by NAME because that is what the grant and the admin pickers
+		   are all written in. Only the identifier is overridden; the row still
+		   supplies the label and the order, so renaming or reordering on
+		   /admin/modules moves this tab like any other. */
 		if strings.EqualFold(name, dashboardModuleName) {
 			row, ok := byName[strings.ToLower(name)]
 			if !ok {

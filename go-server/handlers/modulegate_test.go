@@ -105,7 +105,10 @@ check or double-gates a route on the wrong module.
 func TestSelfGatedRoutesStillCheckTheirOwnGrant(t *testing.T) {
 	for _, c := range []struct{ file, fn string }{
 		{"warroom.go", "warRoomAllowed(claims)"},
-		{"reportsrun.go", "mayOpenReports(claims)"},
+		// mayOpenReport(claims, scope) since VOD Reports needed the same gate
+		// keyed on a second module — see reportclientmap.go's mayOpenReports,
+		// now a thin wrapper over this.
+		{"reportsrun.go", "mayOpenReport(claims, scope)"},
 		{"misc.go", "mayOpenDashboard(claims)"},
 	} {
 		src, err := os.ReadFile(c.file)

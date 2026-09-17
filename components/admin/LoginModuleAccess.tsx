@@ -31,15 +31,17 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import {
-  enforceDashboardReports, selectAllRespectingRule, hasBothDashboardAndReports,
-  isReportsSelected, DASHBOARD_REPORTS_HINT,
-} from '@/lib/moduleExclusivity'
 import LoginLayoutAccess from './LoginLayoutAccess'
 import LoginDashboardAccess from './LoginDashboardAccess'
 
 const ORANGE = '#FC934C'
 const NAVY = '#14254A'
+
+/** Reports' and VOD Reports' stable pageNames — identified by pageName rather
+    than ModuleName so renaming "Reports" or "VOD Reports" on /admin/modules
+    cannot hide these panels. */
+const REPORTS_PAGE = 'reports'
+const VOD_REPORTS_PAGE = 'report-vod'
 
 /** One company this login may read, and the login row carrying its grants. */
 export interface LoginAssignment {
@@ -129,9 +131,6 @@ export default function LoginModuleAccess({ assignments, pendingUserIds, loginUs
 
   useEffect(() => { load() }, [load])
 
-  const moduleNames = useMemo(
-    () => modules.map(m => ({ id: m.Id, name: m.ModuleName })), [modules])
-
   const picked = draft[sel] ?? new Set<number>()
   const dirty = (loginId: number) =>
     !!draft[loginId] && !!saved[loginId] && !same(saved[loginId], draft[loginId])
@@ -141,16 +140,11 @@ export default function LoginModuleAccess({ assignments, pendingUserIds, loginUs
     setDraft(prev => {
       const next = new Set(prev[sel] ?? [])
       if (next.has(id)) next.delete(id); else next.add(id)
-      // Dashboard and Reports are one entitlement — see lib/moduleExclusivity.
-      return { ...prev, [sel]: new Set(enforceDashboardReports([...next], id, moduleNames)) }
+      return { ...prev, [sel]: next }
     })
   }
 
-  /* "All" is everything the RULE allows, which is fewer than every module — so
-     the button's state cannot be a count against modules.length. */
-  const want = useMemo(
-    () => selectAllRespectingRule(modules.map(m => m.Id), moduleNames),
-    [modules, moduleNames])
+  const want = useMemo(() => modules.map(m => m.Id), [modules])
   const allOn = want.length > 0 && want.every(id => picked.has(id))
 
   function toggleAll() {
@@ -160,13 +154,6 @@ export default function LoginModuleAccess({ assignments, pendingUserIds, loginUs
 
   async function apply() {
     if (!sel) return
-    /* A selection can reach here without passing through a toggle — a grant made
-       before the rule existed loads straight into the checklist. Refused rather
-       than silently corrected: quietly dropping a module the admin can see
-       ticked is worse than saying so. */
-    if (hasBothDashboardAndReports([...picked], moduleNames)) {
-      setNote(DASHBOARD_REPORTS_HINT); return
-    }
     setSaving(true); setNote('')
     try {
       const r = await fetch('/api/admin/user-module-permissions', {
@@ -205,7 +192,13 @@ export default function LoginModuleAccess({ assignments, pendingUserIds, loginUs
      widening the test: a switch that stays visible on a company with no Reports
      is the more confusing of the two, because the checklist directly above it
      is then the only thing on screen saying otherwise. */
-  const reportsPicked = isReportsSelected([...picked], moduleNames)
+  const reportsPicked = modules.some(
+    m => picked.has(m.Id) && (m.pageName ?? '').trim().toLowerCase() === REPORTS_PAGE)
+
+  /* Same gating as reportsPicked, for the VOD Reports page's own picker — see
+     VOD_REPORTS_PAGE. */
+  const vodReportsPicked = modules.some(
+    m => picked.has(m.Id) && (m.pageName ?? '').trim().toLowerCase() === VOD_REPORTS_PAGE)
 
   /* Companies ticked upstairs with no login row yet, and companies whose row is
      about to go. Both are states where this panel and the form above it would
@@ -315,16 +308,15 @@ export default function LoginModuleAccess({ assignments, pendingUserIds, loginUs
               })}
             </div>
 
-            <div className="flex items-start justify-between gap-3">
-              <p className="text-[10px] text-gray-400 leading-snug">{DASHBOARD_REPORTS_HINT}</p>
-              {modules.length > 0 && (
+            {modules.length > 0 && (
+              <div className="flex items-center justify-end">
                 <button type="button" onClick={toggleAll}
                   className="text-[10px] font-bold uppercase tracking-wider flex-shrink-0
                     text-gray-400 hover:text-[#14254A] dark:hover:text-white transition-colors">
                   {allOn ? 'Clear all' : 'Select all'}
                 </button>
-              )}
-            </div>
+              </div>
+            )}
 
             {modules.length === 0 ? (
               <p className="text-xs text-gray-400">No modules are available to grant.</p>
@@ -404,6 +396,15 @@ export default function LoginModuleAccess({ assignments, pendingUserIds, loginUs
                 <LoginLayoutAccess loginUsername={loginUsername}
                   multiCompany={targets.length > 1} />
               </>
+            )}
+
+            {/* VOD Reports' own picker — independent of the one above: a login
+                can hold a different module set on each page. No layout switch
+                here, that control is specific to the Reports page it sits
+                under above. */}
+            {vodReportsPicked && (
+              <LoginDashboardAccess loginId={sel} scope="vod" pageLabel="VOD Reports"
+                clientName={targets.find(t => t.loginId === sel)?.clientName} />
             )}
           </>
         )}

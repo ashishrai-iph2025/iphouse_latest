@@ -16,6 +16,16 @@ import type { MasterOption } from '@/lib/masterDataContext'
 export type PlatformCategoryKey =
   | 'open-web' | 'social-ugc' | 'mobile-apps' | 'messenger' | 'other'
 
+/** The category-results route segment that means "every searchable platform,
+    not just one category" — the default search on the Infringement Search
+    page (app/(client)/infringement/page.tsx) now that Category is no longer a
+    required field. Handled specially in
+    app/(client)/infringement/category/page.tsx, which otherwise treats its
+    :category route param as one of the PlatformCategoryKey values above; kept
+    a plain string, and out of that union, so it can never collide with a real
+    category key. */
+export const ALL_PLATFORMS_CATEGORY = 'all'
+
 /** Canonical platform-name sets, lowercased. Social and UGC are kept as two
     lists because they are two distinct upstream vocabularies (named endpoints
     vs /UGCPlatform/Paged), but they present as ONE category: to a client they
@@ -44,6 +54,28 @@ const MESSENGER_NAMES = new Set([
 const LABEL_OVERRIDES: Record<string, string> = {
   'internet': 'Open Web',
   'ugc and other social media': 'Other UGC',
+  /* The spelling MarkScan's own HISTORY returns, which is the same platform
+     with the spaces closed up. Without it the submission history renders the
+     raw key — "UGCAndOtherSocialMedia" sitting beside a properly labelled
+     "Open Web", which reads as a bug because it is one. */
+  'ugcandothersocialmedia': 'Other UGC',
+  /* CASING ONLY, for the keys the API returns lower-cased. Every one of these
+     maps to itself once normalised, so a caller already passing the display
+     spelling is unaffected; the entry exists so that a platform arriving as
+     "youtube" is not printed that way. No key here RENAMES a platform — that
+     is a product decision and not one a label table should make quietly. */
+  'youtube':   'YouTube',
+  'facebook':  'Facebook',
+  'instagram': 'Instagram',
+  'twitter':   'Twitter',
+  'telegram':  'Telegram',
+  'tiktok':    'TikTok',
+  'vk':        'VK',
+  'ok':        'OK',
+  'sharechat': 'ShareChat',
+  'dailymotion': 'Dailymotion',
+  'bilibili':  'Bilibili',
+  'chomikuj':  'Chomikuj',
 }
 
 const norm = (v: string) => String(v ?? '').trim().toLowerCase()

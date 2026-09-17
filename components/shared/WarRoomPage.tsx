@@ -1,6 +1,6 @@
 ﻿'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import SearchableSelect from '@/components/ui/SearchableSelect'
 import MultiSearchableSelect from '@/components/ui/MultiSearchableSelect'
 import DateRangePicker from '@/components/ui/DateRangePicker'
@@ -13,6 +13,7 @@ import {
   type ClientOption, type WarRoomProgressEvent,
 } from '@/lib/warroom'
 import RealtimeCard from '@/components/shared/RealtimeCard'
+import { printReport, PRINT_HIDE_ATTR } from '@/lib/printReport'
 
 // Mirrors go-server/markscan/warroom.go's warRoomPlatforms + PlatformLabels, so
 // the loader can list every platform up front (as "pending") before any progress
@@ -34,6 +35,7 @@ const WAR_ROOM_PLATFORMS: { key: string; label: string }[] = [
 type PlatformProgress = { phase: 'pending' | 'start' | 'done' | 'error'; count: number; error?: string }
 import { useMasterData } from '@/lib/masterDataContext'
 import { useSession } from '@/lib/auth-client'
+import { useCustomizer } from '@/lib/ThemeCustomizerContext'
 
 // Brand colors. NAVY_TEXT/ORANGE_TEXT read CSS vars (globals.css) that flip
 // for dark-mode contrast — see the comment there for why plain hex can't be
@@ -104,6 +106,18 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
   const { data: session } = useSession()
   const admin = adminProp || ((session?.user?.role ?? null) !== null && (session?.user?.role ?? 0) >= 1)
 
+  // The decorative "War Room" brand strips below are fixed to the VIEWPORT's
+  // own edges, sized on the assumption that the content column is centered in
+  // the full viewport width. A sidebar breaks that assumption — it claims a
+  // permanent slice of the viewport that isn't shared evenly, so the strips
+  // would render UNDER it (admin's own sidebar is always there; the client
+  // shell's is only there once its "Enable sidebar" toggle is on). Hidden
+  // rather than repositioned: they're a pure "don't leave the gutter blank on
+  // very wide screens" flourish, not something worth a live sidebar-width
+  // calculation for.
+  const { sidebarEnabled } = useCustomizer()
+  const hasSidebar = admin || sidebarEnabled
+
   const [assets, setAssets] = useState<Opt[]>([])
   const [assetNames, setAssetNames] = useState<string[]>([])
   const [assetTouched, setAssetTouched] = useState(false)
@@ -128,6 +142,22 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
   const [error, setError] = useState('')
   const [filtersOpen, setFiltersOpen] = useState(true)
   const [platformProgress, setPlatformProgress] = useState<Record<string, PlatformProgress>>({})
+
+  // Whether the live Realtime card is shown at all — visible by default, and
+  // collapsible because it re-fetches on its own interval (see RealtimeCard)
+  // and a reader who is not watching it live has no use for it re-painting
+  // itself on every visit to this page.
+  const [realtimeVisible, setRealtimeVisible] = useState(true)
+
+  /* The report, as a PDF — see lib/printReport. `printRoot` is what gets
+     printed: the page less its header, tab switcher and filter controls
+     (marked PRINT_HIDE_ATTR below), which are application chrome rather than
+     the report and are restated as text in the PDF's own header instead.
+     The Realtime card is dropped for the same reason and one more: it is a
+     live figure that keeps moving, and "as of" a moment a static document
+     cannot capture is not something a PDF snapshot can honestly show. */
+  const printRoot = useRef<HTMLDivElement>(null)
+  const [printError, setPrintError] = useState('')
 
   // Tabs: single-asset dashboard vs multi-asset comparison. The comparison tab
   // only appears when the account has more than one asset; it is mounted
@@ -322,6 +352,28 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
   const assetDisabled = admin && !tokenReady
   const assetInvalid = assetTouched && assetNames.length === 0
 
+  // Whose report this is, for the PDF's own header — admin picks a client by
+  // id and has the name in `clients`; a client login carries its own name on
+  // the session instead, since it has no picker to read one from.
+  const printClientName = admin
+    ? clients.find(c => String(c.userId) === clientId)?.name
+    : ((session?.user as any)?.clientName || undefined)
+
+  const printPdf = useCallback(async () => {
+    if (!printRoot.current) return
+    const win = startDate ? `${startDate}${endDate ? ` – ${endDate}` : ''}` : undefined
+    setPrintError(await printReport(printRoot.current, {
+      fileName: `${printClientName ? `${printClientName} — ` : ''}War Room — ${assetNames.join(', ') || 'no asset'}`,
+      title: 'War Room',
+      client: printClientName,
+      window: win,
+      filters: [
+        { label: 'Asset', value: assetNames.join(', ') || '—' },
+      ],
+    }) ?? '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [printClientName, assetNames, startDate, endDate])
+
   return (
     <>
       {/* On very wide screens the centered max-w-[1680px] column leaves blank
@@ -332,7 +384,10 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
           (50vw - half the box width), right/left-aligned with a small inner
           padding, so the text always sits close to the box edge — not the
           screen edge — no matter how wide the viewport gets. Hidden below the
-          width where gutters exist. */}
+          width where gutters exist, and whenever a sidebar is on screen — see
+          hasSidebar above. */}
+      {!hasSidebar && (
+      <>
       <div className="hidden min-[1800px]:flex fixed left-0 top-1/2 -translate-y-1/2 z-0 items-center justify-end pr-4 pointer-events-none select-none"
         style={{ width: 'calc(50% - 840px)' }} aria-hidden>
         <span className="whitespace-nowrap uppercase text-xl font-bold tracking-[0.4em]"
@@ -348,23 +403,58 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
           <span style={{ backgroundImage: ORANGE_GRADIENT, WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>Room</span>
         </span>
       </div>
+      </>
+      )}
 
       {/* The client shell already pads its content; the admin shell does not, so in
           admin mode the page supplies its own gap from the sidebar and screen edges. */}
-      <div className="fade-in w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4 sm:mb-6">
+      <div ref={printRoot} className="fade-in w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
+      {/* Header — chrome, not report: dropped from the PDF (see printPdf),
+          which states the same name, client and window in its own header. */}
+      <div {...{ [PRINT_HIDE_ATTR]: '' }}
+        className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4 sm:mb-6">
         <Breadcrumb items={[{ label: area }, { label: 'War Room' }]} />
-        <div className="sm:text-right">
-          <h1 className="text-xl font-bold text-[#14254A]">War Room</h1>
-          <p className="text-brand-muted text-sm">Cross-platform anti-piracy intelligence for an asset.</p>
+        <div className="flex items-center gap-3 sm:flex-row-reverse">
+          <button type="button" onClick={printPdf} disabled={loading}
+            title="The report as a PDF, without the navigation or filter controls"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg flex-shrink-0
+              text-[11px] font-semibold border border-gray-200 text-gray-600
+              hover:bg-white hover:text-[#14254A] transition-colors
+              disabled:opacity-40 disabled:cursor-not-allowed">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 9V3h12v6" />
+              <path d="M6 18H4v-6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v6h-2" />
+              <rect x="7" y="15" width="10" height="6" rx="1" />
+            </svg>
+            PDF
+          </button>
+          <div className="sm:text-right">
+            <h1 className="text-xl font-bold text-[#14254A]">War Room</h1>
+            <p className="text-brand-muted text-sm">Cross-platform anti-piracy intelligence for an asset.</p>
+          </div>
         </div>
       </div>
+
+      {/* The one way the PDF export fails is a blocked pop-up, and it fails
+          invisibly — a button that appears to do nothing. Said out loud, with
+          the fix, because it is the reader's own browser setting. */}
+      {printError && (
+        <div {...{ [PRINT_HIDE_ATTR]: '' }}
+          className="mb-4 rounded-xl px-4 py-2.5 text-[12px] border flex items-center gap-3
+            bg-amber-50 border-amber-200 text-amber-800">
+          <span className="flex-1">{printError}</span>
+          <button onClick={() => setPrintError('')}
+            className="text-[11px] font-bold uppercase tracking-wider opacity-70 hover:opacity-100">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Tab switcher — comparison needs 2+ assets, and for clients it must
           also be enabled per client on /admin/war-room-assets. */}
       {assets.length > 1 && (admin || comparisonEnabled) && (
-        <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit mb-5">
+        <div {...{ [PRINT_HIDE_ATTR]: '' }} className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit mb-5">
           {([
             { key: 'dashboard',  label: '📊 Dashboard' },
             { key: 'comparison', label: '⚖ Asset Comparison' },
@@ -381,8 +471,12 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
       {/* ── Dashboard view (kept mounted so its report survives tab switches) ── */}
       <div className={view === 'dashboard' ? '' : 'hidden'}>
 
-      {/* Controls — collapses to a summary bar once a report is generated */}
-      <div className="relative bg-white rounded-2xl shadow-card border border-gray-100 overflow-hidden mb-6">
+      {/* Controls — collapses to a summary bar once a report is generated.
+          Dropped from the PDF: the selections themselves are restated as text
+          in the printed document's own header — see printPdf — and a filter
+          form nobody printing a document can click is not the report. */}
+      <div {...{ [PRINT_HIDE_ATTR]: '' }}
+        className="relative bg-white rounded-2xl shadow-card border border-gray-100 overflow-hidden mb-6">
         <div className="h-1" style={{ background: 'linear-gradient(90deg,#14254A,#FC934C)' }} />
 
         {/* ── Collapsed summary bar ── */}
@@ -603,35 +697,71 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
           real absence.
       */}
       {(!admin || clientId) && (
-        <div className="mb-4">
-          {/* Counted by MARKSCAN, not the warehouse — the same system this
-              page's report is pulled from, over the same date window. A card
-              above a MarkScan report answering from the warehouse would invite
-              a comparison the two cannot survive.
+        /* Dropped from the PDF outright, not merely hidden while visible on
+           screen — it is a LIVE figure that keeps moving, and "as of" a
+           moment a static document cannot capture is not something a print
+           snapshot can honestly show. The toggle below is a screen-only
+           reading preference. */
+        <div {...{ [PRINT_HIDE_ATTR]: '' }} className="mb-4">
+          {/* Show/hide, screen-only — the card re-fetches on its own interval
+              (see RealtimeCard) even while nobody is looking at it, so a
+              reader who wants the space back can collapse it. Visible by
+              default: this is what the card has always done, and the reader
+              who wants it gone is the one making a change, not the other way
+              round. */}
+          <div className="flex items-center justify-end mb-1.5">
+            <button type="button" onClick={() => setRealtimeVisible(v => !v)}
+              aria-expanded={realtimeVisible}
+              title={realtimeVisible ? 'Hide the Realtime card' : 'Show the Realtime card'}
+              className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-gray-400
+                hover:text-[#14254A] transition-colors">
+              {realtimeVisible ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              ) : (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a21.6 21.6 0 0 1 5.06-5.94M9.9 4.24A10.4 10.4 0 0 1 12 4c7 0 11 7 11 7a21.6 21.6 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                  <path d="M1 1l22 22" />
+                </svg>
+              )}
+              {realtimeVisible ? 'Hide Realtime' : 'Show Realtime'}
+            </button>
+          </div>
 
-              The warehouse source is still there and still used by the reports
-              screens; see RealtimeCard's `source`. */}
-          <RealtimeCard view="war-room" source="markscan"
-            assetNames={assetNames}
-            userId={admin ? clientId : undefined}
-            startDate={startDate} endDate={endDate}
-            /*
-              THE CARD'S OWN WINDOW, defaulting to the first option: 24 hours.
+          {realtimeVisible && (
+            /* Counted by MARKSCAN, not the warehouse — the same system this
+                page's report is pulled from, over the same date window. A card
+                above a MarkScan report answering from the warehouse would invite
+                a comparison the two cannot survive.
 
-              Without this the card followed the report's range, which starts at
-              30 days — so the "live" counts opened as a month's total that
-              barely moved between refreshes. A live figure has to be recent
-              enough to change while somebody is watching it.
+                The warehouse source is still there and still used by the reports
+                screens; see RealtimeCard's `source`. */
+            <RealtimeCard view="war-room" source="markscan"
+              assetNames={assetNames}
+              userId={admin ? clientId : undefined}
+              startDate={startDate} endDate={endDate}
+              /*
+                THE CARD'S OWN WINDOW, defaulting to the first option: 24 hours.
 
-              What it costs, stated because it was once deliberately avoided:
-              the card no longer agrees with the platform strip below it, which
-              still covers the report's range. The card captions its own window,
-              and a reader who wants them to match can widen it to 7 days.
-            */
-            windowOptions={REALTIME_WINDOWS}
-            waitingFor={assetNames.length === 0
-              ? 'Pick an asset to start counting. The live figures cover the window selected here.'
-              : undefined} />
+                Without this the card followed the report's range, which starts at
+                30 days — so the "live" counts opened as a month's total that
+                barely moved between refreshes. A live figure has to be recent
+                enough to change while somebody is watching it.
+
+                What it costs, stated because it was once deliberately avoided:
+                the card no longer agrees with the platform strip below it, which
+                still covers the report's range. The card captions its own window,
+                and a reader who wants them to match can widen it to 7 days.
+              */
+              windowOptions={REALTIME_WINDOWS}
+              waitingFor={assetNames.length === 0
+                ? 'Pick an asset to start counting. The live figures cover the window selected here.'
+                : undefined} />
+          )}
         </div>
       )}
 

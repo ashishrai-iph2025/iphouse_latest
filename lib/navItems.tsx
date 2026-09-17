@@ -99,7 +99,18 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     label:    'Dashboard',
-    href:     '/dashboard',
+    /* `?nav=1` marks an EXPLICIT click on this tab, read by
+       app/(client)/dashboard/page.tsx. Every other path onto /dashboard —
+       sign-in, the logo, client selection, e-mail verification, the War
+       Room's own fallback — carries no such marker and is a generic
+       landing, where Welcome wins whenever it is also granted; a reader who
+       has just clicked "Dashboard" has already made that choice, and this
+       is the one signal that tells the page so. `matches` keeps the tab
+       highlighted on plain '/dashboard' — active-item matching runs on the
+       pathname alone (see isNavItemActive) and never sees the query string,
+       so without it the marker would also cost the tab its own highlight. */
+    href:     '/dashboard?nav=1',
+    matches:  ['/dashboard'],
     pageName: 'dashboard',
     icon: (
       <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -129,6 +140,21 @@ export const NAV_ITEMS: NavItem[] = [
     icon: (
       <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M4 20V10M10 20V4M16 20v-7M21 20H3"/>
+      </svg>
+    ),
+  },
+  {
+    // pageName matches the module row created on /admin/modules (Id 17,
+    // pageName "report-vod") — a SEPARATE module and a SEPARATE grant from
+    // "Reports" above, so a login can hold one without the other. See
+    // reportVODPageName in go-server/handlers/reportclientmap.go.
+    label:    'VOD Reports',
+    href:     '/report-vod',
+    pageName: 'report-vod',
+    icon: (
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <rect x="3" y="5" width="18" height="14" rx="2"/>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 9.5v5l4-2.5-4-2.5z"/>
       </svg>
     ),
   },
@@ -273,8 +299,11 @@ the page a client lands on, so that is the first thing they would see.
 Add a page here only after checking its handlers for ResolveAPIToken. A page
 that does need the token and is listed here would load and then show empty data,
 which is a worse failure than being told it is unavailable.
+
+report-vod is the same page as Reports, reading the same endpoints, so the
+same reasoning applies without needing to be re-checked separately.
 */
-export const API_INDEPENDENT_PAGES = ['data-sharing', 'Reports', 'welcome']
+export const API_INDEPENDENT_PAGES = ['data-sharing', 'Reports', 'report-vod', 'welcome']
 
 export function isApiIndependentItem(item: NavItem): boolean {
   return API_INDEPENDENT_PAGES.includes(item.pageName)
@@ -283,13 +312,4 @@ export function isApiIndependentItem(item: NavItem): boolean {
 export function isNavItemActive(item: NavItem, pathname: string): boolean {
   const paths = item.matches ?? [item.href]
   return paths.some(p => pathname === p || pathname.startsWith(p + '/'))
-}
-
-export const SIDEBAR_LAYOUTS = [
-  'default', 'mini', 'detached', 'two-column', 'without-header',
-  'overlay', 'menu-aside', 'modern', 'rtl',
-]
-
-export function isSidebarLayout(navLayout: string): boolean {
-  return SIDEBAR_LAYOUTS.includes(navLayout)
 }

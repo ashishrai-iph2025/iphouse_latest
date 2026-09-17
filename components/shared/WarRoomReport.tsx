@@ -12,6 +12,7 @@ import {
   type Totals, type Funnel, type Removal, type Segment, type Breakdowns, type PlatformResult,
 } from '@/lib/warroom'
 import { downloadCsv, type CsvColumn } from '@/lib/exportCsv'
+import { downloadWorkbook } from '@/lib/xlsx'
 
 const NAVY   = '#14254A'
 const ORANGE = '#FC934C'
@@ -777,10 +778,26 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
                     { key: 'rate', label: 'Removal %' }, { key: 'views', label: 'Views' },
                     { key: 'engagement', label: 'Engagement' },
                   ]} />
-                  {/* Whole filtered dataset, not just this visual's series. */}
+                  {/* Whole filtered dataset, not just this visual's series.
+                      An .xlsx rather than the plain CSV every other export on
+                      this page uses — this is the one download somebody is
+                      actually likely to forward on its own, so it carries the
+                      IP House mark top-left the same way the PDF print does
+                      (see lib/exportBrand.ts); a CSV has no way to hold one. */}
                   <button type="button" disabled={activeRows.length === 0}
-                    title={activeRows.length === 0 ? 'Nothing to export' : 'Export every row behind the current view as CSV'}
-                    onClick={() => downloadCsv('war_room_raw_rows', rawRowExportCols, activeRows)}
+                    title={activeRows.length === 0 ? 'Nothing to export' : 'Export every row behind the current view as a spreadsheet'}
+                    onClick={() => {
+                      const assetCount = new Set(
+                        activeRows.map(r => r.assetName).filter(Boolean)).size
+                      downloadWorkbook('war_room_raw_rows', [{
+                        name: 'Raw rows',
+                        title: 'War Room — Raw rows',
+                        subtitle: `${assetCount} asset${assetCount === 1 ? '' : 's'} · ${activeRows.length.toLocaleString()} rows`,
+                        head: rawRowExportCols.map(c => c.label),
+                        rows: activeRows.map(r =>
+                          rawRowExportCols.map(c => (c.get ? c.get(r) : (r as any)[c.key]) ?? null)),
+                      }]).catch(() => {})
+                    }}
                     className={`px-2 py-0.5 rounded-md border text-[9px] font-bold uppercase tracking-wide transition-colors ${
                       activeRows.length === 0
                         ? 'border-gray-100 text-gray-200 cursor-not-allowed'

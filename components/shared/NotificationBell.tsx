@@ -117,11 +117,16 @@ const exactStamp = (v: string) =>
     day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
   }) ?? ''
 
-export default function NotificationBell({ variant = 'admin', tone }: {
+export default function NotificationBell({ variant = 'admin', tone, align = 'down' }: {
   /** Which shell it sits in — only affects styling, never what is shown. */
   variant?: 'admin' | 'client'
   /** Force icon colour when the client navbar is painted a custom colour. */
   tone?: 'light' | 'dark'
+  /** 'up' when mounted low on the page (the client sidebar's own footer,
+      shown once the header is turned off) so the panel opens above the bell
+      instead of running off the bottom of the viewport — same convention as
+      ThemeCustomizer's own align prop. */
+  align?: 'down' | 'up'
 }) {
   // The notification pages live under a different prefix per shell; the pages
   // themselves are the same components.
@@ -247,10 +252,11 @@ export default function NotificationBell({ variant = 'admin', tone }: {
           so it carries its own navy header, a tinted surface and a hard edge —
           a plain white card blends into whichever of the two it overlaps. */}
       {open && (
-        <div className="absolute right-0 top-11 z-50 w-[min(94vw,400px)] rounded-2xl overflow-hidden
+        <div className={`absolute z-50 w-[min(94vw,400px)] rounded-2xl overflow-hidden
                         bg-[#e8edf5] dark:bg-[#14213a]
                         border border-[#14254A]/20 dark:border-white/10
-                        shadow-[0_24px_64px_-16px_rgba(20,37,74,0.5)]">
+                        shadow-[0_24px_64px_-16px_rgba(20,37,74,0.5)]
+                        ${align === 'up' ? 'bottom-11 left-0' : 'top-11 right-0'}`}>
           {/* Header */}
           <div className="px-4 py-3 flex items-center justify-between gap-2 border-b border-black/10 dark:border-white/10"
             style={{ background: 'linear-gradient(135deg,#14254A 0%,#1E3766 100%)' }}>

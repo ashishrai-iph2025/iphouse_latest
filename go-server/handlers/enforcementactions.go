@@ -259,24 +259,38 @@ func enforcementDayPanel(rows []map[string]any, dateCol, idCol string) []map[str
 }
 
 /*
-reconciledList is a list of names to draw beside a count — or nothing.
+reconciledList is the names to draw beside a count, complete or not.
 
-A card that draws a count as an OPENABLE gauge is promising that what opens
-accounts for what is printed. Two roads produce these figures and only one of
-them produces names: the service answers a COUNT(DISTINCT) over the whole
-window, this bridge walks the raw rows, and the walk is capped. Where the cap
-bit, the names are a subset of what the count counted — eleven under a gauge
-reading seventeen.
+Two roads produce these figures and only one of them produces names: the
+service answers a COUNT(DISTINCT) over the whole window, this bridge walks the
+raw rows, and the walk is capped. Where the cap bit before it reached every one
+of a group's rows, the list is shorter than the count it sits beside — eleven
+names under a gauge reading seventeen.
 
-So the promise is checked rather than assumed. The count always stands; the list
-is carried only when its length IS that count, and a card whose walk fell short
-simply goes back to a gauge that does not open.
+Used to mean withholding the list whenever that happened — a drawer that could
+not prove it was complete opened on nothing at all. That protected the gauge
+from ever looking wrong, at the cost of a reader who wanted the eleven names
+getting zero of them instead: the one case a capped walk can never produce
+(nothing) standing in for the one case it usually can (something, just maybe
+not everything). A reader comparing providers can act on a lower bound; they
+cannot act on an absent drawer they have to go read a banner to explain.
 
-A zero count carries nothing either: a row with no domains at all has no drawer
-to offer, and an empty one that opens on nothing is a worse answer than none.
+So the list is carried whenever it is non-empty, and the CALLER is what says
+whether it is complete — comparing len(list) against count and wording the
+drawer "at least N of TOTAL" rather than "N" when it is not, so nothing here
+reads as a claim this function cannot back up. A zero count, or a walk that
+reached none of this group's rows before the cap, carries nothing either way:
+an empty drawer is a worse answer than none.
+
+A list LONGER than its count is the one shape still dropped outright rather
+than shown as a lower bound: a walk cannot see MORE distinct values than a
+correct exact count over the same rows, so when it does, the count and the
+walk disagree about the data rather than about how much of it each one saw —
+and a wrong number is worse than an absent drawer, which is the whole reason
+this function exists.
 */
 func reconciledList(list []string, count int64) []string {
-	if count <= 0 || int64(len(list)) != count {
+	if count <= 0 || len(list) == 0 || int64(len(list)) > count {
 		return nil
 	}
 	return list

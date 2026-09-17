@@ -195,18 +195,23 @@ func envDisplay(key string) string {
 	return strings.TrimSpace(os.Getenv(key))
 }
 
-// GET /api/reports/options?type=&clientId=
+// GET /api/reports/options?type=&clientId=&scope=
 func ReportsOptions(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if !reportsBackendReady() {
 		reportsUnavailable(w, r, fmt.Errorf("no report backend is configured — set REPORTS_API_URL to read through reports_api, or REPORTS_DB_* to query the warehouse directly"))
 		return
 	}
-	if !mayOpenReports(claims) {
+	q := r.URL.Query()
+	// "" for the original Reports page, scopeVOD for VOD Reports. Named
+	// pageScope, not scope — `scope` below is this function's OWN, unrelated
+	// name for the active slicer values, and reusing it here would shadow one
+	// meaning with the other.
+	pageScope := q.Get("scope")
+	if !mayOpenReport(claims, pageScope) {
 		Fail(w, 403, "The Reports module is not enabled for this account")
 		return
 	}
-	q := r.URL.Query()
 	kind := strings.ToLower(strings.TrimSpace(q.Get("type")))
 	if kind == "" {
 		kind = "infringing"
@@ -241,8 +246,8 @@ func ReportsOptions(w http.ResponseWriter, r *http.Request) {
 	// its attached channels must be narrowed here too, or its rail would offer
 	// values that exist only in a table the report no longer reads.
 	if p, ok := platformByKey(kind); ok {
-		p = narrowSummaryToAttached(p, claims)
-		if !maySeeReport(claims, kind) {
+		p = narrowSummaryToAttached(p, claims, pageScope)
+		if !maySeeReport(claims, kind, pageScope) {
 			Fail(w, 403, "You do not have access to this report")
 			return
 		}
@@ -304,7 +309,7 @@ func ReportsOptions(w http.ResponseWriter, r *http.Request) {
 	// The summary's slicers are the union across every platform it covers, which
 	// is exactly the same merge over a longer list of specs.
 	if kind == summaryKey && summaryIsBuiltIn() {
-		plats := summaryPlatforms(claims)
+		plats := summaryPlatforms(claims, pageScope)
 		if len(plats) == 0 {
 			Fail(w, 403, "You do not have access to any reports")
 			return
@@ -379,11 +384,14 @@ func ReportsData(w http.ResponseWriter, r *http.Request) {
 		reportsUnavailable(w, r, fmt.Errorf("no report backend is configured — set REPORTS_API_URL to read through reports_api, or REPORTS_DB_* to query the warehouse directly"))
 		return
 	}
-	if !mayOpenReports(claims) {
+	q := r.URL.Query()
+	// See ReportsOptions' own note: named pageScope because `scope` below is
+	// this function's unrelated name for the active slicer values.
+	pageScope := q.Get("scope")
+	if !mayOpenReport(claims, pageScope) {
 		Fail(w, 403, "The Reports module is not enabled for this account")
 		return
 	}
-	q := r.URL.Query()
 	kind := strings.ToLower(strings.TrimSpace(q.Get("type")))
 	if kind == "" {
 		kind = "infringing"
@@ -431,7 +439,7 @@ func ReportsData(w http.ResponseWriter, r *http.Request) {
 	// is queried and the results merged. Access is enforced here as well as in
 	// the sections list, so hiding a nav item is not the only guard.
 	if p, ok := platformByKey(kind); ok {
-		if !maySeeReport(claims, kind) {
+		if !maySeeReport(claims, kind, pageScope) {
 			Fail(w, 403, "You do not have access to this report")
 			return
 		}
@@ -442,7 +450,7 @@ func ReportsData(w http.ResponseWriter, r *http.Request) {
 		   key and serve the first one's totals to the second. A no-op for every
 		   other platform, and for a summary whose sources are already a
 		   subset. */
-		p = narrowSummaryToAttached(p, claims)
+		p = narrowSummaryToAttached(p, claims, pageScope)
 		/*
 			A POWER BI PLATFORM ANSWERS HERE AND GOES NO FURTHER.
 
@@ -505,7 +513,7 @@ func ReportsData(w http.ResponseWriter, r *http.Request) {
 	// reportsummary.go. Access is the union of what the reader can already open,
 	// so there is nothing extra to check beyond "may see at least one".
 	if kind == summaryKey && summaryIsBuiltIn() {
-		plats := summaryPlatforms(claims)
+		plats := summaryPlatforms(claims, pageScope)
 		if len(plats) == 0 {
 			Fail(w, 403, "You do not have access to any reports")
 			return

@@ -96,6 +96,90 @@ func TestSubscribersCountedOncePerProfile(t *testing.T) {
 }
 
 /*
+Views on the rows that came down are summed under the same predicate `removed`
+is counted under — RemovalStatus reading Dead — and a row that never came down
+must not contribute its views to a tile about what enforcement achieved.
+*/
+func TestViewsImpactedSumsOnlyTheRemovedRows(t *testing.T) {
+	rows := []map[string]any{
+		{"RemovalStatus": "Dead", "Views": float64(100)},
+		{"RemovalStatus": "DEAD", "Views": float64(50)},
+		// Still up: its views are not part of what came down.
+		{"RemovalStatus": "Active", "Views": float64(9999)},
+		// No Views column value at all.
+		{"RemovalStatus": "Dead"},
+	}
+	m := computeRowMetrics(rows, "", nil)
+	if m.viewsImpacted != 150 {
+		t.Errorf("views impacted = %d, want 150", m.viewsImpacted)
+	}
+}
+
+/*
+A suspended CHANNEL is counted once, by its URL — not once per post it made,
+which is the same over-counting risk profilesSuspended already guards against.
+
+Its status is read from RemovalChannelStatus, never from RemovalStatus or
+ChannelStatus: RemovalStatus is about the ROW (the post/URL), and a post can
+come down with its channel still active, or a channel can be suspended with
+its posts still listed. ChannelStatus is a column too, on the same tables,
+but a different fact about the channel — it is not the one that means
+"suspended", and matching on it (the bug this test guards against) reads a
+flat, or near-flat, zero even though real suspensions exist.
+*/
+func TestChannelsSuspendedCountsDistinctChannelsByTheirOwnStatus(t *testing.T) {
+	rows := []map[string]any{
+		{"RemovalChannelStatus": "Dead", "ChannelURL": "https://t.me/a", "RemovalStatus": "Active", "ChannelStatus": "Active"},
+		{"RemovalChannelStatus": "DEAD", "ChannelURL": "https://t.me/a", "RemovalStatus": "Dead", "ChannelStatus": "Active"},
+		{"RemovalChannelStatus": "Dead", "ChannelURL": "https://t.me/b"},
+		// Still active: not a suspended channel.
+		{"RemovalChannelStatus": "Active", "ChannelURL": "https://t.me/c"},
+		// ChannelStatus reads Dead here, but RemovalChannelStatus does not —
+		// the column this counts by says the channel is not suspended.
+		{"RemovalChannelStatus": "Active", "ChannelStatus": "Dead", "ChannelURL": "https://t.me/d"},
+		// Suspended, but no URL to be distinct by.
+		{"RemovalChannelStatus": "Dead", "ChannelURL": ""},
+	}
+	m := computeRowMetrics(rows, "", nil)
+	if m.channelsSuspended != 2 {
+		t.Errorf("channels suspended = %d, want 2 (a and b)", m.channelsSuspended)
+	}
+}
+
+/*
+The channel-identity twin of TestSubscribersCountedOncePerProfile: a table
+that records the account as a CHANNEL (Telegram) gets the same MAX-per-account
+audience figures, off ChannelURL/RemovalChannelStatus instead of
+ProfileURL/RemovalProfileStatus — and totalSubscribers counts EVERY channel,
+not only the suspended ones, which channelImpactedSubscribers is a subset of.
+*/
+func TestChannelSubscribersCountedOncePerChannel(t *testing.T) {
+	rows := []map[string]any{
+		{"RemovalChannelStatus": "Dead", "ChannelURL": "https://t.me/a", "Subscribers": float64(100)},
+		{"RemovalChannelStatus": "DEAD", "ChannelURL": "https://t.me/a", "Subscribers": float64(150)},
+		{"RemovalChannelStatus": "Dead", "ChannelURL": "https://t.me/a", "Subscribers": float64(120)},
+		{"RemovalChannelStatus": "Dead", "ChannelURL": "https://t.me/b", "Subscribers": float64(7)},
+		// Still active: part of the total reach, not the impacted half.
+		{"RemovalChannelStatus": "Active", "ChannelURL": "https://t.me/c", "Subscribers": float64(9999)},
+		// No URL to be distinct by.
+		{"RemovalChannelStatus": "Dead", "ChannelURL": "", "Subscribers": float64(500)},
+	}
+	m := computeRowMetrics(rows, "", nil)
+
+	if m.channelsSuspended != 2 {
+		t.Errorf("channels suspended = %d, want 2 (a and b)", m.channelsSuspended)
+	}
+	// 150 (a's largest, not 100+150+120) + 7.
+	if m.channelImpactedSubscribers != 157 {
+		t.Errorf("channel impacted subscribers = %d, want 157", m.channelImpactedSubscribers)
+	}
+	// Every channel's largest snapshot, suspended or not: 150 + 7 + 9999.
+	if m.channelTotalSubscribers != 10156 {
+		t.Errorf("channel total subscribers = %d, want 10156", m.channelTotalSubscribers)
+	}
+}
+
+/*
 The post's status and the account's status are different questions.
 
 A post can come down while the account stays up, and an account can be suspended

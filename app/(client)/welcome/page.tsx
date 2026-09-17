@@ -353,6 +353,10 @@ export default function WelcomePage() {
   const bing = measure(cur, 'bingDelisted')
   const batches = measure(cur, 'delistingBatches')
   const rate = measure(cur, 'removalRatePct')
+  // Whether the Needs You card has anything to show at all — read once, used
+  // both to decide whether it renders and to size the row it sits in. See
+  // that row's own comment for why the column count follows this.
+  const showQueue = has('PerformQC') || has('DownloadRequest')
 
   /* An empty period, in the payload's own terms: every count 0 and firstDate
      null — "nothing happened, rather than nothing is known". Zeroes alone are
@@ -528,12 +532,16 @@ export default function WelcomePage() {
               it honest: the queue card is taller than a figure, and without it
               the three number cards would sit short beside it.
 
-              Anything conditional — the De-indexed card below — flows into the
-              row after these four and wraps to a second line, which is why the
-              column count is fixed at four rather than counting what is
-              actually rendered.
-          */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-stretch">
+              The column count DOES follow Needs You, unlike the De-indexed card
+              further down this page: that one is a genuinely open-ended list —
+              anything conditional could flow in after it and wrap to a second
+              line, which is why ITS row stays fixed. This row has exactly one
+              conditional card and nothing ever joins it, so there is no "what
+              else might render" to guard against — only the one case where a
+              login with neither grant would otherwise sit three cards wide in
+              a four-wide row, with the fourth left visibly empty. */}
+          <div className={`grid grid-cols-1 sm:grid-cols-2 gap-3 items-stretch ${
+            showQueue ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
             <MiniTile label="Infringements identified" value={fmt(identified)} tone={TILES.identified} />
             <MiniTile label="Removed" value={fmt(removed)} tone={TILES.removed} />
 
@@ -561,7 +569,7 @@ export default function WelcomePage() {
                 three destinations survive the restyle — collapsing them into one
                 number would have made the row uniform by deleting two places a
                 reader can go. */}
-            {(has('PerformQC') || has('DownloadRequest')) && (
+            {showQueue && (
               <div className="rounded-xl px-3.5 py-3 overflow-hidden shadow-card flex flex-col"
                 style={{ background: `linear-gradient(135deg,${TILES.queue.from} 0%,${TILES.queue.to} 100%)`,
                          color: TILES.queue.ink }}>

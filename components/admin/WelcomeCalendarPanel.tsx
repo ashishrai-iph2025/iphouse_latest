@@ -11,9 +11,11 @@ for how it is stored and resolved.
 Three checkboxes, not a single three-way choice, because the two directions are
 independent: a client can be given a Previous arrow, a Next arrow, or both.
 COMPLETE is its own checkbox rather than shorthand for ticking the other two —
-it is the shipped default (every direction, the way the calendar always
-behaved before this screen existed) and switching a client onto it is one
-click rather than two.
+it is how the calendar behaved before this screen existed (every direction
+open) and switching a client onto it is one click rather than two. It is no
+longer the SHIPPED default, though: a fresh install, and the shared setting's
+own "reset", both land on Next only now — see go-server/handlers/
+welcomecalendar.go's schema comment for why.
 
 Same two-layer lookup as Appearance beside it: a client with a row of their own
 takes it whole, and the shared default underneath is what everyone else reads.
@@ -30,7 +32,11 @@ interface Nav {
   source?: string
 }
 
-const DEFAULT_NAV: Nav = { previous: false, next: false, complete: true }
+// Matches the shipped default in go-server/handlers/welcomecalendar.go — shown
+// only for the instant before the fetch below resolves the real answer, but
+// worth getting right rather than flashing "Complete" for a frame before the
+// server's "Next" replaces it.
+const DEFAULT_NAV: Nav = { previous: false, next: true, complete: false }
 
 function Checkbox({ on, title, hint, onClick }: {
   on: boolean; title: string; hint: string; onClick: () => void
@@ -149,7 +155,7 @@ export default function WelcomeCalendarPanel() {
       if (!j.success) { setErr(j.error || 'Could not reset the calendar setting'); return }
       setMsg(clientId
         ? `${nameOf(clientId)} follows the shared calendar setting again.`
-        : 'Default calendar setting back to every direction open.')
+        : 'Default calendar setting back to Next only.')
       await load(clientId)
     } catch (e: any) {
       setErr(e?.message || 'Network error')
@@ -228,7 +234,7 @@ export default function WelcomeCalendarPanel() {
             </p>
             <div className="grid gap-2 mt-4 sm:grid-cols-3">
               <Checkbox on={draft.complete}
-                title="Complete calendar (default)"
+                title="Complete calendar"
                 hint="Both arrows — previous, current and next are all reachable."
                 onClick={() => setDraft(d => (d.complete
                   ? { ...d, complete: false }
@@ -240,7 +246,7 @@ export default function WelcomeCalendarPanel() {
                 hint="A ‹ arrow that steps back one month at a time."
                 onClick={() => setDraft(d => ({ ...d, previous: !d.previous, complete: false }))} />
               <Checkbox on={draft.next}
-                title="Next"
+                title="Next (default)"
                 hint="A › arrow that steps forward one month at a time."
                 onClick={() => setDraft(d => ({ ...d, next: !d.next, complete: false }))} />
             </div>
@@ -267,7 +273,7 @@ export default function WelcomeCalendarPanel() {
                   transition-colors disabled:opacity-50">
                 {busy === 'reset'
                   ? 'Resetting…'
-                  : clientId ? 'Follow the shared setting' : 'Back to every direction open'}
+                  : clientId ? 'Follow the shared setting' : 'Back to Next only'}
               </button>
             )}
             <span className="text-[11px] text-gray-400 dark:text-white/35">

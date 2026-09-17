@@ -1841,7 +1841,7 @@ func layoutInputsFor(key, clientID string) (layoutInputs, bool) {
 		}, true
 	}
 	if key == summaryKey && summaryIsBuiltIn() {
-		plats := summaryPlatforms(nil)
+		plats := summaryPlatforms(nil, "")
 		if len(plats) == 0 {
 			// Access is per-login and this endpoint is staff configuration, so the
 			// summary's panel list is built from every enabled platform.

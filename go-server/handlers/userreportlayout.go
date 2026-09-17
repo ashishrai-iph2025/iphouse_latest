@@ -37,9 +37,13 @@ func UserReportLayout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	/* The module grant first: this reads and writes the shape of a report, so a
-	   login whose company was never given Reports has no business here even
-	   with the layout grant set. Same check the report data endpoints make. */
-	if !mayOpenReports(claims) {
+	   login whose company was never given Reports OR VOD Reports has no
+	   business here even with the layout grant set. Same check the report
+	   data endpoints make, generalised the way ReportVizPrefs' is — this
+	   endpoint carries layout metadata, not client figures, so accepting
+	   either page's grant is not the data-leak risk narrowing the figures
+	   themselves would be. */
+	if !mayOpenAnyReportsPage(claims) {
 		Fail(w, 403, "This account does not have the Reports module")
 		return
 	}

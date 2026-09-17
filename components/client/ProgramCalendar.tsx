@@ -518,8 +518,6 @@ export default function ProgramCalendar({ onLoadingChange }: {
      jumping under them. */
   const [monthOffset, setMonthOffset] = useState(0)
   const anchor = useMemo(() => addMonths(startOfMonth(today), monthOffset), [today, monthOffset])
-  const canPrev = nav.complete || nav.previous
-  const canNext = nav.complete || nav.next
   const onCurrentMonth = monthOffset === 0
 
   /* The card sizes itself to what is left of the screen — see useFitHeight.
@@ -600,6 +598,37 @@ export default function ProgramCalendar({ onLoadingChange }: {
     }
     return { occs, undated }
   }, [rows, today])
+
+  /*
+    NEXT and PREVIOUS, each capped at one month past the real current month
+    when that is the direction Report Configuration opened — and only offered
+    where the one month a step would land on actually has something on it.
+
+    COMPLETE is the one setting this cap does not apply to. It means "every
+    direction", not "Next and Previous both, capped the same way" — a client
+    configured for the full calendar gets the full calendar, unbounded in
+    both directions, exactly as it always has. The cap is what NEXT and
+    PREVIOUS mean on their own, one month of look-ahead or look-back and no
+    more; Complete is a different, wider promise and is read first.
+
+    Checked against the month immediately beyond whatever is on screen, not
+    against `today` — so a reader who has already paged one step can still
+    take the next one through the months they are passing, and only meets
+    the cap once they would go a second month past today.
+  */
+  const canNext = useMemo(() => {
+    if (nav.complete) return true
+    if (!nav.next || monthOffset >= 1) return false
+    const from = addMonths(anchor, 1)
+    const to = addMonths(anchor, 2)
+    return all.occs.some(o => o.day >= from && o.day < to)
+  }, [nav.complete, nav.next, monthOffset, all.occs, anchor])
+  const canPrev = useMemo(() => {
+    if (nav.complete) return true
+    if (!nav.previous || monthOffset <= -1) return false
+    const from = addMonths(anchor, -1)
+    return all.occs.some(o => o.day >= from && o.day < anchor)
+  }, [nav.complete, nav.previous, monthOffset, all.occs, anchor])
 
   /*
     THIS MONTH'S occurrences, and nothing else.
@@ -762,8 +791,18 @@ export default function ProgramCalendar({ onLoadingChange }: {
         <div className="flex items-center gap-2">
           {/* Hidden outright rather than disabled where Report Configuration
               has closed a direction — a reader should not see a control for
-              a month they were never going to be allowed to reach. See `nav`. */}
-          {(canPrev || canNext) && (
+              a month they were never going to be allowed to reach. See `nav`.
+
+              `monthOffset !== 0` is also in this condition, on its own: once a
+              reader reaches the one-month cap in EITHER direction (see canNext
+              / canPrev above — neither is capped under Complete, only under
+              Next/Previous on their own) with the other direction closed for
+              this client, canPrev and canNext are BOTH false while still
+              standing off the current month — and the "jump to current month"
+              control in the middle of this cluster is their only way back.
+              Without this it would vanish along with the arrows either side of
+              it and strand them there. */}
+          {(canPrev || canNext || monthOffset !== 0) && (
             <span className="flex items-center gap-0.5">
               {canPrev && (
                 <button type="button" onClick={() => setMonthOffset(o => o - 1)}

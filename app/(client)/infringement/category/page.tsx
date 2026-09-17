@@ -22,7 +22,7 @@ import Breadcrumb from '@/components/ui/Breadcrumb'
 import { useMasterData } from '@/lib/masterDataContext'
 import ReportLoader from '@/components/shared/ReportLoader'
 import {
-  categorizePlatforms, platformLabel, type PlatformCategoryKey,
+  categorizePlatforms, platformLabel, ALL_PLATFORMS_CATEGORY, type PlatformCategoryKey,
 } from '@/lib/platformCategories'
 import {
   PlatformTable, DetailDrawer, ScreenshotPreview, type PlatformResult,
@@ -66,17 +66,28 @@ export default function CategoryResultsPage({ category }: { category: string }) 
     return () => window.removeEventListener('keydown', onKey)
   }, [preview, detail])
 
+  // The Infringement Search page's default now that Category is no longer a
+  // required field: every searchable platform in the catalogue, not one group
+  // of it. Checked before the category lookup below, because ALL_PLATFORMS_CATEGORY
+  // is not a real PlatformCategoryKey and would simply miss it.
+  const isAll = category === ALL_PLATFORMS_CATEGORY
+
   const categories = useMemo(() => categorizePlatforms(platforms), [platforms])
   const cat = categories.find(c => c.key === (category as PlatformCategoryKey))
-  const catLabel = cat?.label ?? category
+  const catLabel = isAll ? 'All Platforms' : (cat?.label ?? category)
 
-  /* The searchable platforms in this category. The grouping is the browser's
+  /* The searchable platforms in this view. The grouping is the browser's
      (lib/platformCategories.ts), so the list is worked out here and sent — the
      server validates each name rather than holding a second copy of the
-     vocabulary that could drift from this one. */
-  const keys = useMemo(
-    () => (cat?.platforms ?? []).map(p => p.key).filter(k => !COMING_SOON.has(k.trim().toLowerCase())),
-    [cat])
+     vocabulary that could drift from this one.
+
+     `isAll` reads straight off master data — every platform, not one
+     category's slice of it — which is also why it does not wait on `cat`:
+     ALL_PLATFORMS_CATEGORY resolves no category and never will. */
+  const keys = useMemo(() => {
+    const pool = isAll ? platforms.map(p => p.key) : (cat?.platforms ?? []).map(p => p.key)
+    return pool.filter(k => !COMING_SOON.has(k.trim().toLowerCase()))
+  }, [isAll, platforms, cat])
 
   const fetchPage = useCallback(async (pageNo: number, append: boolean) => {
     if (keys.length === 0) return
@@ -130,6 +141,17 @@ export default function CategoryResultsPage({ category }: { category: string }) 
   // "Load more" is only meaningful while some platform is still returning rows.
   const canLoadMore = withRows.length > 0 && !loading
 
+  /* Platforms actually worth a tab: one that hit, and one that FAILED (a
+     platform that could not be searched is a different fact from a platform
+     that found nothing, and a reader is entitled to see which platforms were
+     never really checked). A platform that succeeded and simply found
+     nothing contributes no tab at all — with a full catalogue searched at
+     once this is the common case for most of it, and a row of two dozen
+     "0" badges buried the handful that mattered. */
+  const visibleResults = useMemo(
+    () => results.filter(r => r.error || r.items.length > 0),
+    [results])
+
   /* One tab per platform, one table at a time. Stacked, the tables ran to a
      dozen screens and every one of them had different columns, so scrolling
      between two meant losing the header you were comparing against.
@@ -139,13 +161,13 @@ export default function CategoryResultsPage({ category }: { category: string }) 
   const [active, setActive] = useState('')
   useEffect(() => {
     setActive(cur => {
-      if (results.length === 0) return ''
+      if (visibleResults.length === 0) return ''
       // A tab that survived the refetch stays open — "load more" must not throw
       // the reader back to the first platform.
-      if (results.some(r => r.platform === cur)) return cur
-      return (results.find(r => !r.error && r.items.length > 0) ?? results[0]).platform
+      if (visibleResults.some(r => r.platform === cur)) return cur
+      return (visibleResults.find(r => !r.error) ?? visibleResults[0]).platform
     })
-  }, [results])
+  }, [visibleResults])
 
   const activeResult = results.find(r => r.platform === active) ?? null
 
@@ -204,20 +226,33 @@ export default function CategoryResultsPage({ category }: { category: string }) 
             No searchable platform is configured under {catLabel}.
           </p>
         </div>
+      ) : visibleResults.length === 0 ? (
+        /* Every platform answered and not one of them had a row — genuinely
+           different from "nothing to search" above (which means the
+           catalogue itself is empty) and from the per-platform failure a tab
+           would otherwise show one at a time. */
+        <div className="bg-white rounded-2xl shadow-card border border-gray-100 px-5 py-12 text-center">
+          <p className="font-bold text-[#14254A]">No infringements found</p>
+          <p className="text-sm text-gray-400 mt-1">
+            {keys.length} platform{keys.length === 1 ? '' : 's'} searched, none of them returned a result
+            for these filters.
+          </p>
+        </div>
       ) : (
         <div className="space-y-4">
-          {/* Every platform is a tab, including the ones that returned nothing
-              and the ones that failed — "no results" and "could not be searched"
-              are different answers, and a client reading a category report needs
-              to see which platforms were actually covered. Each tab carries its
-              own count, so the whole picture is readable without opening one. */}
+          {/* One tab per platform that actually has something to show: a hit,
+              or a failure. A platform that succeeded and found nothing gets
+              no tab at all — see visibleResults — because "no results" and
+              "could not be searched" are different answers, and a client
+              reading a full-catalogue search needs to see which of the
+              platforms that DID find something, not scan past two dozen "0"
+              badges to find them. Each tab still carries its own count. */}
           <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-2 overflow-x-auto">
             <div className="flex items-center gap-1.5 min-w-max" role="tablist"
               aria-label="Platforms searched">
-              {results.map(r => {
+              {visibleResults.map(r => {
                 const on = r.platform === active
                 const failed = !!r.error
-                const empty = !failed && r.items.length === 0
                 return (
                   <button key={r.platform} role="tab" aria-selected={on}
                     onClick={() => setActive(r.platform)}
@@ -228,9 +263,7 @@ export default function CategoryResultsPage({ category }: { category: string }) 
                         ? 'bg-[#14254A] text-white border-[#14254A] shadow-sm'
                         : failed
                           ? 'border-red-200 text-red-600 hover:bg-red-50'
-                          : empty
-                            ? 'border-gray-100 text-gray-400 hover:text-[#14254A] hover:border-gray-200'
-                            : 'border-gray-200 text-[#14254A] hover:border-[#FC934C]/50 hover:bg-[#FC934C]/[0.06]'
+                          : 'border-gray-200 text-[#14254A] hover:border-[#FC934C]/50 hover:bg-[#FC934C]/[0.06]'
                     }`}>
                     {labelOf(r.platform)}
                     <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full tabular-nums ${

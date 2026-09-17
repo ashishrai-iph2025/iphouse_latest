@@ -30,6 +30,15 @@ import (
 const (
 	reportConfigTable = "report_source_config"
 	reportAccessTable = "report_user_access"
+	/* The VOD Reports page's own grant, kept in a table of its own rather than a
+	   scope column on reportAccessTable — see dashboardaccess.go's note on the
+	   VOD Reports admin picker for why the two must be independently settable:
+	   a login can be narrowed differently on Reports than on VOD Reports, and a
+	   shared table with one row per (login, report_key) has no room to say
+	   which page a row is for without every existing row needing a backfilled
+	   value first. Same shape, same rules (see reportsAllowedFor), simplest
+	   good way onwards from a table that predates the second page. */
+	reportAccessVODTable = "report_user_access_vod"
 )
 
 var reportConfigOnce sync.Once
@@ -62,6 +71,18 @@ func ensureReportConfigSchema() {
 			  PRIMARY KEY (login_id, report_key)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`); err != nil {
 			log.Printf("[report-config] create %s: %v", reportAccessTable, err)
+		}
+		// The VOD Reports page's own grant — see the constant's own comment for
+		// why this is a second table rather than a column on the one above.
+		if _, _, err := db.Exec(`
+			CREATE TABLE IF NOT EXISTS ` + reportAccessVODTable + ` (
+			  login_id   INT UNSIGNED NOT NULL,
+			  report_key VARCHAR(64)  NOT NULL,
+			  granted_by VARCHAR(191) NOT NULL DEFAULT '',
+			  created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			  PRIMARY KEY (login_id, report_key)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`); err != nil {
+			log.Printf("[report-config] create %s: %v", reportAccessVODTable, err)
 		}
 	})
 }
@@ -108,8 +129,24 @@ func resolvedSpec(kind string) (reportSpec, bool) {
 // set from the table means nobody ever restricted this login, which must read as
 // full access rather than none.
 func reportsAllowedFor(loginID int64) map[string]bool {
+	return reportKeysAllowedFrom(reportAccessTable, loginID)
+}
+
+/*
+reportsAllowedForVOD is reportsAllowedFor's twin for the VOD Reports page —
+same rule (nil means unrestricted), read from its own table
+(reportAccessVODTable) so a login's VOD Reports grant can differ from its
+Reports grant. Not yet consulted by anything that serves a report: this is
+the admin-side grant alone, wired to a page in a later change. See
+reportAccessVODTable's own comment.
+*/
+func reportsAllowedForVOD(loginID int64) map[string]bool {
+	return reportKeysAllowedFrom(reportAccessVODTable, loginID)
+}
+
+func reportKeysAllowedFrom(table string, loginID int64) map[string]bool {
 	ensureReportConfigSchema()
-	rows, err := db.Query("SELECT report_key FROM "+reportAccessTable+" WHERE login_id = ?", loginID)
+	rows, err := db.Query("SELECT report_key FROM "+table+" WHERE login_id = ?", loginID)
 	if err != nil || len(rows) == 0 {
 		return nil
 	}
@@ -122,11 +159,11 @@ func reportsAllowedFor(loginID int64) map[string]bool {
 	return out
 }
 
-func maySeeReport(claims *ipauth.Claims, kind string) bool {
+func maySeeReport(claims *ipauth.Claims, kind, scope string) bool {
 	if claims == nil {
 		return false
 	}
-	allowed := reportsAllowedForClaims(claims)
+	allowed := reportsAllowedForClaims(claims, scope)
 	return allowed == nil || allowed[kind]
 }
 

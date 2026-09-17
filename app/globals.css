@@ -47,38 +47,6 @@
 }
 .btn-accent:hover { filter: brightness(0.92); }
 
-/* Boxed layout */
-html[data-layout="boxed"] .layout-container {
-  max-width: 1280px;
-  margin-left: auto;
-  margin-right: auto;
-  border-left: 1px solid #e2e8f0;
-  border-right: 1px solid #e2e8f0;
-}
-
-/* Card styles */
-html[data-card="borderless"] .shadow-card,
-html[data-card="borderless"] .border-gray-100 {
-  border-color: transparent !important;
-}
-html[data-card="shadow"] .shadow-card {
-  box-shadow: 0 8px 32px rgba(0,0,0,0.12) !important;
-  border-color: transparent !important;
-}
-html[data-card="bordered"] .shadow-card {
-  box-shadow: 0 1px 4px rgba(0,0,0,0.06) !important;
-}
-
-/* ── Nav layout: transparent ─────────────────── */
-html[data-nav-layout="transparent"] header[data-navbar] {
-  background: transparent !important;
-  box-shadow: none !important;
-}
-html[data-nav-layout="transparent"] header[data-navbar] > div {
-  background: transparent !important;
-  border-color: transparent !important;
-}
-
 html, body {
   height: 100%;
   margin: 0;

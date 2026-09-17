@@ -26,14 +26,20 @@ import (
 */
 func ReportsSections(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
+	// "" for the original Reports page, scopeVOD for VOD Reports — see
+	// mayOpenReport and reportsAllowedForClaims, which this is the one place
+	// (per endpoint) that decides for every call below it.
+	scope := r.URL.Query().Get("scope")
+
 	/* An allow-list of nil means unrestricted, which is the default for every
 	   login. Two grants can narrow it and this returns their intersection —
 	   the per-company allow-list from Report Configuration, and the per-person
-	   dashboard-module grant set on the Edit Login Account drawer. See
-	   reportsAllowedForClaims in dashboardaccess.go. */
-	allowed := reportsAllowedForClaims(claims)
+	   dashboard-module grant set on the Edit Login Account drawer — and, in VOD
+	   scope, the categorical VOD backstop besides. See reportsAllowedForClaims
+	   in dashboardaccess.go. */
+	allowed := reportsAllowedForClaims(claims, scope)
 
-	if !mayOpenReports(claims) {
+	if !mayOpenReport(claims, scope) {
 		Fail(w, 403, "The Reports module is not enabled for this account")
 		return
 	}
@@ -57,7 +63,7 @@ func ReportsSections(w http.ResponseWriter, r *http.Request) {
 		   here the section would still declare a bySourcePlatform panel for a
 		   channel the data no longer carries, and the page would draw an empty
 		   bar for it. See narrowSummaryToAttached. */
-		p = narrowSummaryToAttached(p, claims)
+		p = narrowSummaryToAttached(p, claims, scope)
 		if p.Key != summaryKey {
 			visible = append(visible, p)
 		}
@@ -335,7 +341,7 @@ func ReportsSpecCheck(w http.ResponseWriter, r *http.Request) {
 		// The summary has no tables of its own; checking it means checking every
 		// table it reads, which is every table behind the platforms it covers.
 		p = platformDef{Key: summaryKey, Label: summaryLabel}
-		for _, sub := range summaryPlatforms(ClaimsFrom(r)) {
+		for _, sub := range summaryPlatforms(ClaimsFrom(r), r.URL.Query().Get("scope")) {
 			p.Tables = append(p.Tables, sub.Tables...)
 		}
 		p.Tables = uniqueStrings(p.Tables)

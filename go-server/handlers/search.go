@@ -48,6 +48,32 @@ func searchAttempts(platform string, isSrcURL bool, rawURL string) []searchAttem
 	return []searchAttempt{{resolved, false}, {"", false}}
 }
 
+/*
+urlFormats is the URL as the reader typed it, then that same URL with a
+trailing slash added — tried in that order, and the second only where the
+first finds nothing.
+
+A URL is stored however the platform that recorded it happened to write it
+down, and "the page" and "the page/" are the same address but not the same
+string, so an exact-match search on one misses a record filed under the
+other. The reader who pasted a URL out of a browser's address bar (which
+drops a bare domain's trailing slash) or out of a report (which may or may
+not carry one) should not have to guess which spelling the record was kept
+under.
+
+Tried in this order — bare first — because that is what was typed and is
+therefore the more likely match; the slash is added only as a fallback, not
+tried alongside it, so a hit on the first form costs nothing extra and a
+miss costs exactly one more call. Skipped outright where the URL already
+ends in a slash, which is the one case the two forms would be identical.
+*/
+func urlFormats(rawURL string) []string {
+	if strings.HasSuffix(rawURL, "/") {
+		return []string{rawURL}
+	}
+	return []string{rawURL, rawURL + "/"}
+}
+
 // envelopeKeys are the fields a bare status message is made of. A response
 // carrying nothing else is upstream saying "no such URL" in a sentence, and
 // passing it on as data draws a screen of empty rows instead of that answer.
@@ -100,59 +126,71 @@ func Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The platform/side combinations to try — derived once, off the URL as
+	// typed. A trailing slash is not a platform signal, so the derivation is
+	// not re-run per URL format below; only the URL string itself varies.
+	attempts := searchAttempts(body.Platform, body.IsSrcURL, body.URL)
+
 	// Whether any attempt was answered at all. Every attempt rejected is an API
 	// problem, and telling the user "no record" would send them looking for a
 	// URL that was never actually searched for.
 	answered := false
-	for _, attempt := range searchAttempts(body.Platform, body.IsSrcURL, body.URL) {
-		httpStatus, data, err := markscan.SearchByUrl(apiToken, body.URL, attempt.platform, attempt.isSrcURL)
-		if err != nil {
-			Fail(w, 502, err.Error())
-			return
-		}
-		if httpStatus == 401 || httpStatus == 403 {
-			Fail(w, 401, "API token expired. Please re-login.")
-			return
-		}
-		if httpStatus >= 500 {
-			// Upstream is failing, not answering "not found" — retrying the same
-			// URL under another platform only multiplies the outage.
-			log.Printf("[search] upstream %d url=%q platform=%q body=%s",
-				httpStatus, body.URL, attempt.platform, snippet(data, 200))
-			OK(w, map[string]any{"success": false, "error": fmt.Sprintf("Search API error (%d). Please try again.", httpStatus)})
-			return
-		}
-		if httpStatus < 400 {
-			answered = true
-			if rec := searchRecord(data); rec != nil {
-				// Field NAMES only (no values): the screen renders every field a
-				// record carries, but one that came back empty is invisible there,
-				// and "does this platform even return that column?" is the question
-				// this log answers.
-				log.Printf("[search] hit url=%q platform=%q fields=%v", body.URL, attempt.platform, recordFields(rec))
-				/* `isSrcUrl` is echoed because the caller cannot otherwise know
-				   which SIDE answered. An Open Web lookup with no platform tries
-				   the linking side and then the host side (see searchAttempts),
-				   so a hit is one or the other and the screen has no way to tell
-				   which — it would have to guess before it could offer to switch
-				   to the other one. Meaningless off Open Web, where there is no
-				   pair, and the screen ignores it there. */
-				OK(w, map[string]any{
-					"success": true, "data": rec,
-					"platform": attempt.platform, "isSrcUrl": attempt.isSrcURL,
-				})
+	// See urlFormats: the URL as typed, then the same URL with a trailing
+	// slash — tried only once the first has gone through every platform
+	// attempt above and found nothing, not interleaved with them, so a hit
+	// on the reader's own spelling never pays for the fallback's call.
+	for _, url := range urlFormats(body.URL) {
+		for _, attempt := range attempts {
+			httpStatus, data, err := markscan.SearchByUrl(apiToken, url, attempt.platform, attempt.isSrcURL)
+			if err != nil {
+				Fail(w, 502, err.Error())
 				return
 			}
+			if httpStatus == 401 || httpStatus == 403 {
+				Fail(w, 401, "API token expired. Please re-login.")
+				return
+			}
+			if httpStatus >= 500 {
+				// Upstream is failing, not answering "not found" — retrying the
+				// same URL under another platform or format only multiplies the
+				// outage.
+				log.Printf("[search] upstream %d url=%q platform=%q body=%s",
+					httpStatus, url, attempt.platform, snippet(data, 200))
+				OK(w, map[string]any{"success": false, "error": fmt.Sprintf("Search API error (%d). Please try again.", httpStatus)})
+				return
+			}
+			if httpStatus < 400 {
+				answered = true
+				if rec := searchRecord(data); rec != nil {
+					// Field NAMES only (no values): the screen renders every field a
+					// record carries, but one that came back empty is invisible there,
+					// and "does this platform even return that column?" is the question
+					// this log answers.
+					log.Printf("[search] hit url=%q platform=%q fields=%v", url, attempt.platform, recordFields(rec))
+					/* `isSrcUrl` is echoed because the caller cannot otherwise know
+					   which SIDE answered. An Open Web lookup with no platform tries
+					   the linking side and then the host side (see searchAttempts),
+					   so a hit is one or the other and the screen has no way to tell
+					   which — it would have to guess before it could offer to switch
+					   to the other one. Meaningless off Open Web, where there is no
+					   pair, and the screen ignores it there. */
+					OK(w, map[string]any{
+						"success": true, "data": rec,
+						"platform": attempt.platform, "isSrcUrl": attempt.isSrcURL,
+					})
+					return
+				}
+			}
+			log.Printf("[search] no record url=%q platform=%q isSrcUrl=%v status=%d body=%s",
+				url, attempt.platform, attempt.isSrcURL, httpStatus, snippet(data, 200))
 		}
-		log.Printf("[search] no record url=%q platform=%q isSrcUrl=%v status=%d body=%s",
-			body.URL, attempt.platform, attempt.isSrcURL, httpStatus, snippet(data, 200))
 	}
 
 	if !answered {
 		OK(w, map[string]any{"success": false, "error": "Search API rejected the request. Please try again or contact support."})
 		return
 	}
-	OK(w, map[string]any{"success": false, "error": "No record found for this URL."})
+	OK(w, map[string]any{"success": false, "Info": "No record found for this URL."})
 }
 
 // recordFields lists a record's field names, sorted so two searches can be

@@ -127,14 +127,14 @@ const GUIDES: Guide[] = [
         href: '/admin/module-permissions',
         what: 'Open the login and tick Reports. Save.',
         why:
-          'Ticking Reports removes Dashboard automatically — the two show the same figures, so a login ' +
-          'gets one of them. Reports takes precedence.',
+          'Reports and Dashboard are separate grants — ticking one does not affect the other, so a ' +
+          'login can hold both and see both in its nav.',
       },
     ],
     symptoms: [
       { missing: 'The warehouse mapping', looks: 'The report opens and says the account is not linked to a reporting client.' },
       { missing: 'The connection', looks: 'Every client’s report is unavailable, not just this one.' },
-      { missing: 'The module grant', looks: 'No Reports item in the nav; the client lands on Dashboard instead.' },
+      { missing: 'The module grant', looks: 'No Reports item in the nav at all.' },
     ],
     note:
       'Reports does NOT need enforcement API credentials — it is a different backend from the API-based ' +
@@ -146,8 +146,8 @@ const GUIDES: Guide[] = [
     icon: '📈',
     title: 'Enable the Dashboard for a client',
     summary:
-      'The Dashboard is the PowerBI tile page. It is what a login gets when Reports has NOT been ' +
-      'granted, so in most cases there is nothing to switch on — only tiles to give it.',
+      'The Dashboard is the PowerBI tile page, granted independently of Reports. In most cases there ' +
+      'is nothing to switch on — only tiles to give it.',
     steps: [
       {
         where: 'Configuration → PowerBI API Credentials',
@@ -166,19 +166,16 @@ const GUIDES: Guide[] = [
       {
         where: 'Configuration → API Module Permissions',
         href: '/admin/module-permissions',
-        what:
-          'Make sure Reports is NOT ticked for the login. Dashboard may be ticked or left alone — ' +
-          'it is the default either way.',
+        what: 'Tick Dashboard for the login. Save.',
         why:
-          'Reports and Dashboard are one entitlement with two faces. Where Reports is granted it wins ' +
-          'and Dashboard disappears from the nav, which is the usual reason a Dashboard "stops working" ' +
-          'right after someone was given Reports.',
+          'Reports and Dashboard are separate grants, so ticking Dashboard here does not affect ' +
+          'whether the login also holds Reports, and vice versa.',
       },
     ],
     symptoms: [
       { missing: 'Assigned dashboard modules', looks: 'The Dashboard opens with no tiles on it.' },
       { missing: 'PowerBI credentials', looks: 'Tiles appear but the report does not load when opened.' },
-      { missing: 'Nothing — Reports is granted', looks: 'No Dashboard in the nav at all, and /dashboard sends the reader to Reports.' },
+      { missing: 'The module grant', looks: 'No Dashboard item in the nav at all.' },
     ],
   },
   {

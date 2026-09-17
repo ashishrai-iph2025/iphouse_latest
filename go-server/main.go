@@ -193,6 +193,11 @@ func main() {
 	mux.Handle("GET /api/download/{id}", mod(handlers.PageDownload, handlers.DownloadByID))
 	mux.Handle("GET /api/upload-url", mod(handlers.PageUploadURL, handlers.UploadURL))
 	mux.Handle("POST /api/upload-url", mod(handlers.PageUploadURL, handlers.UploadURL))
+	/* The UGC sub-platform list the take-down form detects platforms against.
+	   Behind the same module gate as the page that reads it — it is a list of
+	   which sites are monitored, which is not something to serve to a login that
+	   cannot reach the form. */
+	mux.Handle("GET /api/ugc-domains", mod(handlers.PageUploadURL, handlers.UGCDomains))
 	/* Enforcement is an action on a search result, reached from the Search Case
 	   List results view (ResultsView.tsx) — so it is that module's grant, not a
 	   module of its own. */
@@ -209,6 +214,9 @@ func main() {
 	mux.Handle("GET /api/user/nav", auth(handlers.UserNav))
 	mux.Handle("GET /api/user/dashboard-data", auth(handlers.UserDashboardData))
 	mux.Handle("GET /api/user/idle-timeout", auth(handlers.UserIdleTimeout))
+	// A login's own sidebar/width/colour/card settings — see themelayout.go.
+	mux.Handle("GET /api/user/theme-layout", auth(handlers.UserThemeLayoutGet))
+	mux.Handle("PUT /api/user/theme-layout", auth(handlers.UserThemeLayoutSave))
 	// May this login rearrange its own report, and the endpoint it does it
 	// through. The layout itself lives in report_panel_layout and is keyed per
 	// client; only the permission is per login. See handlers/clientlayout.go.
@@ -293,6 +301,11 @@ func main() {
 	mux.Handle("POST /api/admin/nav-dropdown/reorder", cfg("module-permissions", admin.NavDropdownReorder))
 	mux.Handle("GET /api/admin/user-module-permissions", cfg("module-permissions", admin.UserModulePermissions))
 	mux.Handle("POST /api/admin/user-module-permissions", cfg("module-permissions", admin.UserModulePermissions))
+	// What a client login's portal opens on — see themelayout.go. Same
+	// grant as Module Access: it lives in the same account editor pane.
+	mux.Handle("GET /api/admin/login-theme-layout", cfg("module-permissions", handlers.LoginThemeLayoutGet))
+	mux.Handle("PUT /api/admin/login-theme-layout", cfg("module-permissions", handlers.LoginThemeLayoutSave))
+	mux.Handle("DELETE /api/admin/login-theme-layout", cfg("module-permissions", handlers.LoginThemeLayoutReset))
 
 	mux.Handle("GET /api/admin/dashboards", adminAuth(admin.Dashboards))
 	mux.Handle("POST /api/admin/dashboards", adminAuth(admin.Dashboards))

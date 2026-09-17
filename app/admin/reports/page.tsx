@@ -183,8 +183,16 @@ function niceTicks(max: number, count = 5): number[] {
   const raw  = max / (count - 1)
   const mag  = Math.pow(10, Math.floor(Math.log10(raw)))
   const step = [1, 2, 2.5, 5, 10].map(s => s * mag).find(s => s >= raw) ?? 10 * mag
+  /* The top tick must clear the real max, not just come close to it. Stopping
+     at the last multiple of `step` within half a step of `max` — the previous
+     rule — can land BELOW max: at max=10900 and step=5000 it stops at 10000,
+     900 short. The axis domain is [0, this array's last value], so that bar
+     draws taller than the plot it is on and is cut off at the top edge —
+     taking its value label, drawn above it, with it. Rounding up to the next
+     whole step instead guarantees the domain always contains every bar. */
+  const top = Math.ceil(max / step) * step
   const out: number[] = []
-  for (let v = 0; v <= max + step / 2; v += step) out.push(Math.round(v * 100) / 100)
+  for (let v = 0; v <= top + 1e-9; v += step) out.push(Math.round(v * 100) / 100)
   return out
 }
 
@@ -851,6 +859,10 @@ const COUNT_PANELS: Record<string, {
      what every count did before the drawers existed — so leaving it off is the
      safe default rather than an omission. */
   counts: Array<{ key: string; name: string; list?: string }>
+  /* Off for the one panel whose second bar duplicates a figure another panel
+     already owns. Undefined elsewhere means "show it" — every other card's
+     removal bar is the only place its number appears. */
+  showRemoved?: boolean
 }> = {
   [DOMAIN_ROOT_ALL]: {
     nameHead: 'Linking domain', removedName: 'Google de-indexed',
@@ -866,6 +878,12 @@ const COUNT_PANELS: Record<string, {
   byDelistingBatchHSP: {
     nameHead: 'Hosting provider', removedName: 'De-indexed',
     counts: [{ key: 'extra', name: 'Linking domains', list: 'extraDomains' }],
+    /* De-indexing submissions per engine are already their own panel
+       (dimEngineDelistingBatches) and their own day-wise trend — this card is
+       the one place a reader compares providers by estate size, and a second
+       bar repeating the engine-side figure only competes with the domain
+       count for the same row's attention. */
+    showRemoved: false,
   },
   /* The HOST provider card, which has one figure more than any other panel on
      the page: notices. A host is sent a notice and takes content down, so both
@@ -2433,9 +2451,6 @@ export function Trend({ data, m, firstName = 'Identified', secondName = 'Removed
             ? firstName.toLowerCase()
             : `${firstName.toLowerCase()} · ${full(d.removed)} ${secondName.toLowerCase()} (${d.rate}%)`}
         </p>
-        <p className="text-[11px] text-gray-400 mt-4 max-w-xs mx-auto">
-          Widen the date range to see this as a trend.
-        </p>
       </div>
     )
   }
@@ -3155,12 +3170,16 @@ function VolumeBar({ v, max, color }: { v: number; max: number; color: string })
    a copy of its markup. A preview that reimplements the thing it previews
    agrees with the page exactly once — on the day it is written. */
 export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
-  removedName = 'Removed', nameHead = 'Root domain',
+  removedName = 'Removed', nameHead = 'Root domain', showRemoved = true,
   counts = [{ key: 'mirrors', name: 'Mirror domains', list: 'mirrorDomains' }] }: {
   rows: any[]; m: MarkTheme; onPick?: (v: string) => void; activeVal?: string; limit?: number
   /** What the rows ARE. The same words the TABLE toggle uses, so switching
       between the two views of one card does not rename its rows. */
   nameHead?: string
+  /** Off for a card whose removal figure belongs to another panel — see
+      COUNT_PANELS. The row keeps only its identified bar; the count gauges
+      beside it are unaffected. */
+  showRemoved?: boolean
   /* WHICH KEY HOLDS THE THIRD FIGURE, and what it is called.
 
      This shape — two volume bars and a small count on its own gauge — was built
@@ -3212,7 +3231,7 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
   // same "absence over a well of nothing" rule `showMirrors` applies below.
   const hasStatus = data.some(d => d.status !== '')
   const hasPlatform = data.some(d => d.platform !== '')
-  const maxVol = Math.max(1, ...data.map(d => Math.max(d.urls, d.removed)))
+  const maxVol = Math.max(1, ...data.map(d => showRemoved ? Math.max(d.urls, d.removed) : d.urls))
   /* One scale PER COUNT, not one shared between them.
 
      The host card carries distinct websites and notices sent, and those are no
@@ -3267,7 +3286,7 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
         style={{ gridTemplateColumns: cols }}>
         <span>{nameHead}</span>
         {hasStatus && <span>Status</span>}
-        <span>Identified / {removedName}</span>
+        <span>{showRemoved ? `Identified / ${removedName}` : 'Identified'}</span>
         {shown.map(c => <span key={c.key} className="text-right">{c.name}</span>)}
       </div>
 
@@ -3276,7 +3295,8 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
           const isActive = activeVal === d.val || activeVal === d.label
           // Which of this row's gauges is open, if any.
           const openCount = shown.find(c => openRow === drawerKey(d.val, c.key))
-          const rowTitle = `${d.label}${d.platform ? ` (${d.platform})` : ''}: ${full(d.urls)} identified, ${full(d.removed)} ${removedName.toLowerCase()}${
+          const rowTitle = `${d.label}${d.platform ? ` (${d.platform})` : ''}: ${full(d.urls)} identified${
+            showRemoved ? `, ${full(d.removed)} ${removedName.toLowerCase()}` : ''}${
             hasStatus ? `, profile ${d.status.toLowerCase()}` : ''}${
             shown.map(c => `, ${full(d.counts[c.i])} ${c.name.toLowerCase()}`).join('')}`
           return (
@@ -3337,7 +3357,7 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
                   title={rowTitle}
                   className="flex flex-col gap-1 min-w-0 disabled:cursor-default">
                   <VolumeBar v={d.urls} max={maxVol} color={m.ident} />
-                  <VolumeBar v={d.removed} max={maxVol} color={m.removed} />
+                  {showRemoved && <VolumeBar v={d.removed} max={maxVol} color={m.removed} />}
                 </button>
                 {shown.map(c => {
                   const open = openRow === drawerKey(d.val, c.key)
@@ -3364,22 +3384,30 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
                       </span>
                     </>
                   )
-                  /* A gauge opens only where a list came with it. The notices
-                     gauge declares none, and any gauge whose list the server could
-                     not reconcile against its count arrives without one — a
-                     chevron on either would promise a drawer that opens on
-                     nothing, or worse, on a fragment. */
+                  /* A gauge opens on whatever list came with it, complete or
+                     not — see reconciledList in enforcementactions.go, which
+                     now hands back a short list as a lower bound rather than
+                     withholding it. Silent only for a count that never
+                     carries names at all (Notices — no `list` declared), and
+                     for the rarer case where the row-scan cap fell before it
+                     reached even one of this group's rows. */
                   const list = d.lists[c.i]
+                  const partial = list.length > 0 && list.length < d.counts[c.i]
                   if (list.length === 0) {
+                    const why = c.list && d.counts[c.i] > 0
+                      ? 'The list behind this count could not be shown for this window — see "Worth knowing about this run" above.'
+                      : undefined
                     return (
-                      <span key={c.key} className="flex items-center gap-2 justify-end">{gauge}</span>
+                      <span key={c.key} title={why} className="flex items-center gap-2 justify-end">{gauge}</span>
                     )
                   }
                   return (
                     <button key={c.key} type="button" aria-expanded={open}
                       onClick={() => setOpenRow(open ? '' : drawerKey(d.val, c.key))}
                       title={open ? `Hide the ${countNoun(c.name, list.length)} behind this count`
-                        : `Show the ${full(list.length)} ${countNoun(c.name, list.length)} behind this count`}
+                        : partial
+                          ? `Show the ${full(list.length)} ${countNoun(c.name, list.length)} this window's row scan found — a lower bound, not the full ${full(d.counts[c.i])}`
+                          : `Show the ${full(list.length)} ${countNoun(c.name, list.length)} behind this count`}
                       className="flex items-center gap-2 justify-end">
                       {gauge}
                       <svg viewBox="0 0 10 6" width="8" height="5" aria-hidden="true"
@@ -3401,23 +3429,34 @@ export function MirrorBars({ rows, m, onPick, activeVal = '', limit = 10,
                   Every name in full. This drawer exists because the count on its
                   own was not enough, so truncating its answer would put the
                   reader back where they started. */}
-              {openCount && (
-                <div className="mt-0.5 mb-1.5 ml-1.5 rounded-md px-3 py-2"
-                  style={{ background: m.grid }}>
-                  {/* Named for the GAUGE it was opened from, not for domains in
-                      general: "17 host domains" and "29 linking domains" are two
-                      different estates, and a provider card can show both. */}
-                  <div className="text-[9px] font-bold uppercase tracking-widest text-gray-400 pb-1.5">
-                    {full(d.lists[openCount.i].length)}{' '}
-                    {countNoun(openCount.name, d.lists[openCount.i].length)} · {d.label}
+              {openCount && (() => {
+                const shownLen = d.lists[openCount.i].length
+                const total = d.counts[openCount.i]
+                const short = total > shownLen
+                return (
+                  <div className="mt-0.5 mb-1.5 ml-1.5 rounded-md px-3 py-2"
+                    style={{ background: m.grid }}>
+                    {/* Named for the GAUGE it was opened from, not for domains in
+                        general: "17 host domains" and "29 linking domains" are two
+                        different estates, and a provider card can show both.
+
+                        "At least" only where the row-scan cap made this list
+                        shorter than the gauge's own exact count — see
+                        reconciledList. Plain otherwise: most windows are not
+                        capped, and hedging a complete list would train a reader
+                        to doubt every drawer on the page. */}
+                    <div className="text-[9px] font-bold uppercase tracking-widest text-gray-400 pb-1.5">
+                      {short ? `At least ${full(shownLen)} of ${full(total)}` : full(shownLen)}{' '}
+                      {countNoun(openCount.name, total)} · {d.label}
+                    </div>
+                    <ul className="flex flex-wrap gap-x-4 gap-y-1">
+                      {d.lists[openCount.i].map(h => (
+                        <li key={h} className="text-[11px] text-gray-600 dark:text-gray-300 break-all">{h}</li>
+                      ))}
+                    </ul>
                   </div>
-                  <ul className="flex flex-wrap gap-x-4 gap-y-1">
-                    {d.lists[openCount.i].map(h => (
-                      <li key={h} className="text-[11px] text-gray-600 dark:text-gray-300 break-all">{h}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+                )
+              })()}
             </div>
           )
         })}
@@ -4821,11 +4860,20 @@ function Chip({ label, value, onClear }: { label: string; value: string; onClear
  * release, and the difference between the two is genuinely only "who picks the
  * client, and what may be said about the warehouse when something is wrong".
  *
+ * `vod` is the VOD Reports page — again the SAME component rather than a
+ * second copy, for the same reason. It sends `scope=vod` on every request
+ * that can be asked for either page (sections, options, data), which is what
+ * makes the server resolve the VOD grant and the VOD-only platform backstop
+ * instead of the original Reports grant — see dashAccessScope's twin,
+ * mayOpenReport/reportsAllowedForClaims, in go-server/handlers. `scoped` and
+ * `vod` are independent: a client reads their own VOD Reports scoped this
+ * way, and staff can preview it unscoped from /admin/report-vod.
+ *
  * Nothing here is the access control. The server forces the client id for any
  * login that is not staff and refuses the request without the module grant
  * (go-server/handlers/reportclientmap.go); this only decides what to draw.
  */
-export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
+export default function ReportsPage({ scoped = false, vod = false }: { scoped?: boolean; vod?: boolean }) {
   const [sections, setSections] = useState<Section[]>([])
   const [section,  setSection]  = useState('')
   /* Arranging the report FROM the report.
@@ -5345,6 +5393,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
   useEffect(() => {
     const p = new URLSearchParams()
     if (filters.clientId) p.set('clientId', filters.clientId)
+    if (vod) p.set('scope', 'vod')
     fetch(`/api/reports/sections?${p}`, { credentials: 'include' })
       .then(async r => {
         if (r.status === 401 || r.status === 403) throw new Error(AUTH_MSG)
@@ -5448,6 +5497,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
       for (const key of activeSection?.filters ?? []) {
         if (filters[key]) p.set(key, filters[key])
       }
+      if (vod) p.set('scope', 'vod')
       fetch(`/api/reports/options?${p}`, { credentials: 'include' })
         .then(async r => {
           if (r.status === 401 || r.status === 403) throw new Error(AUTH_MSG)
@@ -5512,6 +5562,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
           : filters[key]
         if (v) p.set(key, v)
       }
+      if (vod) p.set('scope', 'vod')
       fetch(`/api/reports/options?${p}`, { credentials: 'include' })
         .then(r => (r.ok ? r.json() : null))
         .then(d => {
@@ -5566,6 +5617,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
         for (const key of activeSection.filters) {
           if (filters[key]) p.set(key, filters[key])
         }
+        if (vod) p.set('scope', 'vod')
         const res  = await fetch(`/api/reports/data?${p}`, { credentials: 'include' })
         const json = await res.json()
         if (!active) return
@@ -6300,6 +6352,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
           return <MirrorBars rows={rows} m={m} onPick={pick} activeVal={active}
             nameHead={c?.nameHead ?? 'Name'}
             removedName={c?.removedName ?? 'Removed'}
+            showRemoved={c?.showRemoved ?? true}
             /* The fallback for a panel Report Configuration put on this shape
                without COUNT_PANELS knowing about it. `list` is named on the
                chance the row carries one; where it does not, listOf answers
@@ -6527,9 +6580,6 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
               saved={vizDefault[trendKey]}
               onPick={v => setViz(trendKey, v)}
               onSetDefault={v => saveVizDefault(trendKey, v)} />}
-            chartTitle={src
-              ? `${src.label} URLs found against those ${src.secondKey === 'delisted' ? 'de-indexed' : 'removed'}, by ${trendGrain}`
-              : `Links found against links taken down, by ${trendGrain}`}
             table={<DataTable head={td.head} rows={td.rows}
               onPick={pickPeriod} activeVal={drilled ? drill!.label : ''}
               pickValues={td.pickValues} />}>
@@ -6574,7 +6624,6 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
               saved={vizDefault[rateKey]}
               onPick={v => setViz(rateKey, v)}
               onSetDefault={v => saveVizDefault(rateKey, v)} />}
-            chartTitle={`Share of that ${trendGrain}'s identified links that came down`}
             table={<DataTable head={rateTd.head} rows={rateTd.rows}
               onPick={pickPeriod} activeVal={drilled ? drill!.label : ''}
               pickValues={rateTd.pickValues} />}>
@@ -6801,7 +6850,7 @@ export default function ReportsPage({ scoped = false }: { scoped?: boolean }) {
             <span className="text-[#14254A]/25 dark:text-white/25">›</span>
           </>
         )}
-        <span className="font-semibold text-[#14254A] dark:text-white">Reports</span>
+        <span className="font-semibold text-[#14254A] dark:text-white">{vod ? 'VOD Reports' : 'Reports'}</span>
         {/* Whose numbers these are. Staff pick a client and can see which one is
             loaded in the slicer; a client login has no slicer, so the scope is
             stated here instead of being invisible. */}
