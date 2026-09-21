@@ -228,21 +228,51 @@ func vodDashModules() []dashModule {
 }
 
 /*
-vodOnlyPlatformKeys is the hard backstop the VOD Reports page checks a
-platform against before ever drawing it — every report_platform NOT claimed by
-a Sports- or War-Room-categorised module in the catalogue.
+sportsDashModules is the catalogue slice the Reports ("Live Events") picker
+offers — every dcp_module row categorised Sports or War Room, already
+resolved to its report_platform by loadDashModules. The complement of
+vodDashModules above, and needed for the same reason: sportsOnlyPlatformKeys
+is the hard backstop this grant is checked against when the Reports page
+actually reads it, and a platform not claimed by Sports/War Room there falls
+on vodOnlyPlatformKeys' side of that backstop instead. Before this existed,
+the picker offered the WHOLE catalogue — VOD and uncategorised modules
+included — so an admin could tick one, see it counted as granted, click
+Apply, and have it grant nothing: resolved to a real platform, just not one
+this page's backstop will ever draw. Category compared exactly, not
+case-insensitively, matching vodDashModules and DASHBOARD_CATEGORIES.
+
+A platform already granted through some OTHER route that falls outside this
+narrower slice (an old VOD-categorised grant row, say) is not lost by this —
+it becomes "unlisted" (see the GET handler below), shown and kept rather
+than silently dropped, exactly as vodDashModules already relies on for the
+symmetric case.
+*/
+func sportsDashModules() []dashModule {
+	all := loadDashModules()
+	out := make([]dashModule, 0, len(all))
+	for _, m := range all {
+		if m.Category == "Sports" || m.Category == "War Room" {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+/*
+sportsOnlyPlatformKeys is the hard backstop the Reports page (the plain
+"Reports"/renamed-to-"Live Events" grant, NOT VOD) checks a platform against
+before ever drawing it — every report_platform claimed by a Sports- or
+War-Room-categorised module in the catalogue. The complement of
+vodOnlyPlatformKeys below, and built the same way for the same reason: a
+stale or hand-edited grant row naming a VOD platform must not be enough on
+its own to draw VOD data on the page whose whole reason to exist is that it
+shows Sports.
 
 report_platform carries no category column of its own (see the note on
-dashboardModuleKey above); VOD is what a platform is when nothing in the
-catalogue has claimed it as something narrower, the same "default" reasoning
-vodDashModules uses for the picker. Built independently of whatever the VOD
-grant (reportsAllowedForVOD) happens to hold, and checked IN ADDITION to it:
-the grant says what a login is ALLOWED to see, this says what the page
-CATEGORICALLY may ever show, and a stale or hand-edited grant row naming a
-Sports platform must not be enough on its own to draw Sports data on a page
-whose whole reason to exist is that it is not that.
+dashboardModuleKey above) — category is entirely what the dcp_module
+catalogue says a platform is claimed as.
 */
-func vodOnlyPlatformKeys() map[string]bool {
+func sportsOnlyPlatformKeys() map[string]bool {
 	claimed := map[string]bool{}
 	for _, m := range loadDashModules() {
 		if m.PlatformKey == "" {
@@ -252,6 +282,23 @@ func vodOnlyPlatformKeys() map[string]bool {
 			claimed[m.PlatformKey] = true
 		}
 	}
+	return claimed
+}
+
+/*
+vodOnlyPlatformKeys is the hard backstop the VOD Reports page checks a
+platform against before ever drawing it — every report_platform NOT claimed
+by sportsOnlyPlatformKeys above. VOD is what a platform is when nothing in
+the catalogue has claimed it as something narrower, the same "default"
+reasoning vodDashModules uses for the picker. Built independently of whatever
+the VOD grant (reportsAllowedForVOD) happens to hold, and checked IN ADDITION
+to it: the grant says what a login is ALLOWED to see, this says what the page
+CATEGORICALLY may ever show, and a stale or hand-edited grant row naming a
+Sports platform must not be enough on its own to draw Sports data on a page
+whose whole reason to exist is that it is not that.
+*/
+func vodOnlyPlatformKeys() map[string]bool {
+	claimed := sportsOnlyPlatformKeys()
 	out := map[string]bool{}
 	for _, p := range loadPlatforms() {
 		if !claimed[p.Key] {
@@ -359,12 +406,17 @@ different modules on each; resolving the wrong one here is a data leak between
 the two pages, not a cosmetic bug, which is why every caller of this function
 must have a scope in hand rather than assuming "Reports".
 
-The VOD answer is additionally bounded by vodOnlyPlatformKeys, INSIDE this
-function rather than left to each caller to remember. That backstop exists so
-a stale or hand-edited grant row naming a Sports platform cannot draw Sports
-data on the VOD page; putting it here means every caller gets it for free,
-including the "nil means unrestricted" case — an unrestricted VOD grant must
-still mean "every VOD platform", never "every platform, Sports included".
+Both answers are additionally bounded by a categorical backstop, INSIDE this
+function rather than left to each caller to remember — vodOnlyPlatformKeys for
+the VOD grant, sportsOnlyPlatformKeys for the plain Reports one (the grant a
+"Live Events"-relabelled nav entry still resolves to; see mayOpenReport for
+why the rename never touches the pageName this keys on). That backstop exists
+so a stale or hand-edited grant row naming a platform from the OTHER category
+cannot draw that category's data on a page whose whole reason to exist is
+that it is the other one. Putting it here means every caller gets it for
+free, including the "nil means unrestricted" case — an unrestricted Reports
+grant must still mean "every Sports platform", never "every platform, VOD
+included", and symmetrically for VOD.
 */
 func reportsAllowedForClaims(claims *ipauth.Claims, scope string) map[string]bool {
 	if claims == nil {
@@ -373,7 +425,7 @@ func reportsAllowedForClaims(claims *ipauth.Claims, scope string) map[string]boo
 	if scope == scopeVOD {
 		return intersectAllowed(reportsAllowedForVOD(claims.LoginID), vodOnlyPlatformKeys())
 	}
-	return reportsAllowedFor(claims.LoginID)
+	return intersectAllowed(reportsAllowedFor(claims.LoginID), sportsOnlyPlatformKeys())
 }
 
 /*
@@ -417,7 +469,7 @@ func dashAccessScope(scope string) (mods []dashModule, allowedFor func(int64) ma
 	if scope == scopeVOD {
 		return vodDashModules(), reportsAllowedForVOD, reportAccessVODTable
 	}
-	return loadDashModules(), reportsAllowedFor, reportAccessTable
+	return sportsDashModules(), reportsAllowedFor, reportAccessTable
 }
 
 /*

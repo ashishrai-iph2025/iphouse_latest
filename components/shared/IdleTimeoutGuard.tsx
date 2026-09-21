@@ -65,6 +65,19 @@ const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchst
 
 type Phase = 'ok' | 'warning' | 'expired'
 
+/* /login carries the page this session was actually on, so signing back in
+   lands there instead of always at the default landing page — read back by
+   app/(auth)/login/page.tsx's own post-auth redirect. Read straight off
+   `window.location` rather than a router hook: every call site here already
+   does its own `window.location.href` navigation (this guard renders outside
+   whatever page it interrupts and has no reason to hold its path in React
+   state), so this just matches that. */
+function loginUrlWithReturn(): string {
+  const path = window.location.pathname + window.location.search
+  if (!path || path === '/login') return '/login?reason=idle'
+  return `/login?reason=idle&next=${encodeURIComponent(path)}`
+}
+
 export default function IdleTimeoutGuard() {
   /* When the SERVER says this session dies, in epoch ms. Null until the first
      keepalive answers — and while it is null nothing is drawn, because a
@@ -111,8 +124,9 @@ export default function IdleTimeoutGuard() {
       if (res.status === 401) {
         goingRef.current = true
         setPhase('expired')
+        const returnUrl = loginUrlWithReturn()
         signOut({ redirect: false }).finally(() => {
-          window.location.href = '/login?reason=idle'
+          window.location.href = returnUrl
         })
         return
       }
@@ -191,8 +205,9 @@ export default function IdleTimeoutGuard() {
       if (left <= 0) {
         goingRef.current = true
         setPhase('expired')
+        const returnUrl = loginUrlWithReturn()
         signOut({ redirect: false }).finally(() => {
-          window.location.href = '/login?reason=idle'
+          window.location.href = returnUrl
         })
         return
       }
@@ -278,7 +293,7 @@ export default function IdleTimeoutGuard() {
             <div className="flex gap-3">
               <button
                 type="button"
-                onClick={() => { goingRef.current = true; signOut({ callbackUrl: '/login' }) }}
+                onClick={() => { goingRef.current = true; signOut({ callbackUrl: loginUrlWithReturn() }) }}
                 className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
               >
                 Log out now

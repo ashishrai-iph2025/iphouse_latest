@@ -5350,7 +5350,14 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
      to ask for. */
   useEffect(() => {
     if (!scoped) return
-    fetch('/api/reports/scope', { credentials: 'include' })
+    /* scope=vod, like every other request this page makes. Missing here, the
+       endpoint gates on the Reports module while the reader is on VOD Reports
+       — a separate grant — and answers "not enabled" for a page they are
+       entitled to. It is the first request the page makes, so that answer is
+       the entire page. */
+    const sp = new URLSearchParams()
+    if (vod) sp.set('scope', 'vod')
+    fetch(`/api/reports/scope?${sp}`, { credentials: 'include' })
       .then(async r => {
         if (r.status === 401 || r.status === 403) throw new Error(AUTH_MSG)
         return r.json()
@@ -6946,6 +6953,23 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
         </div>
       )}
 
+      {/* Scope not resolved yet — shown INSTEAD of the report shell below, not
+          alongside it. The rails guard used to be `!(scoped && scope &&
+          !scope.allowed)`, which is true (renders) the moment `scope` is
+          still null: a login the /api/reports/scope check would go on to
+          refuse saw the full report shell — sidebar, rails, a report
+          actively running — for the entire round trip before that answer
+          arrived. Failing closed here means nothing beyond this placeholder
+          renders until scope is known one way or the other, matching the
+          "null means not known yet — fail closed" rule this app applies to
+          every other permission check (see lib/moduleAccess.tsx). */}
+      {scoped && !scope && (
+        <div className="rounded-2xl px-5 py-8 text-center bg-white dark:bg-[#1a2d55] shadow-card
+          border border-gray-100 dark:border-white/10">
+          <p className="text-sm text-gray-400 dark:text-white/40">Checking access…</p>
+        </div>
+      )}
+
       {/* A login the module reaches but the mapping does not. Stated plainly:
           an empty report here would be read as "no infringements were found",
           which is a different and much worse answer. */}
@@ -6978,8 +7002,13 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
           width, and on a wide screen a 2/12 rail spends 100px of the report's
           width on air. `items-start` keeps each rail as tall as its own card so
           `sticky` has somewhere to travel — otherwise a stretched rail leaves
-          an empty gutter beside the charts as soon as the page scrolls. */}
-      {!(scoped && scope && !scope.allowed) && (
+          an empty gutter beside the charts as soon as the page scrolls.
+
+          Guard fails CLOSED: renders unscoped (admin's own view, nothing to
+          wait on) or once scope has come back allowed — never while scope is
+          still null. See the "Checking access…" placeholder above for why
+          that used to render this instead. */}
+      {(!scoped || scope?.allowed === true) && (
       <>
 
       {/* ── Live discovery counts, across the whole page ─────────────────────

@@ -241,7 +241,11 @@ func main() {
 	// or staff), because this is NOT a role >= 1 route.
 	mux.Handle("GET /api/client-admin/users", auth(handlers.ClientAdminUsers))
 	mux.Handle("PUT /api/client-admin/users", auth(handlers.ClientAdminUsers))
+	mux.Handle("POST /api/client-admin/users", auth(handlers.ClientAdminUsers))
 	mux.Handle("GET /api/client-admin/activity", auth(handlers.ClientAdminActivity))
+	mux.Handle("GET /api/client-admin/modules", auth(handlers.ClientAdminModules))
+	mux.Handle("GET /api/client-admin/user-modules", auth(handlers.ClientAdminUserModules))
+	mux.Handle("PUT /api/client-admin/user-modules", auth(handlers.ClientAdminUserModules))
 
 	// Notification bell — available to every authenticated user. The handler
 	// scopes the feed by role (staff: all clients / Client Admin: own company /

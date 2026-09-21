@@ -187,11 +187,21 @@ func secureCookies() bool {
 
 // SetTokenCookie sets the JWT as an HttpOnly cookie.
 func SetTokenCookie(w http.ResponseWriter, token string) {
+	SetTokenCookieWithMaxAge(w, token, config.C.SessionIdleSeconds)
+}
+
+// SetTokenCookieWithMaxAge sets the JWT cookie with a caller-chosen MaxAge.
+//
+// The cookie's MaxAge and the token's own `exp` claim must describe the same
+// moment — see Keepalive, which re-signs for a client's own idle window and
+// would otherwise have the browser drop the cookie on the portal default
+// regardless of how long the token inside it is actually still good for.
+func SetTokenCookieWithMaxAge(w http.ResponseWriter, token string, maxAgeSeconds int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "token",
 		Value:    token,
 		Path:     "/",
-		MaxAge:   config.C.SessionIdleSeconds,
+		MaxAge:   maxAgeSeconds,
 		HttpOnly: true,
 		Secure:   secureCookies(),
 		SameSite: http.SameSiteLaxMode,

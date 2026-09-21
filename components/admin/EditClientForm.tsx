@@ -88,8 +88,8 @@ export default function EditClientForm({ client }: { client: Client }) {
       setError('Reporting Client ID must be a 36-character UUID, e.g. 3fa85f64-5717-4562-b3fc-2c963f66afa6')
       return
     }
-    if (idle.minutes < 1 || idle.minutes > 480) {
-      setError('Idle timeout must be between 1 and 480 minutes.')
+    if (idle.minutes < 1) {
+      setError('Idle timeout must be at least 1 minute.')
       return
     }
     setSaving(true)
@@ -295,11 +295,11 @@ export default function EditClientForm({ client }: { client: Client }) {
                 turns it on, and a disabled field makes that order impossible. */}
             <div className={idle.active ? '' : 'opacity-60'}>
               <Field label="Idle timeout (minutes)">
-                <input type="number" min={1} max={480} value={idle.minutes}
+                <input type="number" min={1} value={idle.minutes}
                   onChange={e => setIdle(v => ({ ...v, minutes: Number(e.target.value) }))}
                   className={INPUT} />
                 <div className="flex flex-wrap gap-2 mt-2">
-                  {[15, 30, 60, 120].map(m => (
+                  {[15, 30, 60, 120, 720, 1440].map(m => (
                     <button key={m} type="button" onClick={() => setIdle(v => ({ ...v, minutes: m }))}
                       className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
                         idle.minutes === m
@@ -310,7 +310,7 @@ export default function EditClientForm({ client }: { client: Client }) {
                     </button>
                   ))}
                 </div>
-                <p className="text-xs text-brand-muted mt-1.5">1–480 minutes.</p>
+                <p className="text-xs text-brand-muted mt-1.5">Any whole number of minutes, 1 or more.</p>
               </Field>
             </div>
 

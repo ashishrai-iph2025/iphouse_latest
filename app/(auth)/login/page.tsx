@@ -8,6 +8,26 @@ import AuthShell from '@/components/auth/AuthShell'
 import { validateLoginForm, sanitizeInput, detectSuspiciousInput } from '@/lib/validation'
 import { recordAttempt, clearRateLimit } from '@/lib/rateLimit'
 
+/* Where the ?next= param on this page's own URL is allowed to send someone —
+   set by RequireAuth/RequireAdmin (src/App.tsx) and IdleTimeoutGuard.tsx
+   whenever a session drops mid-page, so signing back in returns there
+   instead of always landing on the default page.
+
+   Two things to refuse, not just one:
+     - an open redirect: `next` must be a same-site relative path, never
+       protocol-relative ("//evil.com", which browsers resolve as a scheme-
+       relative absolute URL despite starting with a single-looking slash
+       once normalised) or an absolute URL;
+     - a client login landing on an admin route just because that happened
+       to be open in the tab when the session dropped — staff may go
+       anywhere, since /admin is exactly where they belong. */
+function safeNextPath(next: string | null, isStaff: boolean): string | null {
+  if (!next || next === '/login') return null
+  if (!/^\/(?!\/)(?!\\)/.test(next)) return null
+  if (!isStaff && next.startsWith('/admin')) return null
+  return next
+}
+
 function LoginForm() {
   const router  = useRouter()
   const params  = useSearchParams()
@@ -37,10 +57,11 @@ function LoginForm() {
   useEffect(() => {
     if (status === 'authenticated') {
       const role = (session?.user as any)?.role
+      const isStaff = role === 1 || role === 2
       clearRateLimit('login', username)
-      router.replace(role === 1 || role === 2 ? '/admin/home' : '/dashboard')
+      router.replace(safeNextPath(params.get('next'), isStaff) ?? (isStaff ? '/admin/home' : '/dashboard'))
     }
-  }, [status, session, username])
+  }, [status, session, username, params])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()

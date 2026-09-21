@@ -6,16 +6,36 @@
 This used to be a floating gear pinned to the viewport edge that slid a
 full-height panel in from the right. It now sits inline as one more icon in
 the header's own icon row (see ClientNavbar.tsx / HeaderControls.tsx /
-AdminShell.tsx) and opens the same small anchored dropdown NotificationBell
-already uses elsewhere in this header — a "small notification window", not a
-sidebar of its own. Three controls remain: colour mode, sidebar on/off,
-header on/off — see lib/ThemeCustomizerContext.tsx and lib/ThemeContext.tsx
-for the state behind them and the redesign history that got here.
+AdminHeaderControls.tsx) and opens a small popover — a "small notification
+window", not a sidebar of its own. Three controls: colour mode, sidebar
+on/off, header on/off — see lib/ThemeCustomizerContext.tsx and
+lib/ThemeContext.tsx for the state behind them.
+
+The popover is portalled to document.body and positioned `fixed` from the
+trigger's own getBoundingClientRect (CountryPicker.tsx uses the same
+pattern), not an in-flow `absolute` box inside a `relative` wrapper. A page
+can have its own `sticky`/z-indexed elements (e.g. app/admin/configuration's
+category-tabs row) that sit in a completely different part of the DOM than
+this header; z-index only ranks siblings within the same stacking context,
+so a merely-higher z-index here did not reliably beat page content mounted
+elsewhere. Escaping to the body sidesteps the comparison entirely.
+
+All three now apply identically whichever shell this is mounted in — admin
+has a real horizontal layout of its own to switch to (AdminShell.tsx), the
+same way the client portal does, so there is no longer a reduced view for
+one context. `context` still exists: it picks what "Reset to default" resets
+TO (see defaultsFor in ThemeCustomizerContext.tsx) — admin's own shipped
+default keeps its sidebar on, client's keeps it off — not what is shown.
 */
 
 import { useRef, useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useTheme } from '@/lib/ThemeContext'
-import { useCustomizer } from '@/lib/ThemeCustomizerContext'
+import { useCustomizer, defaultsFor } from '@/lib/ThemeCustomizerContext'
+
+/** Worst-case panel width used only for clamping the portal's fixed position —
+    the CSS itself still shrinks to `90vw` below this on a narrow phone. */
+const PANEL_W = 300
 
 /** Two segments in one pill — used for the light/dark choice. */
 function SegmentedChoice<T extends string>({ options, value, onChange }: {
@@ -57,10 +77,9 @@ function ToggleRow({ label, hint, checked, onChange, disabled }: {
 }
 
 export default function ThemeCustomizer({ context = 'client', tone = 'dark', align = 'down' }: {
-  /** Which shell this is mounted in. Sidebar and header only apply to the
-      client portal — AdminShell has its own fixed layout — so an 'admin'
-      session sees just the light/dark choice, the one thing here that also
-      repaints there. */
+  /** Which shell this is mounted in — picks what "Reset to default" resets
+      to (see defaultsFor), since admin's and client's shipped defaults
+      differ. Every control here shows and works the same either way. */
   context?: 'admin' | 'client'
   /** Icon colour to match whatever bar this sits in — same convention as
       NotificationBell/FullscreenToggle/CountryPicker next to it. */
@@ -71,16 +90,19 @@ export default function ThemeCustomizer({ context = 'client', tone = 'dark', ali
   align?: 'down' | 'up'
 }) {
   const [open, setOpen] = useState(false)
+  const [rect, setRect] = useState<DOMRect | null>(null)
   const { theme, toggle } = useTheme()
   const { sidebarEnabled, headerVisible, setSidebarEnabled, setHeaderVisible } = useCustomizer()
-  const ref = useRef<HTMLDivElement>(null)
-
-  const isClient = context === 'client'
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) return
+    setRect(btnRef.current?.getBoundingClientRect() ?? null)
     function handle(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (btnRef.current?.contains(t) || panelRef.current?.contains(t)) return
+      setOpen(false)
     }
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setOpen(false) }
     document.addEventListener('mousedown', handle)
@@ -93,15 +115,14 @@ export default function ThemeCustomizer({ context = 'client', tone = 'dark', ali
 
   function resetAll() {
     if (theme === 'dark') toggle()
-    if (isClient) {
-      setSidebarEnabled(false)
-      setHeaderVisible(true)
-    }
+    const d = defaultsFor(context)
+    setSidebarEnabled(d.sidebarEnabled)
+    setHeaderVisible(d.headerVisible)
   }
 
   return (
-    <div ref={ref} className="relative">
-      <button onClick={() => setOpen(o => !o)}
+    <>
+      <button ref={btnRef} onClick={() => setOpen(o => !o)}
         aria-expanded={open} title="Theme Customizer"
         className={`flex items-center justify-center w-9 h-9 rounded-xl transition-colors ${
           tone === 'light'
@@ -115,16 +136,17 @@ export default function ThemeCustomizer({ context = 'client', tone = 'dark', ali
         </svg>
       </button>
 
-      {open && (
-        <div className={`absolute z-50 w-[min(90vw,300px)] rounded-2xl overflow-hidden
-          bg-white dark:bg-[#1a2d55] border border-gray-100 dark:border-white/10
-          shadow-[0_24px_64px_-16px_rgba(20,37,74,0.5)]
-          ${align === 'up'
+      {open && rect && createPortal(
+        <div ref={panelRef} role="dialog" aria-label="Theme Customizer"
+          className="fixed z-[9999] w-[min(90vw,300px)] rounded-2xl overflow-hidden
+            bg-white dark:bg-[#1a2d55] border border-gray-100 dark:border-white/10
+            shadow-[0_24px_64px_-16px_rgba(20,37,74,0.5)]"
+          style={align === 'up'
             /* 'up' also means "mounted low in a narrow column" (the sidebar
                footer) — right-anchoring there can push most of the panel off
                the left edge of that ~240px rail, so it left-anchors instead. */
-            ? 'bottom-11 mb-1 left-0'
-            : 'top-11 mt-1 right-0'}`}>
+            ? { bottom: Math.max(8, window.innerHeight - rect.top + 4), left: Math.max(8, Math.min(rect.left, window.innerWidth - PANEL_W - 8)) }
+            : { top: Math.min(rect.bottom + 4, window.innerHeight - 60), left: Math.max(8, Math.min(rect.right - PANEL_W, window.innerWidth - PANEL_W - 8)) }}>
 
           <div className="flex items-center justify-between px-4 py-3"
             style={{ background: 'linear-gradient(135deg,#14254A 0%,#FC934C 100%)' }}>
@@ -142,24 +164,20 @@ export default function ThemeCustomizer({ context = 'client', tone = 'dark', ali
                 value={theme} onChange={v => { if (v !== theme) toggle() }} />
             </div>
 
-            {isClient && (
-              <>
-                <div>
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-gray-400 dark:text-white/40 mb-2">Sidebar</h3>
-                  <ToggleRow label="Enable sidebar" hint="Show a left-hand navigation panel instead of the top tab bar."
-                    checked={sidebarEnabled} onChange={setSidebarEnabled} />
-                </div>
+            <div>
+              <h3 className="text-[10px] font-bold uppercase tracking-widest text-gray-400 dark:text-white/40 mb-2">Sidebar</h3>
+              <ToggleRow label="Enable sidebar" hint="Show a left-hand navigation panel instead of the top tab bar."
+                checked={sidebarEnabled} onChange={setSidebarEnabled} />
+            </div>
 
-                <div>
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-gray-400 dark:text-white/40 mb-2">Header</h3>
-                  <ToggleRow label="Show header" hint={sidebarEnabled
-                    ? 'Hide the top bar when the sidebar is enabled.'
-                    : 'The header carries the navigation tabs, so it stays on until the sidebar is enabled.'}
-                    checked={!sidebarEnabled || headerVisible} disabled={!sidebarEnabled}
-                    onChange={setHeaderVisible} />
-                </div>
-              </>
-            )}
+            <div>
+              <h3 className="text-[10px] font-bold uppercase tracking-widest text-gray-400 dark:text-white/40 mb-2">Header</h3>
+              <ToggleRow label="Show header" hint={sidebarEnabled
+                ? 'Hide the top bar when the sidebar is enabled.'
+                : 'The header carries the navigation tabs, so it stays on until the sidebar is enabled.'}
+                checked={!sidebarEnabled || headerVisible} disabled={!sidebarEnabled}
+                onChange={setHeaderVisible} />
+            </div>
           </div>
 
           <div className="px-4 py-3 border-t border-gray-100 dark:border-white/10">
@@ -168,8 +186,9 @@ export default function ThemeCustomizer({ context = 'client', tone = 'dark', ali
               Reset to default
             </button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   )
 }

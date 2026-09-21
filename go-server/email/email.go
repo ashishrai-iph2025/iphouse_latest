@@ -350,6 +350,55 @@ func SendRegistrationApproved(to, userName, username, password, loginURL string)
 	)
 }
 
+/*
+The Client-Admin-creates-a-user pair — mirrors the asset-protection pair
+above: two recipients, two different messages, both editable from
+Configuration → Email Templates without a deploy.
+
+SendClientAdminUserCreated carries the credentials and goes to the person who
+was just added. SendClientAdminUserCreatedNotice is IP House staff's copy —
+NO password, since staff do not need it and an email is a worse place to keep
+one than it already is. Event keys client_admin_user_created and
+client_admin_user_created_admin.
+*/
+
+// SendClientAdminUserCreated sends sign-in credentials to a user a Client
+// Admin created for their own company. Event key: client_admin_user_created.
+func SendClientAdminUserCreated(to, userName, username, password, companyName, addedBy, loginURL string) error {
+	return sendTemplate("client_admin_user_created", to, map[string]string{
+		"user_name": userName, "username": username, "email": to, "password": password,
+		"company_name": companyName, "added_by": addedBy, "login_url": loginURL,
+	},
+		"Your IP House Account Has Been Created",
+		fmt.Sprintf(`<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;"><div style="background:#14254A;padding:22px 28px;"><h2 style="color:#fff;margin:0;font-size:18px;">Account Created</h2></div><div style="padding:28px;color:#14254A;"><p>Dear <strong>%s</strong>,</p><p><strong>%s</strong> has added you to the <strong>%s</strong> account on IP House.</p><table style="width:100%%;font-size:14px;border-collapse:collapse;margin:16px 0;"><tr><td style="padding:7px 0;color:#5f768b;width:130px;">Username</td><td style="padding:7px 0;font-weight:600;">%s</td></tr><tr><td style="padding:7px 0;color:#5f768b;">Password</td><td style="padding:7px 0;font-weight:600;">%s</td></tr></table><a href="%s" style="display:inline-block;margin-top:8px;padding:10px 24px;background:#FC934C;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">Sign in →</a></div></div>`,
+			userName, addedBy, companyName, username, password, loginURL),
+	)
+}
+
+// SendClientAdminUserCreatedNotice tells IP House staff that a Client Admin
+// added a new user to their company — no password included. Recipient read
+// from the template's notify_email column, same lookup-with-fallback as
+// SendRegistrationReceivedAdmin. Event key: client_admin_user_created_admin.
+func SendClientAdminUserCreatedNotice(userName, emailAddr, username, companyName, addedBy string) error {
+	const defaultAdminEmail = "ashish.rai@ip-house.com"
+
+	to := defaultAdminEmail
+	if row, err := db.QueryOne("SELECT notify_email FROM dcp_email_templates WHERE event_key = 'client_admin_user_created_admin' AND is_active = 1 LIMIT 1"); err == nil && row != nil {
+		if v, ok := row["notify_email"].(string); ok && v != "" {
+			to = v
+		}
+	}
+
+	return sendTemplate("client_admin_user_created_admin", to, map[string]string{
+		"user_name": userName, "email": emailAddr, "company_name": companyName, "added_by": addedBy,
+		"date": time.Now().UTC().Format("02 Jan 2006, 15:04"),
+	},
+		fmt.Sprintf("New user added to %s", companyName),
+		fmt.Sprintf(`<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;"><div style="background:#14254A;padding:22px 28px;"><h2 style="color:#fff;margin:0;font-size:18px;">New User Added</h2></div><div style="padding:28px;color:#14254A;"><p>A Client Admin added a new user to their account.</p><table style="width:100%%;font-size:14px;border-collapse:collapse;margin:16px 0;"><tr><td style="padding:7px 0;color:#5f768b;width:130px;">Company</td><td style="padding:7px 0;font-weight:600;">%s</td></tr><tr><td style="padding:7px 0;color:#5f768b;">New user</td><td style="padding:7px 0;font-weight:600;">%s</td></tr><tr><td style="padding:7px 0;color:#5f768b;">Email</td><td style="padding:7px 0;">%s</td></tr><tr><td style="padding:7px 0;color:#5f768b;">Username</td><td style="padding:7px 0;">%s</td></tr><tr><td style="padding:7px 0;color:#5f768b;">Added by</td><td style="padding:7px 0;">%s</td></tr></table></div></div>`,
+			companyName, userName, emailAddr, username, addedBy),
+	)
+}
+
 // urlsListHTML renders the submitted URLs as an HTML ordered list (capped at 50).
 func urlsListHTML(urls []string) string {
 	if len(urls) == 0 {

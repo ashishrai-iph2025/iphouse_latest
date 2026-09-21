@@ -4,12 +4,18 @@
 //
 // Visible only to a login holding the Client Admin grant for the company it is
 // currently signed in as (plus IP House staff, who reach it while acting on a
-// client's behalf). It lists everyone with access to THAT company and lets the
-// Client Admin switch a user's access on or off.
+// client's behalf). It lists everyone with access to THAT company, lets the
+// Client Admin switch a user's access on or off, add a brand new user for
+// their OWN company (never any other — see AddUserDrawer), and set which
+// modules any of them may open (at creation, or afterwards via the
+// Permissions action on a row).
 //
-// Everything else about a user — creating logins, credentials, sign-in method,
-// and the Client Admin grant itself — stays with IP House Admin/Super Admin.
-// The server enforces all of that independently; this page only reflects it.
+// What stays out of reach, enforced server-side and never exposed here: a
+// login's existing credentials or sign-in method, the Client Admin grant
+// itself, and anything resembling Admin/Super Admin access — a Client Admin
+// can hand out module access, not staff privileges. That boundary lives in
+// go-server/handlers/clientadmin.go, not in this component; this page only
+// reflects what the server already refuses.
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import Breadcrumb from '@/components/ui/Breadcrumb'
@@ -32,6 +38,15 @@ interface CompanyUser {
   isSelf: boolean
   created_at: string | null
   updated_at: string | null
+}
+
+// A module a Client Admin may grant — the same shape /api/admin/module-*
+// endpoints use, kept local here rather than shared since this page only
+// ever reads Id/ModuleName/pageName, never status or nav_order.
+interface ModuleRow {
+  Id: number
+  ModuleName: string
+  pageName?: string
 }
 
 interface ActivityEvent {
@@ -214,9 +229,29 @@ export default function AccountAccessPage() {
   // than applied on a single stray click.
   const [confirm, setConfirm] = useState<CompanyUser | null>(null)
 
+  // Modules a Client Admin may grant — shared by the Add User drawer (set at
+  // creation) and the per-user Permissions drawer (set afterwards). Fetched
+  // once; both drawers read this instead of each fetching their own copy.
+  const [modules, setModules] = useState<ModuleRow[]>([])
+  // Add User — a NEW login for THIS company only. There is no company field
+  // anywhere in this flow, client or server side: the server binds it to the
+  // session's own company at creation, so there is nothing here to pick.
+  const [showAdd, setShowAdd] = useState(false)
+  // Manage an EXISTING user's module permissions — set to that row to open
+  // the drawer, null to close it.
+  const [permTarget, setPermTarget] = useState<CompanyUser | null>(null)
+
   function showToast(msg: string, type: 'success' | 'error' = 'success') {
     setToast({ msg, type })
     setTimeout(() => setToast(null), 4000)
+  }
+
+  async function loadModules() {
+    try {
+      const res  = await fetch('/api/client-admin/modules', { credentials: 'include' })
+      const data = await res.json()
+      if (data.success) setModules(Array.isArray(data.modules) ? data.modules : [])
+    } catch { /* the pickers just show nothing to grant; not worth failing the page */ }
   }
 
   async function load() {
@@ -252,7 +287,7 @@ export default function AccountAccessPage() {
     finally { setLogLoading(false) }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load(); loadModules() }, [])
 
   // Load on open and on every window change.
   useEffect(() => { if (showLog) loadActivity(logDays) }, [showLog, logDays])
@@ -385,6 +420,14 @@ export default function AccountAccessPage() {
           </div>
         </div>
         <div className="flex items-center gap-2 self-start">
+          <button onClick={() => setShowAdd(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-white transition-opacity hover:opacity-90 whitespace-nowrap"
+            style={{ background: `linear-gradient(135deg, ${NAVY}, ${ORANGE})` }}>
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM19 8v6M22 11h-6" />
+            </svg>
+            Add user
+          </button>
           <button onClick={() => setShowLog(true)}
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-white transition-opacity hover:opacity-90 whitespace-nowrap"
             style={{ background: NAVY }}>
@@ -503,6 +546,9 @@ export default function AccountAccessPage() {
                           Added
                         </th>
                       )}
+                      <th className="px-5 py-2.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest text-right hidden sm:table-cell w-32">
+                        Permissions
+                      </th>
                       <th className="px-5 py-2.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest text-right w-40">Access</th>
                     </tr>
                   </thead>
@@ -552,6 +598,18 @@ export default function AccountAccessPage() {
                               {fmtDate(u.created_at)}
                             </td>
                           )}
+                          {/* Staff and the caller's own row have no permissions to
+                              manage here either — the same `locked` rule as the
+                              Access switch, for the same reasons. */}
+                          <td className="px-5 py-2.5 text-right hidden sm:table-cell">
+                            <button onClick={() => setPermTarget(u)} disabled={locked}
+                              title={locked
+                                ? (u.isSelf ? 'You cannot change your own permissions' : 'Managed by IP House')
+                                : `Manage permissions for ${fullName(u)}`}
+                              className="text-[11px] font-semibold text-[#14254A] hover:underline disabled:text-gray-300 disabled:no-underline disabled:cursor-not-allowed whitespace-nowrap">
+                              Permissions
+                            </button>
+                          </td>
                           {/* Locked rows keep the switch — greyed and disabled —
                               so the column stays one shape down the page instead
                               of alternating between a control and a label. */}
@@ -599,7 +657,9 @@ export default function AccountAccessPage() {
             )}
 
             <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/60 text-[11px] text-gray-500">
-              Need a user added, or a name, sign-in method or password changed? Contact the{' '}
+              Use <b className="text-[#14254A]">Add user</b> above to add someone new, or{' '}
+              <b className="text-[#14254A]">Permissions</b> on a row to change what they can open. Need a name,
+              sign-in method or password changed instead? Contact the{' '}
               <b className="text-[#FC934C]">IP House team</b> — only they can make those changes.
             </div>
           </div>
@@ -611,17 +671,21 @@ export default function AccountAccessPage() {
           Account-wide, not per-session: every action recorded against any login
           attached to this company — sign-ins, password resets, impersonation,
           credential reveals and the access changes made on this page, including
-          refused attempts. A modal rather than an inline panel because the feed
-          is long and would otherwise bury the access list. */}
+          refused attempts. An offcanvas drawer rather than a centered dialog —
+          the same convention as the admin account editor (SharedLoginsClient.tsx)
+          — so a feed this long reads as a panel of its own rather than a box
+          floating over the page, with the access list still visible behind it. */}
       {showLog && (
         <Portal>
-        <div className="fixed inset-0 z-[99999] flex items-start sm:items-center justify-center p-4 backdrop-blur-sm"
-          style={{ background: 'rgba(20,37,74,0.62)' }}
-          role="dialog" aria-modal="true" aria-label="Activity log"
-          onClick={() => setShowLog(false)}>
-          <div onClick={e => e.stopPropagation()}
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl flex flex-col overflow-hidden my-auto"
-            style={{ maxHeight: 'calc(100dvh - 3rem)' }}>
+        <div className="fixed inset-0 z-[99999] flex justify-end"
+          role="dialog" aria-modal="true" aria-label="Activity log">
+          {/* The scrim closes it — a click outside is what everyone tries first. */}
+          <div onClick={() => setShowLog(false)} aria-hidden
+            className="absolute inset-0 backdrop-blur-sm" style={{ background: 'rgba(20,37,74,0.55)' }} />
+
+          <div className="relative bg-white h-full flex flex-col overflow-hidden animate-drawer-in
+              w-full sm:w-[92%] md:w-[640px] lg:w-[720px]"
+            style={{ boxShadow: '-24px 0 60px rgba(2,18,46,0.22)' }}>
 
             {/* Header */}
             <div className="px-5 py-4 flex items-center gap-3 flex-shrink-0"
@@ -773,6 +837,33 @@ export default function AccountAccessPage() {
         </div>
         </Portal>
       )}
+
+      {/* ── Add user ────────────────────────────────────────────────────────
+          Company is never a field here — see the drawer's own header note
+          and go-server/handlers/clientadmin.go: the server binds a new login
+          to this session's own company at creation, so there is nothing to
+          pick and nothing to tamper with. */}
+      {showAdd && (
+        <AddUserDrawer
+          companyLabel={companyLabel}
+          modules={modules}
+          onClose={() => setShowAdd(false)}
+          onCreated={() => { setShowAdd(false); load(); showToast('User added — their credentials have been emailed to them.') }}
+        />
+      )}
+
+      {/* ── Manage permissions ──────────────────────────────────────────────
+          An EXISTING user's module access, as distinct from setting it at
+          creation time above — same underlying grants, a second door onto
+          the same room. */}
+      {permTarget && (
+        <PermissionsDrawer
+          target={permTarget}
+          modules={modules}
+          onClose={() => setPermTarget(null)}
+          onSaved={() => showToast(`Permissions updated for ${fullName(permTarget)}.`)}
+        />
+      )}
     </div>
   )
 }
@@ -823,3 +914,339 @@ const IconUsers  = () => <svg {...sv}><path strokeLinecap="round" strokeLinejoin
 const IconCheck  = () => <svg {...sv}><circle cx="12" cy="12" r="9" /><path strokeLinecap="round" strokeLinejoin="round" d="m8.5 12 2.5 2.5 4.5-5" /></svg>
 const IconPause  = () => <svg {...sv}><circle cx="12" cy="12" r="9" /><path strokeLinecap="round" d="M10 9v6M14 9v6" /></svg>
 const IconShield = () => <svg {...sv}><path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path strokeLinecap="round" strokeLinejoin="round" d="m9 12 2 2 4-4" /></svg>
+
+/* ── Module picker ──────────────────────────────────────────────────────────
+   Shared by AddUserDrawer and PermissionsDrawer — the same checkbox grid
+   either way, since both are writing to the exact same grant table, just at
+   different moments (creation vs. afterwards). */
+function ModuleCheckboxGrid({ modules, picked, onToggle }: {
+  modules: ModuleRow[]; picked: Set<number>; onToggle: (id: number) => void
+}) {
+  if (modules.length === 0) {
+    return <p className="text-xs text-gray-400">No modules are available to grant.</p>
+  }
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+      {modules.map(m => {
+        const on = picked.has(m.Id)
+        return (
+          <label key={m.Id} title={m.pageName}
+            className={`flex items-center gap-2.5 px-3 py-2 rounded-xl border cursor-pointer transition-colors ${
+              on ? 'border-[#FC934C]/40 bg-[#FC934C]/[0.07]' : 'border-gray-100 bg-gray-50 hover:bg-gray-100'}`}>
+            <input type="checkbox" checked={on} onChange={() => onToggle(m.Id)}
+              className="w-4 h-4 rounded flex-shrink-0" style={{ accentColor: ORANGE }} />
+            <span className={`text-xs truncate ${on ? 'font-semibold text-[#14254A]' : 'text-gray-600'}`}>
+              {m.ModuleName}
+            </span>
+          </label>
+        )
+      })}
+    </div>
+  )
+}
+
+/* ── Add user ────────────────────────────────────────────────────────────── */
+function AddUserDrawer({ companyLabel, modules, onClose, onCreated }: {
+  companyLabel: string
+  modules: ModuleRow[]
+  onClose: () => void
+  onCreated: () => void
+}) {
+  const [firstName, setFirstName] = useState('')
+  const [lastName,  setLastName]  = useState('')
+  const [email,     setEmail]     = useState('')
+  const [username,  setUsername]  = useState('')
+  const [password,  setPassword]  = useState('')
+  const [picked,    setPicked]    = useState<Set<number>>(new Set())
+  const [saving,    setSaving]    = useState(false)
+  const [error,     setError]     = useState('')
+
+  function toggle(id: number) {
+    setPicked(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  const want = modules.map(m => m.Id)
+  const allOn = want.length > 0 && want.every(id => picked.has(id))
+  function toggleAll() { setPicked(new Set(allOn ? [] : want)) }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    setError('')
+    if (!firstName.trim() || !email.trim() || !username.trim()) {
+      setError('First name, email and username are required.')
+      return
+    }
+    setSaving(true)
+    try {
+      const r = await fetch('/api/client-admin/users', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          firstName: firstName.trim(), lastName: lastName.trim(), email: email.trim(),
+          loginUsername: username.trim(), loginPassword: password, modules: [...picked],
+        }),
+      })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok || !d.success) { setError(d.error || `Could not create this user (HTTP ${r.status}).`); return }
+      onCreated()
+    } catch {
+      setError('Could not create this user — the request did not complete.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Portal>
+    <div className="fixed inset-0 z-[99999] flex justify-end" role="dialog" aria-modal="true" aria-label="Add user">
+      <div onClick={onClose} aria-hidden
+        className="absolute inset-0 backdrop-blur-sm" style={{ background: 'rgba(20,37,74,0.55)' }} />
+
+      <form onSubmit={submit} className="relative bg-white h-full flex flex-col overflow-hidden animate-drawer-in
+          w-full sm:w-[92%] md:w-[520px]"
+        style={{ boxShadow: '-24px 0 60px rgba(2,18,46,0.22)' }}>
+
+        {/* Header */}
+        <div className="px-5 py-4 flex items-center gap-3 flex-shrink-0"
+          style={{ background: `linear-gradient(135deg, ${NAVY}, #1e3a6e)` }}>
+          <div className="w-10 h-10 rounded-xl grid place-items-center text-white flex-shrink-0"
+            style={{ background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.18)' }}>
+            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM19 8v6M22 11h-6" />
+            </svg>
+          </div>
+          <div className="min-w-0">
+            <h2 className="font-bold text-white text-base leading-tight">Add User</h2>
+            {/* Stated, not offered as a choice — there is no company picker
+                anywhere in this form; the server binds the new login to this
+                same company regardless of anything sent to it. */}
+            <p className="text-white/70 text-xs truncate">
+              New login for <b className="text-white">{companyLabel}</b>
+            </p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close"
+            className="ml-auto text-white/60 hover:text-white text-xl leading-none flex-shrink-0">×</button>
+        </div>
+
+        {/* Body */}
+        <div className="overflow-y-auto flex-1 px-5 py-5 space-y-4">
+          {error && (
+            <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 rounded-xl px-3.5 py-2.5 text-xs">
+              <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+              {error}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">First name</label>
+              <input value={firstName} onChange={e => setFirstName(e.target.value)} required
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14254A]/20 focus:border-[#14254A]" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                Last name <span className="font-semibold normal-case tracking-normal text-gray-300">optional</span>
+              </label>
+              <input value={lastName} onChange={e => setLastName(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14254A]/20 focus:border-[#14254A]" />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Email</label>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} required
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14254A]/20 focus:border-[#14254A]" />
+            <p className="text-[11px] text-gray-400 mt-1">Their sign-in credentials are sent here.</p>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Username</label>
+            <input value={username} onChange={e => setUsername(e.target.value)} required autoComplete="off"
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#14254A]/20 focus:border-[#14254A]" />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+              Password <span className="font-semibold normal-case tracking-normal text-gray-300">optional</span>
+            </label>
+            <input type="text" value={password} onChange={e => setPassword(e.target.value)} autoComplete="off"
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#14254A]/20 focus:border-[#14254A]" />
+            <p className="text-[11px] text-gray-400 mt-1">Leave blank to generate a strong one automatically.</p>
+          </div>
+
+          <div className="pt-2 border-t border-gray-100">
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                Module access
+              </label>
+              {modules.length > 0 && (
+                <button type="button" onClick={toggleAll}
+                  className="text-[10px] font-bold uppercase tracking-wider text-gray-400 hover:text-[#14254A] transition-colors">
+                  {allOn ? 'Clear all' : 'Select all'}
+                </button>
+              )}
+            </div>
+            <ModuleCheckboxGrid modules={modules} picked={picked} onToggle={toggle} />
+            <p className="text-[10px] text-gray-400 mt-2">
+              {picked.size} module{picked.size === 1 ? '' : 's'} selected — changeable any time from Permissions.
+            </p>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-4 border-t border-gray-100 bg-gray-50/60 flex-shrink-0 flex items-center justify-end gap-2">
+          <button type="button" onClick={onClose}
+            className="px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-gray-600 text-sm font-semibold hover:bg-gray-50 transition-colors">
+            Cancel
+          </button>
+          <button type="submit" disabled={saving}
+            className="px-5 py-2.5 rounded-xl text-white text-sm font-bold transition-opacity hover:opacity-90 disabled:opacity-60"
+            style={{ background: NAVY }}>
+            {saving ? 'Creating…' : 'Create user'}
+          </button>
+        </div>
+      </form>
+    </div>
+    </Portal>
+  )
+}
+
+/* ── Manage permissions (existing user) ────────────────────────────────────── */
+function PermissionsDrawer({ target, modules, onClose, onSaved }: {
+  target: CompanyUser
+  modules: ModuleRow[]
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [saved,   setSaved]   = useState<Set<number>>(new Set())
+  const [picked,  setPicked]  = useState<Set<number>>(new Set())
+  const [loading, setLoading] = useState(true)
+  const [saving,  setSaving]  = useState(false)
+  const [error,   setError]   = useState('')
+  const [note,    setNote]    = useState('')
+
+  useEffect(() => {
+    let live = true
+    setLoading(true); setError(''); setNote('')
+    fetch(`/api/client-admin/user-modules?loginId=${target.loginId}`, { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => {
+        if (!live) return
+        if (!d?.success) { setError(d?.error || 'The current permissions could not be read.'); return }
+        const allowed = new Set<number>((d.allowed ?? []).map(Number))
+        setSaved(allowed); setPicked(new Set(allowed))
+      })
+      .catch(() => { if (live) setError('The current permissions could not be read.') })
+      .finally(() => { if (live) setLoading(false) })
+    return () => { live = false }
+  }, [target.loginId])
+
+  function toggle(id: number) {
+    setNote('')
+    setPicked(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  const want = modules.map(m => m.Id)
+  const allOn = want.length > 0 && want.every(id => picked.has(id))
+  function toggleAll() { setNote(''); setPicked(new Set(allOn ? [] : want)) }
+
+  const dirty = picked.size !== saved.size || [...picked].some(id => !saved.has(id))
+
+  async function apply() {
+    setSaving(true); setNote(''); setError('')
+    try {
+      const r = await fetch('/api/client-admin/user-modules', {
+        method: 'PUT', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ loginId: target.loginId, modules: [...picked] }),
+      })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok || !d.success) { setNote(d.error || `Permissions could not be saved (HTTP ${r.status}).`); return }
+      setSaved(new Set(picked))
+      onSaved()
+    } catch {
+      setNote('Permissions could not be saved — the request did not complete.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Portal>
+    <div className="fixed inset-0 z-[99999] flex justify-end" role="dialog" aria-modal="true"
+      aria-label={`Permissions for ${fullName(target)}`}>
+      <div onClick={onClose} aria-hidden
+        className="absolute inset-0 backdrop-blur-sm" style={{ background: 'rgba(20,37,74,0.55)' }} />
+
+      <div className="relative bg-white h-full flex flex-col overflow-hidden animate-drawer-in
+          w-full sm:w-[92%] md:w-[480px]"
+        style={{ boxShadow: '-24px 0 60px rgba(2,18,46,0.22)' }}>
+
+        {/* Header */}
+        <div className="px-5 py-4 flex items-center gap-3 flex-shrink-0"
+          style={{ background: `linear-gradient(135deg, ${NAVY}, #1e3a6e)` }}>
+          <div className="w-10 h-10 rounded-xl grid place-items-center font-bold text-xs text-white flex-shrink-0"
+            style={{ background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.18)' }}>
+            {initials(fullName(target))}
+          </div>
+          <div className="min-w-0">
+            <h2 className="font-bold text-white text-base leading-tight truncate">{fullName(target)}</h2>
+            <p className="text-white/70 text-xs truncate">{target.login_username}</p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close"
+            className="ml-auto text-white/60 hover:text-white text-xl leading-none flex-shrink-0">×</button>
+        </div>
+
+        {/* Body */}
+        <div className="overflow-y-auto flex-1 px-5 py-5 space-y-3">
+          {error ? (
+            <p className="text-xs text-amber-700 leading-relaxed">{error}</p>
+          ) : loading ? (
+            <p className="text-xs text-gray-400">Reading permissions…</p>
+          ) : (
+            <>
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Module access</p>
+                {modules.length > 0 && (
+                  <button type="button" onClick={toggleAll}
+                    className="text-[10px] font-bold uppercase tracking-wider text-gray-400 hover:text-[#14254A] transition-colors">
+                    {allOn ? 'Clear all' : 'Select all'}
+                  </button>
+                )}
+              </div>
+              <ModuleCheckboxGrid modules={modules} picked={picked} onToggle={toggle} />
+              <p className="text-[10px] text-gray-400">
+                {picked.size} module{picked.size === 1 ? '' : 's'} selected
+              </p>
+              {note && <p className="text-[11px] text-gray-500 leading-snug">{note}</p>}
+            </>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-4 border-t border-gray-100 bg-gray-50/60 flex-shrink-0 flex items-center justify-end gap-2">
+          <button type="button" onClick={onClose}
+            className="px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-gray-600 text-sm font-semibold hover:bg-gray-50 transition-colors">
+            Close
+          </button>
+          <button type="button" onClick={apply} disabled={saving || loading || !dirty}
+            className="px-5 py-2.5 rounded-xl text-white text-sm font-bold transition-opacity hover:opacity-90 disabled:opacity-40"
+            style={{ background: NAVY }}>
+            {saving ? 'Saving…' : dirty ? 'Save changes' : 'Saved'}
+          </button>
+        </div>
+      </div>
+    </div>
+    </Portal>
+  )
+}

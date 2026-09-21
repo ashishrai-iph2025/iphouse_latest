@@ -28,7 +28,16 @@ function personName(r: LoginRow): string {
   return n || r.login_username
 }
 
-export default function ClientAccessSearch() {
+export default function ClientAccessSearch({ compact = false, tone = 'dark' }: {
+  /** Always the icon-only trigger, regardless of viewport width — for a
+      narrow context (the admin sidebar's own footer, once its header is
+      turned off) where the wide `md:` pill would overflow. The pill's
+      breakpoint is keyed on VIEWPORT width, not this component's own
+      container, so it can't tell it's sitting in a narrow column on its
+      own. */
+  compact?: boolean
+  tone?: 'light' | 'dark'
+}) {
   const [open,    setOpen]    = useState(false)
   const [q,       setQ]       = useState('')
   const [results, setResults] = useState<LoginRow[]>([])
@@ -97,15 +106,16 @@ export default function ClientAccessSearch() {
       <button onClick={() => setOpen(true)}
         aria-label="Search a client to access"
         title="Search a client to access"
-        className="md:hidden p-2 rounded-lg text-gray-500 dark:text-white/60 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors">
+        className={`${compact ? '' : 'md:hidden'} p-2 rounded-lg transition-colors ${
+          tone === 'light' ? 'text-white hover:bg-white/10' : 'text-gray-500 dark:text-white/60 hover:bg-gray-100 dark:hover:bg-white/10'}`}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3" strokeLinecap="round"/></svg>
       </button>
 
       <button onClick={() => setOpen(true)}
         title="Search a client to access their portal"
-        className="hidden md:flex items-center gap-2 h-9 w-[200px] lg:w-[248px] px-3 rounded-lg border text-sm
+        className={`${compact ? 'hidden' : 'hidden md:flex'} items-center gap-2 h-9 w-[200px] lg:w-[248px] px-3 rounded-lg border text-sm
           bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 text-gray-400
-          hover:border-[#FC934C]/50 hover:text-gray-500 dark:hover:text-white/70 transition-colors">
+          hover:border-[#FC934C]/50 hover:text-gray-500 dark:hover:text-white/70 transition-colors`}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3" strokeLinecap="round"/></svg>
         {/*
           min-w-0 and truncate together, and the label kept SHORT.

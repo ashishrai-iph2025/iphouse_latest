@@ -14,10 +14,19 @@
 // their bell never hides an event from anyone else.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useNavigate } from 'react-router-dom'
 import ReportLoader from '@/components/shared/ReportLoader'
 
 const POLL_MS = 60_000
+/** Worst-case panel width used only for clamping the portal's fixed position —
+    the CSS itself still shrinks to `94vw` below this on a narrow phone. See
+    ThemeCustomizer.tsx / CountryPicker.tsx for why this is portalled rather
+    than an in-flow `absolute` box: z-index only ranks siblings within the
+    same stacking context, so a page's own sticky/z-indexed content elsewhere
+    in the DOM (e.g. app/admin/configuration's category-tabs row) could paint
+    through a merely-higher z-index here. */
+const PANEL_W = 400
 
 interface AdminNotification {
   id: number
@@ -138,7 +147,9 @@ export default function NotificationBell({ variant = 'admin', tone, align = 'dow
   const [loading, setLoading] = useState(true)
   const [scope,   setScope]   = useState<Scope>('self')
   const [scopeLabel, setScopeLabel] = useState('')
-  const ref = useRef<HTMLDivElement>(null)
+  const [rect, setRect] = useState<DOMRect | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -168,8 +179,11 @@ export default function NotificationBell({ variant = 'admin', tone, align = 'dow
   // Close on outside click / Escape.
   useEffect(() => {
     if (!open) return
+    setRect(btnRef.current?.getBoundingClientRect() ?? null)
     const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (btnRef.current?.contains(t) || panelRef.current?.contains(t)) return
+      setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
     document.addEventListener('mousedown', onDoc)
@@ -220,8 +234,9 @@ export default function NotificationBell({ variant = 'admin', tone, align = 'dow
   const badge = unread > 99 ? '99+' : String(unread)
 
   return (
-    <div ref={ref} className="relative">
+    <>
       <button
+        ref={btnRef}
         onClick={() => setOpen(o => !o)}
         aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'}
         aria-expanded={open}
@@ -248,40 +263,53 @@ export default function NotificationBell({ variant = 'admin', tone, align = 'dow
         )}
       </button>
 
-      {/* The panel floats over both the white navbar and the #eef2f7 page body,
-          so it carries its own navy header, a tinted surface and a hard edge —
-          a plain white card blends into whichever of the two it overlaps. */}
-      {open && (
-        <div className={`absolute z-50 w-[min(94vw,400px)] rounded-2xl overflow-hidden
-                        bg-[#e8edf5] dark:bg-[#14213a]
-                        border border-[#14254A]/20 dark:border-white/10
-                        shadow-[0_24px_64px_-16px_rgba(20,37,74,0.5)]
-                        ${align === 'up' ? 'bottom-11 left-0' : 'top-11 right-0'}`}>
+      {/* Portalled to document.body and positioned `fixed` from the bell's own
+          getBoundingClientRect — see ThemeCustomizer.tsx / CountryPicker.tsx
+          for why: an in-flow `absolute` box only ranks (by z-index) against
+          siblings in its OWN stacking context, which does not reliably beat
+          a page's own sticky/z-indexed content mounted elsewhere in the DOM.
+
+          The panel floats over both the white navbar and the #eef2f7 page
+          body, so it carries its own navy header, a tinted surface and a
+          hard edge — a plain white card blends into whichever of the two it
+          overlaps. */}
+      {open && rect && createPortal(
+        <div ref={panelRef} role="dialog" aria-label="Notifications"
+          className="fixed z-[9999] w-[min(94vw,400px)] rounded-2xl overflow-hidden
+                        bg-white dark:bg-[#14213a]
+                        border border-gray-200 dark:border-white/10
+                        shadow-[0_24px_64px_-16px_rgba(20,37,74,0.45)]"
+          style={align === 'up'
+            /* 'up' also means "mounted low in a narrow column" (the sidebar
+               footer) — right-anchoring there can push most of the panel off
+               the left edge of that ~240px rail, so it left-anchors instead. */
+            ? { bottom: Math.max(8, window.innerHeight - rect.top + 4), left: Math.max(8, Math.min(rect.left, window.innerWidth - PANEL_W - 8)) }
+            : { top: Math.min(rect.bottom + 4, window.innerHeight - 60), left: Math.max(8, Math.min(rect.right - PANEL_W, window.innerWidth - PANEL_W - 8)) }}>
           {/* Header */}
-          <div className="px-4 py-3 flex items-center justify-between gap-2 border-b border-black/10 dark:border-white/10"
+          <div className="px-4 py-3.5 flex items-center justify-between gap-2 border-b border-black/10 dark:border-white/10"
             style={{ background: 'linear-gradient(135deg,#14254A 0%,#1E3766 100%)' }}>
             <div>
-              <h3 className="text-sm font-bold text-white">Notifications</h3>
-              <p className="text-[11px] text-white/60">
+              <h3 className="text-sm font-bold text-white tracking-tight">Notifications</h3>
+              <p className="text-[11px] text-white/55 mt-0.5">
                 {unread > 0 ? `${unread} unread` : 'You are all caught up'}
-                {scopeLabel ? <> · <span className="font-semibold text-white/80">{scopeLabel}</span></> : null}
+                {scopeLabel ? <> · <span className="font-semibold text-white/75">{scopeLabel}</span></> : null}
               </p>
             </div>
             {unread > 0 && (
               <button onClick={markAllRead}
-                className="text-[11px] font-bold text-[#FFC82B] hover:underline whitespace-nowrap">
+                className="text-[11px] font-semibold text-white/85 hover:text-white bg-white/10 hover:bg-white/15 rounded-lg px-2.5 py-1.5 whitespace-nowrap transition-colors">
                 Mark all read
               </button>
             )}
           </div>
 
           {/* List */}
-          <div className="max-h-[380px] overflow-y-auto bg-[#f6f8fc] dark:bg-transparent">
+          <div className="max-h-[380px] overflow-y-auto bg-white dark:bg-transparent">
             {loading && items.length === 0 ? (
               <ReportLoader size={120} label={null} className="py-10" />
             ) : items.length === 0 ? (
               <div className="py-12 text-center px-6">
-                <div className="w-11 h-11 mx-auto mb-3 rounded-2xl grid place-items-center bg-[#14254A]/[0.07] dark:bg-white/5 text-[#14254A]/30 dark:text-white/25">
+                <div className="w-11 h-11 mx-auto mb-3 rounded-2xl grid place-items-center bg-[#14254A]/[0.06] dark:bg-white/5 text-[#14254A]/30 dark:text-white/25">
                   <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
                   </svg>
@@ -300,9 +328,13 @@ export default function NotificationBell({ variant = 'admin', tone, align = 'dow
                 const isRead = !!Number(n.is_read)
                 return (
                   <button key={n.id} onClick={() => openItem(n)}
-                    className={`w-full text-left flex gap-3 px-4 py-3 border-b border-[#14254A]/10 dark:border-white/5 last:border-0 transition-colors hover:bg-white dark:hover:bg-white/5 ${
-                      isRead ? '' : 'bg-[#FC934C]/[0.07]'}`}>
-                    <span className={`w-8 h-8 rounded-xl grid place-items-center flex-shrink-0 ${t.bg} ${t.fg}`}>
+                    className={`relative w-full text-left flex gap-3 pl-[13px] pr-4 py-3 border-b border-gray-100 dark:border-white/5 last:border-0 transition-colors hover:bg-gray-50 dark:hover:bg-white/5 ${
+                      isRead ? '' : 'bg-[#FC934C]/[0.04] dark:bg-white/[0.02]'}`}>
+                    {/* Unread signalled by a quiet accent bar, not a full-row
+                        colour wash — a wash across every unread row reads as
+                        an alert state rather than a status. */}
+                    {!isRead && <span className="absolute left-0 top-0 bottom-0 w-[3px] bg-[#FC934C]" />}
+                    <span className={`w-9 h-9 rounded-xl grid place-items-center flex-shrink-0 ${t.bg} ${t.fg}`}>
                       {t.icon}
                     </span>
                     <span className="min-w-0 flex-1">
@@ -313,18 +345,17 @@ export default function NotificationBell({ variant = 'admin', tone, align = 'dow
                         <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-md whitespace-nowrap ${t.chip}`}>
                           {t.label}
                         </span>
-                        {!isRead && <span className="w-1.5 h-1.5 rounded-full bg-[#FC934C] flex-shrink-0" />}
                         <span className="ml-auto text-[10px] text-gray-400 dark:text-white/35 whitespace-nowrap flex-shrink-0"
                           title={exactStamp(n.created_at)}>
                           {relative(n.created_at)}
                         </span>
                       </span>
-                      <span className={`block text-xs break-words ${isRead
+                      <span className={`block text-[13px] leading-snug break-words ${isRead
                         ? 'font-semibold text-gray-600 dark:text-white/70'
                         : 'font-bold text-[#14254A] dark:text-white'}`}>
                         {n.title}
                       </span>
-                      <span className="block text-[11px] text-gray-500 dark:text-white/50 mt-0.5 break-words">
+                      <span className="block text-[11px] text-gray-500 dark:text-white/50 mt-0.5 leading-snug line-clamp-2">
                         {n.message}
                       </span>
                       {/* Own-activity feeds already know the client and the
@@ -346,8 +377,8 @@ export default function NotificationBell({ variant = 'admin', tone, align = 'dow
 
           {/* Always offer the full list — it is the way to reach anything
               older than the 30 most recent shown here. */}
-          <div className="px-4 py-2.5 border-t border-[#14254A]/15 dark:border-white/10 bg-[#e2e8f2] dark:bg-white/[0.03] flex items-center justify-between gap-2">
-            <p className="text-[10px] text-[#14254A]/50 dark:text-white/35">
+          <div className="px-4 py-2.5 border-t border-gray-100 dark:border-white/10 bg-gray-50 dark:bg-white/[0.03] flex items-center justify-between gap-2">
+            <p className="text-[10px] text-gray-400 dark:text-white/35">
               {items.length > 0 ? `Showing the ${items.length} most recent` : 'Nothing recent'}
             </p>
             <Link to={basePath} onClick={() => setOpen(false)}
@@ -355,8 +386,9 @@ export default function NotificationBell({ variant = 'admin', tone, align = 'dow
               View all notifications →
             </Link>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   )
 }

@@ -36,7 +36,33 @@ else — see IdleTimeoutGuard.tsx.
 Which means a caller polling this endpoint in a loop keeps its own session alive.
 That is inherent to any keepalive and is bounded by the same thing that bounds
 the cookie: whoever holds it was already authenticated.
+
+WHY THE WINDOW IS PER-USER AND NOT THE PORTAL DEFAULT
+
+A client can be given its own idle window on its Edit Client page (user_idle_settings,
+keyed by the same userId as these claims). That row used to be enforced only in the
+browser, as a ceiling the JWT could never actually reach — deadlineAt() in
+IdleTimeoutGuard.tsx takes Math.min(serverExpiry, ...), and serverExpiry was always
+just SessionIdleSeconds out, so a client configured for 12 hours was still logged out
+at the portal default of 30 minutes the moment the real cookie expired. effectiveIdleSeconds
+below is what the slide actually re-signs for, so a client's own window can lengthen the
+session and not just shorten it.
 */
+func effectiveIdleSeconds(userID int64) int {
+	// Nothing to look up without a database, and db.QueryOne would panic on the
+	// nil pool rather than return an error — see securitypolicy.go's own guard.
+	if !db.Ready() {
+		return config.C.SessionIdleSeconds
+	}
+	row, _ := db.QueryOne("SELECT idle_minutes, is_active FROM user_idle_settings WHERE user_id = ? LIMIT 1", userID)
+	if row != nil && intFromAny(row["is_active"]) == 1 {
+		if mins := intFromAny(row["idle_minutes"]); mins > 0 {
+			return int(mins) * 60
+		}
+	}
+	return config.C.SessionIdleSeconds
+}
+
 func Keepalive(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	if claims == nil {
@@ -44,11 +70,15 @@ func Keepalive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	/* Re-sign from the claims we already verified. SignToken replaces
-	   RegisteredClaims wholesale with a fresh window, which is exactly the slide
-	   — and it carries the identity across untouched, impersonation included, so
-	   a renewed session is the same session and not a quietly widened one. */
-	tok, err := ipauth.SignToken(*claims)
+	idleSeconds := effectiveIdleSeconds(claims.UserID)
+	ttl := time.Duration(idleSeconds) * time.Second
+
+	/* Re-sign from the claims we already verified, for THIS user's window.
+	   SignTokenWithTTL replaces RegisteredClaims wholesale with a fresh window,
+	   which is exactly the slide — and it carries the identity across untouched,
+	   impersonation included, so a renewed session is the same session and not
+	   a quietly widened one. */
+	tok, err := ipauth.SignTokenWithTTL(*claims, ttl)
 	if err != nil {
 		/* The session in hand is still valid; only the extension failed. Report
 		   the expiry it ALREADY has rather than a new one, so the browser counts
@@ -61,19 +91,19 @@ func Keepalive(w http.ResponseWriter, r *http.Request) {
 		OK(w, map[string]any{"alive": true, "extended": false, "expiryMs": expiry})
 		return
 	}
-	SetTokenCookie(w, tok)
+	SetTokenCookieWithMaxAge(w, tok, idleSeconds)
 
-	/* Computed the same way SignToken computes it, from the same config value.
+	/* Computed the same way SignTokenWithTTL computes it, from the same ttl.
 	   Not read back off the token: parsing what we just signed to learn a number
 	   we already had is a round trip that can only agree. */
-	expiryMs := time.Now().Add(time.Duration(config.C.SessionIdleSeconds) * time.Second).UnixMilli()
+	expiryMs := time.Now().Add(ttl).UnixMilli()
 	OK(w, map[string]any{
 		"alive":    true,
 		"extended": true,
 		"expiryMs": expiryMs,
 		/* The window itself, so the browser can size its own timers without a
 		   second call to /api/user/idle-timeout on every renewal. */
-		"idleSeconds": config.C.SessionIdleSeconds,
+		"idleSeconds": idleSeconds,
 	})
 }
 

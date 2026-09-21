@@ -378,6 +378,30 @@ func Migrate() {
 		"{{user_name}},{{name}},{{asset_name}},{{action}},{{request_action}},{{note}},{{date}}",
 		12)
 
+	/* The Client-Admin-creates-a-user pair. Seeded for the same reason as the
+	   asset-protection pair above — without this an existing deployment never
+	   sees either event in the Email Templates screen and cannot edit its
+	   wording. client_admin_user_created_admin gets its own INSERT rather than
+	   going through seedEmailEventType, which hard-codes has_notify_email = 0
+	   for every event it seeds — this one needs it set to 1, the same way
+	   registration_received_admin has it, so the notify-email field this
+	   deployment's own DB already carries for that flow is offered on this
+	   one too rather than being permanently stuck on the Go fallback address. */
+	seedEmailEventType("client_admin_user_created", "New User Added (welcome email)",
+		"Sent to a user a Client Admin creates for their own company, with their sign-in credentials.",
+		"{{user_name}},{{username}},{{email}},{{password}},{{company_name}},{{added_by}},{{login_url}}",
+		13)
+	if _, _, err := Exec(
+		"INSERT IGNORE INTO dcp_email_event_types (`key`, label, description, has_notify_email, variables, sort_order, is_active) VALUES (?, ?, ?, 1, ?, ?, 1)",
+		"client_admin_user_created_admin", "New User Added (staff notice)",
+		"Sent to IP House staff whenever a Client Admin adds a new user to their company.",
+		"{{user_name}},{{email}},{{company_name}},{{added_by}},{{date}}", 14,
+	); err != nil {
+		log.Printf("[db] seed email event type %q: %v", "client_admin_user_created_admin", err)
+	} else {
+		log.Printf("[db] seed: email event type %q present", "client_admin_user_created_admin")
+	}
+
 	// Admin-configurable dropdown sub-items for a nav module. Each row is a child
 	// link under a parent module (keyed by the parent's pageName). The href must
 	// be an existing client route — validated server-side on write.

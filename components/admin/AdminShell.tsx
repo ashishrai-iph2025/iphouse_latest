@@ -1,15 +1,12 @@
-﻿'use client'
+'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { usePathname } from '@/lib/router'
 import { signOut, useSession } from '@/lib/auth-client'
 import { ThemeProvider } from '@/lib/ThemeContext'
-import { ThemeCustomizerProvider } from '@/lib/ThemeCustomizerContext'
-import ThemeCustomizer from '@/components/ui/ThemeCustomizer'
-import ClientAccessSearch from './ClientAccessSearch'
-import NotificationBell from '@/components/shared/NotificationBell'
-import FullscreenToggle from '@/components/shared/FullscreenToggle'
+import { ThemeCustomizerProvider, useCustomizer } from '@/lib/ThemeCustomizerContext'
+import AdminHeaderControls from './AdminHeaderControls'
 import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner'
 import IdleTimeoutGuard from '@/components/shared/IdleTimeoutGuard'
 
@@ -69,7 +66,7 @@ const navGroups: NavGroup[] = [
 export default function AdminShell({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider>
-    <ThemeCustomizerProvider>
+    <ThemeCustomizerProvider context="admin">
       <AdminShellInner>{children}</AdminShellInner>
     </ThemeCustomizerProvider>
     </ThemeProvider>
@@ -81,13 +78,24 @@ function AdminShellInner({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession()
   const user = session?.user as any
   const isSuperAdmin = user?.role === 2
-  const [sidebarOpen,     setSidebarOpen]     = useState(false)
+  const [sidebarOpen,      setSidebarOpen]      = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [hovered,          setHovered]          = useState(false)
+  // The horizontal layout's own mobile menu — a separate flag from
+  // `sidebarOpen` above since the two layouts never show at once.
+  const [mobileMenuOpen,   setMobileMenuOpen]   = useState(false)
+
+  const { sidebarEnabled, headerVisible } = useCustomizer()
+  /* headerVisible only means anything with the sidebar on — with it off, the
+     nav tabs live in the header itself, so hiding it would take the only way
+     to navigate with it. Same rule as ClientShell.tsx. */
+  const showHeader = !sidebarEnabled || headerVisible
 
   // When collapsed, hovering the rail temporarily expands it (as an overlay, so
   // page content never shifts); it collapses again when the pointer leaves.
   const effectiveCollapsed = sidebarCollapsed && !hovered
+
+  useEffect(() => { setSidebarOpen(false); setMobileMenuOpen(false) }, [pathname])
 
   /* Two filters, in this order: drop the groups this role may not see, then the
      individual items marked hideInNav — and drop any group left with nothing in
@@ -98,7 +106,14 @@ function AdminShellInner({ children }: { children: React.ReactNode }) {
     .map(g => ({ ...g, items: g.items.filter(i => !i.hideInNav) }))
     .filter(g => g.items.length > 0)
 
-  return (
+  // The same items, flattened — the horizontal layout's own nav row has no
+  // concept of groups, the same way ClientNavbar's horizontal tabs don't.
+  const flatItems = visibleGroups.flatMap(g => g.items)
+
+  const currentLabel = navGroups.flatMap(g => g.items)
+    .find(i => pathname === i.href || pathname.startsWith(i.href + '/'))?.label ?? 'Admin'
+
+  if (sidebarEnabled) return (
     <div className="flex h-screen overflow-hidden bg-[#eef2f7] dark:bg-[#0f1f3d]">
 
       {/* ── Mobile overlay ── */}
@@ -182,7 +197,22 @@ function AdminShellInner({ children }: { children: React.ReactNode }) {
             ))}
           </nav>
 
-          {/* User + sign-out */}
+          {/* With the top header off, this is the only place left to reach
+              client-access search, notifications, fullscreen and theme — see
+              AdminHeaderControls.tsx. Held back while collapsed since the
+              icon row needs the full width to read as anything but broken;
+              the identity block below stays unconditional either way. */}
+          {!showHeader && !effectiveCollapsed && (
+            <div className="flex-shrink-0 border-t border-white/10 px-2 py-3">
+              <AdminHeaderControls layout="column" tone="light" showIdentity={false} />
+            </div>
+          )}
+
+          {/* User + sign-out — always here regardless of the header, the
+              same way SideNav.tsx's own identity block works for the client
+              portal. Hand-rolled rather than AdminHeaderControls, which has
+              no collapsed-width variant of its own to give this the same
+              icon-only treatment at w-14. */}
           <div className="flex-shrink-0 border-t border-white/10 px-2 py-3 space-y-1">
             <div className={`flex items-center gap-2.5 px-3 py-2 ${effectiveCollapsed ? 'justify-center' : ''}`}>
               <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#FFC82B] to-[#FC934C] flex items-center justify-center font-bold text-[#14254A] text-xs flex-shrink-0">
@@ -214,6 +244,7 @@ function AdminShellInner({ children }: { children: React.ReactNode }) {
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
 
         {/* Top bar */}
+        {showHeader && (
         <header className="flex-shrink-0 bg-white dark:bg-[#14213a] border-b border-gray-200 dark:border-white/10 h-14 flex items-center px-5 gap-3 z-20">
           <button
             onClick={() => setSidebarOpen(true)}
@@ -228,33 +259,15 @@ function AdminShellInner({ children }: { children: React.ReactNode }) {
             <span className="text-gray-400 dark:text-white/40">Admin</span>
             <span className="text-gray-300 dark:text-white/25">/</span>
             <span className="font-semibold text-[#14254A] dark:text-white truncate">
-              {navGroups.flatMap(g => g.items).find(i => pathname === i.href || pathname.startsWith(i.href + '/'))?.label ?? 'Admin'}
+              {currentLabel}
             </span>
           </div>
 
           <div className="ml-auto flex items-center gap-3.5">
-            {/* Client access search — real-time client lookup + view-as-client */}
-            <ClientAccessSearch />
-            {/* Portal activity — staff see every client's events */}
-            <NotificationBell variant="admin" />
-
-            {/* The same full-screen control as the client bar: staff read these
-                reports too, off the same wide grid. */}
-            <FullscreenToggle />
-            {/* Small anchored popover, not the client shell's offcanvas — see
-                ThemeCustomizer.tsx. Only colour mode does anything here;
-                sidebar/header are client-only, so its 'admin' context hides
-                them. Colour mode lives in there now, so the separate Dark /
-                Light button that used to sit next to it — the same setting
-                twice — is gone. */}
-            <ThemeCustomizer context="admin" />
-            {/* User info — plain text, no box */}
-            <div className="hidden sm:flex flex-col items-end leading-tight">
-              <span className="text-sm font-bold text-[#14254A] dark:text-white truncate max-w-[160px]">{user?.name || (isSuperAdmin ? 'Super Admin' : 'Admin')}</span>
-              <span className="text-[11px] font-medium text-gray-400 dark:text-white/50">{isSuperAdmin ? 'Super Admin' : 'Admin'}</span>
-            </div>
+            <AdminHeaderControls layout="row" tone="dark" />
           </div>
         </header>
+        )}
 
         {/* Above the scroll area, not inside it: a warning that scrolls away
             with the page is a warning most people never see. Renders nothing
@@ -271,6 +284,91 @@ function AdminShellInner({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
+    </div>
+  )
+
+  /*
+  Horizontal layout.
+
+  No sidebar at all — the logo, the icon cluster and the nav tabs all live in
+  this one header, the same split ClientNavbar.tsx uses for the client
+  portal (row 1: logo + controls, row 2: the tabs). headerVisible has no
+  effect here — with no sidebar, the header IS the only way to navigate, so
+  showHeader is always true the moment sidebarEnabled is false (see its own
+  definition above).
+  */
+  return (
+    <div className="flex flex-col h-screen overflow-hidden bg-[#eef2f7] dark:bg-[#0f1f3d]">
+      <header className="flex-shrink-0 bg-white dark:bg-[#14213a] border-b border-gray-200 dark:border-white/10 z-20">
+        <div className="h-14 flex items-center px-5 gap-3">
+          <Link to="/admin/home" className="flex items-center flex-shrink-0">
+            <img src="/newlogo.png" alt="IP House" width={120} height={28} className="h-7 w-auto dark:brightness-0 dark:invert" />
+          </Link>
+
+          <div className="ml-auto flex items-center gap-2.5">
+            <AdminHeaderControls layout="row" tone="dark" />
+            {/* Mobile hamburger for the nav row below */}
+            <button onClick={() => setMobileMenuOpen(o => !o)}
+              className="md:hidden p-2 rounded-lg text-gray-500 dark:text-white/60 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors">
+              {mobileMenuOpen ? (
+                <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              ) : (
+                <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" d="M4 6h16M4 12h16M4 18h16"/>
+                </svg>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Row 2: nav tabs, desktop. Flattened — no group headings, the same
+            way the client portal's own horizontal tabs carry no category
+            labels either. */}
+        <div className="hidden md:block border-t border-gray-100 dark:border-white/10 overflow-x-auto">
+          <nav className="flex items-center px-5">
+            {flatItems.map(item => {
+              const active = pathname === item.href || pathname.startsWith(item.href + '/')
+              return (
+                <Link key={item.href} to={item.href}
+                  className={`flex items-center gap-1.5 px-4 py-3.5 text-sm font-semibold whitespace-nowrap transition-all ${
+                    active
+                      ? 'text-[#FC934C] dark:text-[#FC934C]'
+                      : 'text-gray-500 dark:text-white/60 hover:text-[#FC934C] dark:hover:text-[#FC934C]'
+                  }`}>
+                  <span className="text-base leading-none">{item.icon}</span>
+                  {item.label}
+                </Link>
+              )
+            })}
+          </nav>
+        </div>
+
+        {/* Mobile nav menu */}
+        {mobileMenuOpen && (
+          <div className="md:hidden border-t border-gray-100 dark:border-white/10 px-4 py-3 space-y-0.5 max-h-[calc(100vh-120px)] overflow-y-auto">
+            {flatItems.map(item => {
+              const active = pathname === item.href || pathname.startsWith(item.href + '/')
+              return (
+                <Link key={item.href} to={item.href}
+                  className={`flex items-center gap-2 px-3 py-2.5 text-sm font-medium rounded-lg transition-colors ${
+                    active ? 'text-[#14254A] bg-[#14254A]/8 font-semibold' : 'text-gray-500 hover:text-[#14254A] hover:bg-gray-50'
+                  }`}>
+                  <span>{item.icon}</span>{item.label}
+                </Link>
+              )
+            })}
+          </div>
+        )}
+      </header>
+
+      <PasswordExpiryBanner />
+      <IdleTimeoutGuard />
+
+      <main className="flex-1 overflow-y-auto bg-[#eef2f7] dark:bg-[#0f1f3d]">
+        {children}
+      </main>
     </div>
   )
 }

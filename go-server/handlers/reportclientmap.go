@@ -493,7 +493,22 @@ func ReportsScope(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
 	ensureReportsModule()
 
-	if !mayOpenReports(claims) {
+	/* "" for the original Reports page, scopeVOD for VOD Reports — the same
+	   parameter ReportsSections reads, and read here for the same reason.
+
+	   Gating both pages on the unscoped wrapper asks for the "Reports" module
+	   whichever page is open, so a login granted VOD Reports and not Reports is
+	   told the Reports module is not enabled — on the VOD page, which is
+	   precisely the page it DOES hold the grant for. The two are deliberately
+	   independent grants (see mayOpenReport), so the question has to name which
+	   one it is asking about.
+
+	   Worth being exact about because this endpoint is the FIRST thing the
+	   client page asks, before the sections or any figure: when it says no, the
+	   whole page is that one sentence. */
+	scope := r.URL.Query().Get("scope")
+
+	if !mayOpenReport(claims, scope) {
 		OK(w, map[string]any{
 			"success": true, "allowed": false,
 			"reason": "The Reports module is not enabled for this account.",

@@ -129,7 +129,7 @@ function Shell({ children }: { children: React.ReactNode }) {
 export default function ClientShell({ children }: Props) {
   return (
     <ThemeProvider>
-    <ThemeCustomizerProvider>
+    <ThemeCustomizerProvider context="client">
     <MasterDataProvider>
     <ModuleAccessProvider>
       <IdleTimeoutGuard />

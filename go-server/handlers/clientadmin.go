@@ -1,13 +1,18 @@
 package handlers
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"log"
+	"math/big"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/ip-house/iphouse-api/activity"
+	ipauth "github.com/ip-house/iphouse-api/auth"
 	"github.com/ip-house/iphouse-api/db"
+	"github.com/ip-house/iphouse-api/email"
 )
 
 // numOf reads an integer column that may arrive as a number or, via the text
@@ -59,14 +64,21 @@ func flagOn(v any) bool {
 //
 // A Client Admin is an ordinary client login (Role stays 0) that has been
 // granted dcp_user_login.is_client_admin for ONE company. It may list the other
-// logins attached to that same company and enable/disable them. It gets nothing
-// else: no other company's users, no credential access, no role changes, no
-// ability to create logins. Admin/Super Admin (role >= 1) reach the same
-// endpoints, so support staff can use the page on a client's behalf.
+// logins attached to that same company, enable/disable them, create NEW ones
+// for that same company, and set which modules those logins may open. It gets
+// nothing else: no other company's users, no credential access to an EXISTING
+// login, no role changes, and — critically — no path anywhere in this file
+// ever sets dcp_user_login.is_client_admin or touches Role/staff status. Those
+// stay exclusively with Admin/Super Admin, on go-server/handlers/admin's own
+// endpoints. Admin/Super Admin (role >= 1) reach the same endpoints here too,
+// so support staff can use the page on a client's behalf.
 //
 // Every query below is scoped by claims.UserID — the company of the CURRENT
 // session — never by a company id taken from the request, so a Client Admin
-// cannot address another company by tampering with the payload.
+// cannot address another company by tampering with the payload. A new login's
+// userId is bound to claims.UserID at INSERT time for the same reason: there is
+// no company field in the create request body at all, so there is nothing to
+// tamper with.
 
 // clientAdminAllowed reports whether the session may use these endpoints at all.
 func clientAdminAllowed(r *http.Request) bool {
@@ -92,10 +104,13 @@ func clientAdminAllowed(r *http.Request) bool {
    credentials. */
 
 const (
-	actClientAdminView    = "client_admin_view"
-	actClientAdminEnable  = "client_admin_user_enabled"
-	actClientAdminDisable = "client_admin_user_disabled"
-	actClientAdminDenied  = "client_admin_denied"
+	actClientAdminView          = "client_admin_view"
+	actClientAdminEnable        = "client_admin_user_enabled"
+	actClientAdminDisable       = "client_admin_user_disabled"
+	actClientAdminDenied        = "client_admin_denied"
+	actClientAdminUserCreated   = "client_admin_user_created"
+	actClientAdminModulesViewed = "client_admin_modules_viewed"
+	actClientAdminModulesSet    = "client_admin_modules_set"
 )
 
 // logClientAdmin writes one audit row for the current session, always stamped
@@ -124,6 +139,7 @@ func logClientAdmin(r *http.Request, action string, meta map[string]any) {
 
 // GET  /api/client-admin/users — logins attached to the session's company
 // PUT  /api/client-admin/users — enable/disable one of those logins
+// POST /api/client-admin/users — create a NEW login for the session's company
 func ClientAdminUsers(w http.ResponseWriter, r *http.Request) {
 	if !clientAdminAllowed(r) {
 		logClientAdmin(r, actClientAdminDenied, map[string]any{
@@ -138,6 +154,8 @@ func ClientAdminUsers(w http.ResponseWriter, r *http.Request) {
 		clientAdminUsersList(w, r)
 	case http.MethodPut:
 		clientAdminUsersUpdate(w, r)
+	case http.MethodPost:
+		clientAdminUsersCreate(w, r)
 	default:
 		Fail(w, 405, "Method not allowed")
 	}
@@ -152,6 +170,42 @@ const clientAdminStaffJoin = `LEFT JOIN dcp_super_admin sa
 		ON CONVERT(sa.email USING utf8mb4) COLLATE utf8mb4_general_ci
 		 = CONVERT(l.login_username USING utf8mb4) COLLATE utf8mb4_general_ci
 		AND sa.is_active = 1`
+
+/*
+clientAdminGrantableModuleIDs — what the CALLER may hand out to someone else.
+
+A Client Admin may only ever grant a module they hold themselves — nothing
+about how module_permission or user_module_permission_test is queried
+elsewhere stops them granting one they do not have, so it is enforced here,
+in the one place both write paths (create a user, edit an existing user's
+permissions) and the read path that populates the picker all go through.
+
+IP House staff (role >= 1), acting on a client's behalf on this same page,
+are NOT held to that limit — their authority comes from Role, not from a row
+in user_module_permission_test (staff logins are not normally in that table
+at all, so applying the same rule to them would leave the picker empty for
+every staff session). They may grant any active module, the same authority
+admin/modules.go's own picker already gives them.
+*/
+func clientAdminGrantableModuleIDs(claims *ipauth.Claims) map[int64]bool {
+	active := map[int64]bool{}
+	if rows, _ := db.Query("SELECT Id FROM module_permission WHERE status = 0"); rows != nil {
+		for _, row := range rows {
+			active[numOf(row["Id"])] = true
+		}
+	}
+	if claims.Role != nil && *claims.Role >= 1 {
+		return active
+	}
+	own := map[int64]bool{}
+	rows, _ := db.Query("SELECT moduleId FROM user_module_permission_test WHERE loginId = ? AND allowed = 1", claims.LoginID)
+	for _, row := range rows {
+		if mid := numOf(row["moduleId"]); active[mid] {
+			own[mid] = true
+		}
+	}
+	return own
+}
 
 func clientAdminUsersList(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r)
@@ -278,6 +332,352 @@ func clientAdminUsersUpdate(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[client-admin] %s set loginId=%d active=%d on userId=%d",
 		claims.LoginUsername, body.LoginID, active, claims.UserID)
+	OK(w, map[string]any{"success": true})
+}
+
+/*
+clientAdminUsersCreate — a Client Admin adding a NEW person to their own
+company.
+
+Three things this must never let happen, each guarded explicitly rather than
+left to fall out of the query shape:
+
+  1. Another company gaining a login. There is no company field in the
+     request body at all — userId is bound to claims.UserID at INSERT time,
+     the same way every read/write in this file is scoped.
+  2. A new login resolving to staff on its next sign-in. Role is derived at
+     login by matching login_username against an ACTIVE dcp_super_admin.email
+     (see admin.roleSelect) — so a username that happens to collide with a
+     staff email would hand that brand-new client login Admin/Super Admin
+     access the moment it signed in. Checked and refused before insert.
+  3. is_client_admin ever being set here. It is hard-coded to 0 on the INSERT
+     below and appears nowhere else in this function — that grant stays
+     exclusively on go-server/handlers/admin/clientadmins.go.
+
+Module grants are written in the same request, against the loginId this
+INSERT just returned — the only place in the codebase today that creates a
+login and assigns its module access in one step (see modules.go's own
+UserModulePermissions, which always writes against an ALREADY-existing
+loginId). Grantable ids are capped to module_permission rows with status = 0,
+the same restriction the admin picker applies, so a Client Admin cannot grant
+a module that has been retired or one that never existed.
+*/
+func clientAdminUsersCreate(w http.ResponseWriter, r *http.Request) {
+	claims := ClaimsFrom(r)
+
+	var body struct {
+		FirstName     string  `json:"firstName"`
+		LastName      string  `json:"lastName"`
+		Email         string  `json:"email"`
+		LoginUsername string  `json:"loginUsername"`
+		LoginPassword string  `json:"loginPassword"`
+		ModuleIDs     []int64 `json:"modules"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	body.FirstName = strings.TrimSpace(body.FirstName)
+	body.LastName = strings.TrimSpace(body.LastName)
+	body.Email = strings.TrimSpace(body.Email)
+	body.LoginUsername = strings.TrimSpace(body.LoginUsername)
+
+	if body.FirstName == "" || body.LoginUsername == "" || body.Email == "" {
+		Fail(w, 422, "First name, email and username are required")
+		return
+	}
+
+	if existing, _ := db.QueryOne(
+		"SELECT loginId FROM dcp_user_login WHERE login_username = ? LIMIT 1", body.LoginUsername,
+	); existing != nil {
+		Fail(w, 409, "This username is already taken")
+		return
+	}
+
+	// Refuse a username that would resolve to Admin/Super Admin on sign-in —
+	// see the function comment, point 2. Same collation-normalised join used
+	// everywhere these two columns meet (clientAdminStaffJoin, admin.roleJoin).
+	if staffRow, _ := db.QueryOne(`
+		SELECT id FROM dcp_super_admin
+		WHERE CONVERT(email USING utf8mb4) COLLATE utf8mb4_general_ci
+		    = CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci
+		  AND is_active = 1 LIMIT 1`, body.LoginUsername,
+	); staffRow != nil {
+		logClientAdmin(r, actClientAdminDenied, map[string]any{
+			"reason": "requested username belongs to IP House staff", "requestedUsername": body.LoginUsername,
+		})
+		Fail(w, 422, "This username is not available")
+		return
+	}
+
+	rawPassword := body.LoginPassword
+	if rawPassword == "" {
+		rawPassword = genClientAdminPassword(12)
+	}
+	hashed, err := ipauth.HashPassword(rawPassword)
+	if err != nil {
+		log.Printf("[client-admin] hash password failed: %v", err)
+		Fail(w, 500, "Could not create this user")
+		return
+	}
+
+	lid, _, err := db.Exec(`
+		INSERT INTO dcp_user_login
+		  (userId, first_name, last_name, login_username, login_password,
+		   login_type, is_active, is_client_admin, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, 0, 1, 0, UTC_TIMESTAMP(), UTC_TIMESTAMP())`,
+		claims.UserID, body.FirstName, body.LastName, body.LoginUsername, hashed)
+	if err != nil {
+		log.Printf("[client-admin] create login for userId=%d failed: %v", claims.UserID, err)
+		Fail(w, 500, "Could not create this user")
+		return
+	}
+
+	// Capped to what THIS caller may grant — see clientAdminGrantableModuleIDs.
+	// A genuine Client Admin cannot hand the new login a module they do not
+	// hold themselves, no matter what the request body asks for.
+	grantable := clientAdminGrantableModuleIDs(claims)
+	grantedCount := 0
+	for _, mid := range body.ModuleIDs {
+		if !grantable[mid] {
+			continue
+		}
+		if _, _, err := db.Exec(
+			"INSERT INTO user_module_permission_test (loginId, moduleId, allowed) VALUES (?, ?, 1)", lid, mid,
+		); err != nil {
+			log.Printf("[client-admin] grant module %d to loginId=%d failed: %v", mid, lid, err)
+			continue
+		}
+		grantedCount++
+	}
+
+	fullName := strings.TrimSpace(body.FirstName + " " + body.LastName)
+	addedBy := strings.TrimSpace(claims.LoginFirstName + " " + claims.LoginLastName)
+	if addedBy == "" {
+		addedBy = claims.LoginUsername
+	}
+
+	logClientAdmin(r, actClientAdminUserCreated, map[string]any{
+		"targetLoginId": lid, "targetUser": body.LoginUsername, "moduleCount": grantedCount,
+	})
+	log.Printf("[client-admin] %s created loginId=%d on userId=%d with %d module(s)",
+		claims.LoginUsername, lid, claims.UserID, grantedCount)
+
+	// Fire-and-forget, like every other credentials/notification email in this
+	// codebase (see admin/users.go's own usersCreate) — a slow mail server is
+	// not a reason to hold the response, and a failure here does not undo the
+	// account that was just created.
+	go func() {
+		if err := email.SendClientAdminUserCreated(
+			body.Email, fullName, body.LoginUsername, rawPassword, claims.ClientName, addedBy, email.DashboardURL,
+		); err != nil {
+			log.Printf("[client-admin] credentials email to %s failed: %v", body.Email, err)
+		}
+	}()
+	go func() {
+		if err := email.SendClientAdminUserCreatedNotice(
+			fullName, body.Email, body.LoginUsername, claims.ClientName, addedBy,
+		); err != nil {
+			log.Printf("[client-admin] staff notice email failed: %v", err)
+		}
+	}()
+
+	OK(w, map[string]any{"success": true, "loginId": lid})
+}
+
+// genClientAdminPassword mirrors admin.genStrongPassword (settings.go) — that
+// one is unexported in package admin, and package handlers cannot import it
+// without an import cycle (admin already imports handlers), so this is a
+// small copy rather than a shared dependency. Ambiguous characters excluded
+// so the emailed credential is easy to read and type.
+func genClientAdminPassword(n int) string {
+	const (
+		lower  = "abcdefghijkmnopqrstuvwxyz"
+		upper  = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+		digits = "23456789"
+		syms   = "!@#$%*?"
+	)
+	all := lower + upper + digits + syms
+	pick := func(set string) byte {
+		idx, _ := rand.Int(rand.Reader, big.NewInt(int64(len(set))))
+		return set[idx.Int64()]
+	}
+	if n < 4 {
+		n = 4
+	}
+	b := make([]byte, n)
+	b[0], b[1], b[2], b[3] = pick(lower), pick(upper), pick(digits), pick(syms)
+	for i := 4; i < n; i++ {
+		b[i] = pick(all)
+	}
+	for i := len(b) - 1; i > 0; i-- {
+		jb, _ := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		j := int(jb.Int64())
+		b[i], b[j] = b[j], b[i]
+	}
+	return string(b)
+}
+
+// GET /api/client-admin/modules — every module the CALLER may grant.
+//
+// Not every active module in the system — see clientAdminGrantableModuleIDs:
+// a genuine Client Admin sees only what their own login already holds, so
+// the picker itself can never offer a checkbox this session could not
+// actually grant. Staff acting on a client's behalf still see everything
+// active, the same list admin/modules.go's own picker shows them.
+func ClientAdminModules(w http.ResponseWriter, r *http.Request) {
+	if !clientAdminAllowed(r) {
+		Fail(w, 403, "Forbidden")
+		return
+	}
+	if r.Method != http.MethodGet {
+		Fail(w, 405, "Method not allowed")
+		return
+	}
+	grantable := clientAdminGrantableModuleIDs(ClaimsFrom(r))
+
+	rows, err := db.Query(`SELECT Id, ModuleName, pageName FROM module_permission WHERE status = 0 ORDER BY Id ASC`)
+	if err != nil {
+		log.Printf("[client-admin] modules query error: %v", err)
+	}
+	modules := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		if grantable[numOf(row["Id"])] {
+			modules = append(modules, row)
+		}
+	}
+	OK(w, map[string]any{"success": true, "modules": modules})
+}
+
+/*
+GET /api/client-admin/user-modules?loginId= — an existing login's current grants
+PUT /api/client-admin/user-modules            — set them
+
+The one place a Client Admin manages an ALREADY-existing user's permission
+role, as distinct from setting it at creation time above. Same ownership +
+staff + self guards as clientAdminUsersUpdate: a Client Admin may not reach
+into another company, may not touch an IP House staff login, and may not
+change their own permissions (the same reasoning as not being able to disable
+their own access — a change that could lock the acting session out of the
+one grant it needs to undo it).
+*/
+func ClientAdminUserModules(w http.ResponseWriter, r *http.Request) {
+	if !clientAdminAllowed(r) {
+		Fail(w, 403, "Forbidden")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		clientAdminUserModulesGet(w, r)
+	case http.MethodPut:
+		clientAdminUserModulesSet(w, r)
+	default:
+		Fail(w, 405, "Method not allowed")
+	}
+}
+
+func clientAdminUserModulesGet(w http.ResponseWriter, r *http.Request) {
+	loginID := numOf(r.URL.Query().Get("loginId"))
+	if loginID == 0 {
+		Fail(w, 422, "loginId required")
+		return
+	}
+	if loginID == ClaimsFrom(r).LoginID {
+		Fail(w, 422, "You cannot view your own permissions here")
+		return
+	}
+	target, _ := db.QueryOne(`
+		SELECT l.loginId, (sa.id IS NOT NULL) AS is_staff
+		FROM dcp_user_login l
+		`+clientAdminStaffJoin+`
+		WHERE l.loginId = ? AND l.userId = ? LIMIT 1`, loginID, ClaimsFrom(r).UserID)
+	if target == nil {
+		Fail(w, 404, "User not found for this account")
+		return
+	}
+	if flagOn(target["is_staff"]) {
+		Fail(w, 403, "This user is managed by IP House staff")
+		return
+	}
+
+	rows, _ := db.Query("SELECT moduleId FROM user_module_permission_test WHERE loginId = ? AND allowed = 1", loginID)
+	allowed := make([]int64, 0)
+	for _, row := range rows {
+		allowed = append(allowed, numOf(row["moduleId"]))
+	}
+	logClientAdmin(r, actClientAdminModulesViewed, map[string]any{"targetLoginId": loginID})
+	OK(w, map[string]any{"success": true, "allowed": allowed})
+}
+
+func clientAdminUserModulesSet(w http.ResponseWriter, r *http.Request) {
+	claims := ClaimsFrom(r)
+
+	var body struct {
+		LoginID   int64   `json:"loginId"`
+		ModuleIDs []int64 `json:"modules"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.LoginID == 0 {
+		Fail(w, 422, "loginId required")
+		return
+	}
+	if body.LoginID == claims.LoginID {
+		logClientAdmin(r, actClientAdminDenied, map[string]any{
+			"reason": "attempted to change own permissions", "targetLoginId": body.LoginID,
+		})
+		Fail(w, 422, "You cannot change your own permissions")
+		return
+	}
+
+	target, _ := db.QueryOne(`
+		SELECT l.loginId, l.login_username, (sa.id IS NOT NULL) AS is_staff
+		FROM dcp_user_login l
+		`+clientAdminStaffJoin+`
+		WHERE l.loginId = ? AND l.userId = ? LIMIT 1`, body.LoginID, claims.UserID)
+	if target == nil {
+		logClientAdmin(r, actClientAdminDenied, map[string]any{
+			"reason": "target login not found in this company", "targetLoginId": body.LoginID,
+		})
+		Fail(w, 404, "User not found for this account")
+		return
+	}
+	if flagOn(target["is_staff"]) {
+		logClientAdmin(r, actClientAdminDenied, map[string]any{
+			"reason": "target is IP House staff", "targetLoginId": body.LoginID,
+		})
+		Fail(w, 403, "This user is managed by IP House staff")
+		return
+	}
+
+	// Capped to what THIS caller may grant — see clientAdminGrantableModuleIDs.
+	//
+	// The delete below is scoped to that same set, deliberately NOT a plain
+	// "delete every grant this login has, then reinsert" — the target may
+	// already hold a module outside it (one an admin granted directly, or one
+	// the Client Admin held themselves at the time but has since lost). That
+	// grant has no checkbox on this screen at all — clientAdminGrantableModuleIDs
+	// is exactly what ClientAdminModules used to build the picker — so a plain
+	// full-table delete would revoke it as a side effect of ticking something
+	// else entirely. Scoping the delete to `grantable` means only the modules
+	// the caller can actually see and control are ever touched.
+	grantable := clientAdminGrantableModuleIDs(claims)
+	for mid := range grantable {
+		db.Exec("DELETE FROM user_module_permission_test WHERE loginId = ? AND moduleId = ?", body.LoginID, mid)
+	}
+	granted := 0
+	for _, mid := range body.ModuleIDs {
+		if !grantable[mid] {
+			continue
+		}
+		if _, _, err := db.Exec(
+			"INSERT INTO user_module_permission_test (loginId, moduleId, allowed) VALUES (?, ?, 1)", body.LoginID, mid,
+		); err != nil {
+			log.Printf("[client-admin] grant module %d to loginId=%d failed: %v", mid, body.LoginID, err)
+			continue
+		}
+		granted++
+	}
+
+	logClientAdmin(r, actClientAdminModulesSet, map[string]any{
+		"targetLoginId": body.LoginID, "targetUser": strFromAny(target["login_username"]), "moduleCount": granted,
+	})
 	OK(w, map[string]any{"success": true})
 }
 

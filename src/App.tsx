@@ -3,7 +3,7 @@
 import { lazy, Suspense, ReactNode, Component, ErrorInfo, useEffect, useState } from 'react'
 import { Routes, Route, Navigate, Outlet, useParams } from 'react-router-dom'
 import { useSession } from '@/lib/auth-client'
-import { usePathname } from '@/lib/router'
+import { usePathname, useSearchParams } from '@/lib/router'
 import { NAV_ITEMS, isNavItemActive, isApiIndependentItem } from '@/lib/navItems'
 import { CONFIG_MODULES } from '@/lib/configModules'
 import PageLoader from '@/components/ui/PageLoader'
@@ -88,17 +88,39 @@ const SuperAdminPage       = lazy(() => import('@/app/admin/super-admin/page'))
 const AdminWarRoomPage     = lazy(() => import('@/app/admin/war-room/page'))
 
 // ── Route guards ──────────────────────────────────────────────────────────────
+
+/* Where to send someone who was just bounced to /login — the page they were
+   actually on (path + query), so signing back in after a dropped session
+   lands them back where they were instead of always at the default landing
+   page. Carried as ?next= on the /login URL itself, read back in
+   app/(auth)/login/page.tsx's own post-auth redirect.
+
+   /login is never worth remembering (nothing to return to) and is excluded
+   explicitly rather than relying on the caller to already be elsewhere —
+   this same helper covers the idle-timeout guard's own redirect, called from
+   outside the router. */
+function loginRedirectTarget(pathname: string, search: URLSearchParams): string {
+  const qs = search.toString()
+  const path = pathname + (qs ? `?${qs}` : '')
+  if (!pathname || pathname === '/login') return '/login'
+  return `/login?next=${encodeURIComponent(path)}`
+}
+
 function RequireAuth({ children }: { children: ReactNode }) {
   const { status } = useSession()
+  const pathname = usePathname()
+  const search = useSearchParams()
   if (status === 'loading') return <PageLoader />
-  if (status === 'unauthenticated') return <Navigate to="/login" replace />
+  if (status === 'unauthenticated') return <Navigate to={loginRedirectTarget(pathname, search)} replace />
   return <>{children}</>
 }
 
 function RequireAdmin({ children }: { children: ReactNode }) {
   const { data: session, status } = useSession()
+  const pathname = usePathname()
+  const search = useSearchParams()
   if (status === 'loading') return <PageLoader />
-  if (status === 'unauthenticated') return <Navigate to="/login" replace />
+  if (status === 'unauthenticated') return <Navigate to={loginRedirectTarget(pathname, search)} replace />
   const role = (session?.user as any)?.role
   if (role !== 1 && role !== 2) return <Navigate to="/dashboard" replace />
   return <>{children}</>

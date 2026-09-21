@@ -673,6 +673,9 @@ var (
 		{"views", "SUM(TotalViews)", "TotalViews"},
 		{"views", "SUM(Views)", "Views"},
 		{"viewsSaved", "SUM(ViewsSaved)", "ViewsSaved"},
+		// dashboards.SocialMediaDashboard spells the same column TotalViewsSaved,
+		// which is why Social & UGC showed Views and no Views Saved beside it.
+		{"viewsSaved", "SUM(TotalViewsSaved)", "TotalViewsSaved"},
 		{"impactedSubscribers", "SUM(Subscribers)", "Subscribers"},
 		/* The WHOLE audience, against impactedSubscribers' "audience we took
 		   down". Same column, different question, and both are wrong as a plain
@@ -699,6 +702,19 @@ var (
 		{"notices", "SUM(EnforcementCount)", "EnforcementCount"},
 		{"googleDelisted", "COUNT(CASE WHEN IsGoogleDelisted=1 THEN 1 END)", "IsGoogleDelisted"},
 		{"bingDelisted", "COUNT(CASE WHEN IsBingDelisted=1 THEN 1 END)", "IsBingDelisted"},
+		/* The same two figures as the AGGREGATES spell them.
+
+		   The raw sports tables carry a per-row flag; the dashboard tables carry a
+		   pre-summed count of the same event, and the registry knew only the flag.
+		   So Open Web and the Summary held GoogleDelistedCount and BingDelistedCount
+		   all along and neither De-Indexing card ever appeared on them — not because
+		   the data was missing, but because nothing here was looking for that name.
+
+		   SUM is the right aggregate and not merely the obvious one: these are
+		   counts of delistings per day, so they add across the window the way the
+		   flag's COUNT does across rows. */
+		{"googleDelisted", "SUM(GoogleDelistedCount)", "GoogleDelistedCount"},
+		{"bingDelisted", "SUM(BingDelistedCount)", "BingDelistedCount"},
 		// The audience the infringing pages were reaching — the Open Web
 		// equivalent of a channel's subscribers.
 		{"impactedTraffic", "SUM(ImpactedTraffic)", "ImpactedTraffic"},

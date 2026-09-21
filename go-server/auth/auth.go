@@ -53,8 +53,15 @@ func IsLegacyHash(stored string) bool {
 }
 
 func SignToken(claims Claims) (string, error) {
+	return SignTokenWithTTL(claims, time.Duration(config.C.SessionIdleSeconds)*time.Second)
+}
+
+// SignTokenWithTTL signs with a caller-chosen idle window instead of the portal
+// default — see Keepalive, which uses this to honor a client's own
+// user_idle_settings row rather than always re-signing for SessionIdleSeconds.
+func SignTokenWithTTL(claims Claims, ttl time.Duration) (string, error) {
 	claims.RegisteredClaims = jwt.RegisteredClaims{
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(config.C.SessionIdleSeconds) * time.Second)),
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
 		IssuedAt:  jwt.NewNumericDate(time.Now()),
 	}
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
