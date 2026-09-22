@@ -214,6 +214,23 @@ type reportSpec struct {
 	   a source that cannot tell the two sides apart. */
 	DomainCol string
 
+	/* The column identifying one ACCOUNT, for the "Total Subscribers" tile —
+	   the combined audience of every account this report covers, each
+	   counted once.
+
+	   Cannot be an ExtraKPI expression: those are plain aggregates evaluated
+	   inside one ungrouped SELECT alongside identified/removed, and this
+	   figure needs a GROUP BY pass first — MAX(Subscribers) per account,
+	   summed — before it can sit beside them. The same reasoning
+	   rowmetrics.go's computeRowMetrics applies on the reports_api path
+	   (a table appears on many rows, and summing the column counts its
+	   audience once per row); this is that fix run as SQL instead, because
+	   this table is read directly. See totalSubscribersFor in reportsrun.go.
+
+	   Empty where the table records no per-account audience at all, or where
+	   nobody has asked for the tile yet. */
+	SubscriberAccountCol string
+
 	// Optional extra KPI expressions, keyed by the name the UI reads.
 	ExtraKPI map[string]string
 
@@ -322,6 +339,7 @@ var reportSpecs = map[string]reportSpec{
 			"channelsSuspended":   "COUNT(DISTINCT CASE WHEN ChannelStatus LIKE '%Suspend%' THEN ChannelURL END)",
 			"totalChannels":       "COUNT(DISTINCT ChannelURL)",
 		},
+		SubscriberAccountCol: colChannelURL,
 		Dimensions: []dimension{
 			{Key: "byChannel", Column: "ChannelName", Label: "Channels", Limit: 15},
 			{Key: "byAsset", Column: "AssetId", Label: "Assets", Limit: 15},
@@ -344,6 +362,9 @@ var reportSpecs = map[string]reportSpec{
 			"impactedSubscribers": "SUM(Subscribers)",
 			"totalChannels":       "COUNT(DISTINCT ChannelName)",
 		},
+		// This table carries no ChannelURL, so ChannelName is the identity —
+		// the same column its own totalChannels above counts distinct values of.
+		SubscriberAccountCol: colChannelName,
 		Dimensions: []dimension{
 			{Key: "byChannel", Column: "ChannelName", Label: "Channels", Limit: 15},
 			{Key: "byAsset", Column: "AssetId", Label: "Assets", Limit: 15},

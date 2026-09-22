@@ -161,6 +161,30 @@ func apiCanGroupBy(table, col string) bool {
 	return ok
 }
 
+/*
+panelIsComputedHere reports whether a panel is built by this package rather than
+by asking the service to GROUP BY a column.
+
+These must never be judged by apiCanGroupBy: they do not group by anything the
+warehouse can be asked for, and several of them deliberately read a column the
+service refuses as a dimension.
+
+	byTAT            — bands computed from the row's two timestamps
+	byRepeatOffender — counted per account over the raw rows
+	byTopProfiles    — a MAX per account, which a breakdown has aggregated away
+	the action panels — counted from an APIMeasure, not a grouping
+
+Judging them by groupability would delete four working cards, which is a worse
+outcome than the empty one this filter exists to remove.
+*/
+func panelIsComputedHere(key string) bool {
+	switch key {
+	case dimTAT, dimRepeatOffender, dimTopProfiles:
+		return true
+	}
+	return isActionPanel(key)
+}
+
 // lookupForDim is the dimension's own lookup, or the fallback above.
 func lookupForDim(d dimension) string {
 	if d.LookupTable != "" {
@@ -243,12 +267,40 @@ var apiMeasure = map[string][]string{
 	/* The broadcaster count. `totalChannels` is the channel that carried the
 	   stream; this is the station whose feed it was, and one report shows both —
 	   so they never share a measure. */
-	"totalTVChannels":     {"tvChannels"},
-	"viewsSaved":          {"viewsSaved"},
-	"impactedSubscribers": {"subscribers"},
-	"likes":               {"likes"},
-	"comments":            {"comments"},
-	"crawled":             {"crawled"},
+	"totalTVChannels": {"tvChannels"},
+	"viewsSaved":      {"viewsSaved"},
+	/* The audience enforcement has taken off the table.
+
+	   The dedicated measure FIRST, the plain `subscribers` sum only where a
+	   dataset does not declare one. They are not the same question and never
+	   were: `subscribers` sums the column over every row, so it counts every
+	   channel — suspended or not — once per day it appeared. This tile is about
+	   the ones that came down. On one client's Telegram month that is the
+	   difference between 3.7 million and 33 thousand.
+
+	   The fallback stays because several datasets still have only the sum, and
+	   a tile that vanishes is harder to notice than one that is too big. */
+	"impactedSubscribers": {"impactedSubscribers", "subscribers"},
+	/* The whole audience, counted ONCE PER ACCOUNT.
+
+	   Its own measure and deliberately not an alias of `subscribers`: that one
+	   is SUM(Subscribers), and on a daily rollup the same channel is on one row
+	   per day it was active, so it reports one audience once per day. The
+	   service now computes the per-channel maximum and sums that — see
+	   GroupedMeasure over there. Where a dataset does not declare it the figure
+	   is counted off the raw rows instead, which is the same arithmetic done
+	   the expensive way: see wantTotalSubscribers below. */
+	"totalSubscribers": {"totalSubscribers"},
+	/* The claim split on the social table, where every infringement is one or
+	   the other — verified across 45 clients, identified equals the two summed
+	   on every one. YouTube's pair does NOT come through here: it is assembled
+	   from a second table in ytautoclaim.go, and the YouTube dataset declares
+	   neither measure, so these entries cannot reach it. */
+	"autoClaims":   {"autoClaims"},
+	"manualClaims": {"manualClaims"},
+	"likes":        {"likes"},
+	"comments":     {"comments"},
+	"crawled":      {"crawled"},
 	/* The DMCA notices a host was sent. `dmcaNotices` is what the sports host
 	   dataset declares, verified against the live catalogue; the other two are
 	   what other datasets call it. Its absence here is why the provider card's
@@ -320,7 +372,7 @@ func apiTableShape(table string) tableShape {
 			return shape
 		}
 		shape.Err = fmt.Sprintf(
-			"%s is neither a dataset nor a master reports_api serves — see GET /v1/sports/datasets and GET /v1/masters at %s",
+			"%s is neither a dataset nor a master reports_api serves — see GET /v1/vod/datasets and GET /v1/masters at %s",
 			table, c.BaseURL())
 		return shape
 	}
@@ -336,8 +388,8 @@ rowOnlyColumns are columns reports_api RETURNS ON ITS ROWS but does not list in
 its catalogue.
 
 The two are separate lists over there, and for the sports raw datasets they
-disagree: /v1/sports/open-web hands back DelistingBatchId and HSPName on every
-row, /v1/sports/open-web-source hands back SourceDMCANoticeId and HSPName, and
+disagree: /v1/vod/open-web hands back DelistingBatchId and HSPName on every
+row, /v1/vod/open-web-source hands back SourceDMCANoticeId and HSPName, and
 neither id appears in the dataset's declared column list.
 
 That gap is invisible and total. apiTableShape builds the shape FROM the
@@ -987,6 +1039,15 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 	var (
 		rowMx     rowMetrics
 		haveRowMx bool
+		// Total Subscribers, off the same row read, for a spec whose account
+		// identity is neither of rowMx's two hardcoded columns — see
+		// wantTotalSubscribers and maxPerAccountTotal in rowmetrics.go.
+		totalSubsFromRows int64
+		// And the taken-down part of it, off the same walk. Its own variable
+		// because "how much reach was removed" is a different question from
+		// "how much was there", and only one of them has ever been computable
+		// on these tables.
+		impactedSubsFromRows int64
 	)
 	/* ── The three independent reads, together ───────────────────────────
 	   The summary, the daily series and (where they are needed) the raw rows
@@ -1028,6 +1089,29 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 	   post — whether or not the dataset happens to also declare `removed`.
 	   See the KPI block below, which replaces rather than adds. */
 	wantRows = wantRows || hasChannelColumns(ds)
+
+	/* The "Total Subscribers" tile, on a table whose account identity does
+	   not fit either shape above — YouTube's ChannelStatus/ChannelURL pair
+	   has no RemovalChannelStatus for hasChannelColumns to key off, and
+	   Telegram's VOD table (unlike its sports one) carries no ChannelURL at
+	   all, only ChannelName. Both also declare their own `removed` measure,
+	   so needsRowRemovals never trips either. SubscriberAccountCol is
+	   whatever column such a spec names as its account identity
+	   (reportspecs.go); maxPerAccountTotal in rowmetrics.go walks it
+	   generically once the rows are read below. */
+	wantTotalSubscribers := s.SubscriberAccountCol != "" && hasColumn(ds, s.SubscriberAccountCol)
+	/* On the measure, never on the mode — the same gate wantViewsImpacted and
+	   wantChannelsSuspended use. A dataset that declares totalSubscribers is
+	   answered by one indexed GROUP BY over there; reading every row of the
+	   window to arrive at the identical number would be minutes of paging to
+	   duplicate a query the service already ran. The row walk is the fallback
+	   for a dataset too old to declare it, not the preferred road. */
+	if wantTotalSubscribers {
+		if _, served := apiMeasureFor("totalSubscribers", ds); served {
+			wantTotalSubscribers = false
+		}
+	}
+	wantRows = wantRows || wantTotalSubscribers
 
 	/* Same reasoning, for two more figures no aggregate reaches: views on the
 	   rows that came down, and how many distinct channels were suspended.
@@ -1155,6 +1239,25 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			atomic.StoreInt64(&tvChannels, countNamedGroups(rows))
 		}()
 	}
+	/* The YouTube auto-claim summary, on the YouTube report only.
+
+	   Fetched here so it costs the same round trip as everything else rather
+	   than a second pass, and scoped through apiScope against ITS dataset, so
+	   the client and window match the section exactly while filters it does not
+	   carry are dropped instead of refused. See ytautoclaim.go for why these
+	   are their own tiles and not added to the infringement count. */
+	var (
+		autoClaim   autoClaimFigures
+		autoClaimOK bool
+	)
+	if sectionHasAutoClaims(ds) {
+		phase1.Add(1)
+		go func() {
+			defer phase1.Done()
+			autoClaim, autoClaimOK = autoClaimCombine(ctx, c, s, ds, q)
+		}()
+	}
+
 	phase1.Add(2)
 	go func() { defer phase1.Done(); sumRes, sumErr = c.Summary(ctx, ds, scope) }()
 	go func() { defer phase1.Done(); tsRes, tsErr = c.Timeseries(ctx, ds, scope, "day") }()
@@ -1207,6 +1310,13 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			}
 			rowMx = computeRowMetrics(rows, dateColOf(ds), groupCols)
 			haveRowMx = true
+			if wantTotalSubscribers {
+				totalSubsFromRows = maxPerAccountTotal(rows, s.SubscriberAccountCol)
+				// The same walk answers both tiles; splitting them would read the
+				// rows twice to compute a figure and its own subset.
+				impactedSubsFromRows = maxPerAccountImpacted(
+					rows, s.SubscriberAccountCol, accountStatusCol(ds))
+			}
 			if capped {
 				// Not only profile figures any more — views-impacted and
 				// channels-suspended are counted off this same capped walk
@@ -1244,7 +1354,25 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		switch {
 		case aggRemovals && deadSum != nil:
 			removed = aggRemoved
-		case haveRowMx:
+		/*
+			ONLY where the dataset has no removed measure of its own.
+
+			The row walk wins for a dataset whose summary genuinely cannot
+			answer this — that is what the note above is about. It must not win
+			over one that CAN, and for a while it did: `wantRows` is set true by
+			wantTotalSubscribers alone (see its block above), so the VOD
+			Telegram and YouTube tables started reading their rows purely to
+			compute a subscriber tile — and this switch then threw away their
+			real SUM(RemovedCount) in favour of a row count that those tables
+			carry no column for.
+
+			The result was Removed 0, Removal % 0 and Pending equal to the whole
+			window, on a client whose Telegram channels had 1,247 removals in
+			the same 82 days. Zero is the worst possible wrong answer here
+			because it is a legitimate value: it reads as "nothing came down"
+			rather than as "not measured".
+		*/
+		case haveRowMx && !ds.HasMeasure("removed"):
 			removed = rowMx.removed
 		}
 		kpi["identified"] = ident
@@ -1288,6 +1416,15 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			kpi["totalTVChannels"] = n
 		}
 
+		/* The auto-claim figures, and the combined total built from the
+		   `identified` this section actually published — set just above, after
+		   every substitution the block makes — rather than from a second
+		   reading of the summary, so the two halves of that sum can never come
+		   from different windows. */
+		if autoClaimOK {
+			applyAutoClaimKPIs(kpi, autoClaim)
+		}
+
 		// The spec's extra tiles, each only where the dataset actually has it.
 		for name := range s.ExtraKPI {
 			if m, ok := apiMeasureFor(name, ds); ok {
@@ -1322,6 +1459,53 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			   already set. */
 			kpi["impactedSubscribers"] = rowMx.channelImpactedSubscribers
 			kpi["totalSubscribers"] = rowMx.channelTotalSubscribers
+		}
+
+		/* Total Subscribers on its own, for a spec whose account identity
+		   fits neither shape above — see wantTotalSubscribers. Only where
+		   the branches above did not already set it, so this can never
+		   double-write a tile they are accountable for. */
+		if _, already := kpi["totalSubscribers"]; !already && haveRowMx && wantTotalSubscribers {
+			kpi["totalSubscribers"] = totalSubsFromRows
+		}
+
+		/* ── Impacted Subscribers, on those same tables ────────────────────
+
+		   The twin the block above never had. Total was rescued here for a spec
+		   whose account identity fits neither fixed shape; Impacted was left
+		   holding the service's SUM(Subscribers), which counts one account's
+		   followers once per post it made. On a DAZN Telegram report that read
+		   16.3M impacted against 5.5M total — a subset larger than the set it
+		   belongs to, which is not a number anyone can act on.
+
+		   REPLACED where it can be counted properly, and REMOVED where it
+		   cannot. Deleting the tile is not a loss of information: the value
+		   standing in its place is wrong by a factor of however many posts the
+		   average account made, and an absent tile says "not measured" while a
+		   present one says "measured, and this is the answer". The block above
+		   already takes that view — "A tile that wrong is worse than an absent
+		   one". */
+		if _, already := kpi["profilesSuspended"]; !already && haveRowMx && wantTotalSubscribers {
+			if accountStatusCol(ds) != "" {
+				kpi["impactedSubscribers"] = impactedSubsFromRows
+			} else {
+				delete(kpi, "impactedSubscribers")
+			}
+		}
+
+		/* The invariant, enforced rather than assumed.
+
+		   Impacted is the part of Total that enforcement has taken down, so it
+		   cannot exceed it. Every path above is meant to keep that true; this
+		   exists because the one that did not was live until a reader compared
+		   two tiles on the same screen. If it goes wrong again the tile is
+		   dropped rather than drawn, and the reason is logged. */
+		if imp, iok := kpi["impactedSubscribers"]; iok {
+			if tot, tok := kpi["totalSubscribers"]; tok && numOf(imp) > numOf(tot) {
+				log.Printf("[reports] %s: impactedSubscribers %v exceeds totalSubscribers %v — dropping the tile",
+					s.Key, imp, tot)
+				delete(kpi, "impactedSubscribers")
+			}
 		}
 
 		/* ── Views impacted, and suspended channels — from the rows ─────────
@@ -1394,12 +1578,18 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 				"urls":    numOf(p["identified"]),
 				"removed": numOf(p["removed"]),
 			}
-			// Same substitution as the KPI, per day — otherwise the removal
-			// rate stays a flat 0% under a tile that now says 37%.
+			/* Same substitution as the KPI, per day — otherwise the removal
+			   rate stays a flat 0% under a tile that now says 37%.
+
+			   Carrying the KPI's guard with it, for that same reason read the
+			   other way round: a dataset with its own removed measure keeps it
+			   in BOTH places, so the trend cannot draw a flat zero under a tile
+			   reporting real removals. The two have to move together, which is
+			   the whole point of this being "the same substitution". */
 			switch {
 			case aggRemovedByDay != nil:
 				row["removed"] = aggRemovedByDay[dayKey(date)]
-			case haveRowMx:
+			case haveRowMx && !ds.HasMeasure("removed"):
 				row["removed"] = rowMx.removedByDay[dayKey(date)]
 			}
 			if wantDelisted {
@@ -1683,8 +1873,28 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			   cannot say what came after — reported rather than drawn as a
 			   panel of zeroes. */
 			removalTimeCol := repeatRemovalTimeColumn(ds.Columns)
+			/* No stamp, but a DAILY ROLLUP that counts removals per day: the
+			   same cycle is still answerable at the day's resolution, which is
+			   the only resolution this table has. See
+			   computeRepeatOffendersDaily.
+
+			   This is every VOD source that carries an account URL — YouTube,
+			   Telegram, Social & UGC and the Summary all have ChannelURL or
+			   ProfileURL and none of them has a removal timestamp — so without
+			   this branch the panel was permanently empty on every VOD report,
+			   which reads as "nobody reoffends" rather than as "not measured
+			   here". */
+			if removalTimeCol == "" && removedCol != "" {
+				return computeRepeatOffendersDaily(
+					filterRowsByPlatform(rows, q[repeatPlatformParam]),
+					d.Column, dateColOf(ds), identCol, removedCol, d.Limit)
+			}
+			/* Neither a stamp nor a per-day removal count: nothing can say when
+			   anything came down, so it cannot say what came after. Reported
+			   rather than drawn as a panel of zeroes. */
 			if removalTimeCol == "" {
-				notice("Repeat offenders needs a removal timestamp, which this source does not carry.")
+				notice("Repeat offenders needs a removal timestamp or a per-day removal count, " +
+					"and this source carries neither.")
 				return []map[string]any{}
 			}
 			/* The one PANEL-SCOPED slicer on the page. Applied to the raw rows
@@ -1755,6 +1965,19 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		   instead. Where it does not, this falls through and the panel is what
 		   it always was. See tatbuckets.go. */
 		if d.Key == dimTAT {
+			/* TURNAROUND RECORDED AS COLUMNS.
+
+			   dashboards.SocialMediaDashboard has no TATBucket to group by; it
+			   carries the four bands as counts on every row. So this section had
+			   no Turnaround card at all while YouTube and Telegram beside it
+			   did — not a wrong panel, an absent one.
+
+			   Read off the summary this section has already fetched, so it costs
+			   nothing, and banded with vodTATBands so the three VOD reports are
+			   one ruler. See columnTATRows. */
+			if tableHasColumnTAT(s.Table) {
+				return columnTATRows(sumRes)
+			}
 			if foundCol, removedCol, has := tatTimeCols(ds.Columns); has {
 				rows, capped, err := allRows()
 				if err != nil {
@@ -1764,7 +1987,11 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 						note(fmt.Errorf("turnaround was measured over the first %d rows of this window; "+
 							"the bands describe that much of it", len(rows)))
 					}
-					return bandTATRows(rows, foundCol, removedCol)
+					/* On this table's own ruler, not the sports one — a
+					   measured turnaround and a folded one have to land on
+					   the same labels or a platform's bands would change
+					   the day its table gained a RemovalTime column. */
+					return bandTATRowsIn(rows, foundCol, removedCol, tatBandsFor(s.Table))
 				}
 			} else {
 				/* Logged rather than left as a mystery. "Why is a sports report
@@ -2061,7 +2288,13 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 					r["removed"] = tally[groupValue(r["value"])]
 				}
 			}
-		case haveRowMx:
+		/* And the KPI's guard once more, so a panel's orange bars agree with the
+		   tile above them — which is what this whole block exists to ensure. A
+		   dataset with its own removed measure already filled `removed` from the
+		   service a few lines above; overwriting that with a row-walk tally the
+		   table has no column for zeroed every bar on the VOD Telegram and
+		   YouTube reports. */
+		case haveRowMx && !ds.HasMeasure("removed"):
 			if col := ds.ColumnForDim(key); col != "" {
 				if tally, ok := rowMx.removedByCol[col]; ok {
 					for _, r := range out {
@@ -2087,7 +2320,21 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			   column holds for a live window — comes back as five empty bands
 			   rather than as a Pending row, which is what put the last one on
 			   the page. */
-			if folded := foldTATRows(out); folded != nil {
+			/* The ruler this table is read with. Sports bands everywhere except
+			   the two VOD tables whose stored column is hour-scale, where the
+			   sports bands put every row in "2 hr+" and drew one bar under four
+			   permanently empty labels. See tatBandsFor. */
+			bands := tatBandsFor(s.Table)
+			/* Which ruler this panel was read with, and what it produced.
+
+			   Temporary only in the sense that it can go once this is settled;
+			   it is here because the panel drew the sports bands on a table this
+			   selector says is hour-scale, and every other way of finding out
+			   was inference from a screenshot. The table name is the input to
+			   tatBandsFor, so printing both says immediately whether the
+			   selector saw what it was meant to see. */
+			log.Printf("[reports] turnaround %s: ruler=%s stored=%d", s.Table, bands[0].label, len(out))
+			if folded := foldTATRowsInto(out, bands); folded != nil {
 				return folded
 			}
 		}

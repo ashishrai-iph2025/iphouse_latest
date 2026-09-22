@@ -350,8 +350,14 @@ var kpiTileLabels = map[string]string{
 	"profilesSuspended": "Profiles Suspended",
 	// The account count and the audience behind it, on the social reports. A
 	// "channel" here is the PROFILE — see channelKPIs.
-	"totalSubscribers":    "Total Subscribers",
-	"suspendedWebsites":   "Suspended Websites",
+	"totalSubscribers":  "Total Subscribers",
+	"suspendedWebsites": "Suspended Websites",
+	/* YouTube's two routes — see ytautoclaim.go. The pair is named by HOW the
+	   claim was made, because that is the only thing that distinguishes them:
+	   one was found and reported, the other Content ID matched by itself. Total
+	   Infringements above them is the two together. */
+	"manualClaims":        "Manual Claims",
+	"autoClaims":          "Auto Claims",
 	"impactedSubscribers": "Impacted Subscribers",
 	"impactedTraffic":     "Impacted Traffic",
 	"views":               "Total Views",
@@ -1889,6 +1895,24 @@ func platformExtraKPIs(p platformDef) []string {
 	if len(roles) > 1 {
 		for _, k := range perSideKPIs {
 			seen[k] = true
+		}
+	}
+
+	/* The two claim routes, on the YouTube report.
+
+	   Here for exactly the reason perSideKPIs are: no spec computes them. The
+	   API bridge fetches the auto-claim summary alongside the section's own and
+	   sets both figures once it has answered, so there is no ExtraKPI entry to
+	   find — and a tile is only ever drawn for a metric the layout was told
+	   exists. Computing a figure and giving it a label is not enough on its
+	   own; without this the numbers are correct, present in the response, and
+	   invisible. */
+	for _, sp := range specs {
+		if tableHasAutoClaims(sp.Table) {
+			for _, k := range autoClaimKPIs {
+				seen[k] = true
+			}
+			break
 		}
 	}
 	out := make([]string, 0, len(seen))

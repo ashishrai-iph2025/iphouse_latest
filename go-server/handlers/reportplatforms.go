@@ -608,7 +608,20 @@ var (
 		// definition, already been removed — so "removed vs active" says
 		// nothing here. What the reader wants is the share that landed in each
 		// bucket, on a ramp that shows the ordering.
-		{Key: "byTAT", Column: "TATBucket", Label: "Turnaround", Viz: "share"},
+		/* TATBucket where the table groups by one, and the first of the four
+		   band COLUMNS where it does not.
+
+		   dashboards.SocialMediaDashboard records turnaround as counts per band
+		   rather than as a bucket — TAT_0_6_Hrs and its three siblings — so it
+		   matched nothing here and the section had no Turnaround card at all,
+		   beside a YouTube and a Telegram report that both had one.
+
+		   The alt only has to make the panel OFFERED. Which column it resolved
+		   to is never read: the API bridge sees a column-TAT table and builds
+		   the panel from the four sums instead of grouping by anything. See
+		   tableHasColumnTAT and columnTATRows. */
+		{Key: "byTAT", Column: "TATBucket", Alts: []string{"TAT_0_6_Hrs"},
+			Label: "Turnaround", Viz: "share"},
 
 		/* ── Mobile apps ────────────────────────────────────────────────────
 		   A store listing is a different kind of infringement from a link: it
@@ -813,6 +826,45 @@ func channelKPIs(shape tableShape) map[string]string {
 		out["totalTVChannels"] = fmt.Sprintf("COUNT(DISTINCT %s)", col)
 		if out["totalTVChannels"] == out["totalChannels"] {
 			delete(out, "totalChannels")
+		}
+	}
+	return out
+}
+
+/*
+socialVODKPIs are the Social Media & UGC report's own tiles: the claim split and
+the audience.
+
+NAMED BY TABLE, NOT OFFERED BY COLUMN PRESENCE. Unified_BI_Dashboard — the
+Summary — carries TotalAutoClaims, TotalManualClaims and TotalSubscribers too,
+and a column-keyed candidate would hand the Summary these tiles as a side
+effect. manualClaims is not a harmless tile to acquire: its presence feeds the
+removal-rate denominator on YouTube (see runPlatform), so the Summary would
+have started dividing every platform's removals by one platform's claims.
+
+In API mode every figure here is read off a service measure — autoClaims and
+manualClaims as sums, the two audience figures as one MAX per profile summed
+(see GroupedMeasure in reports_api). The expressions below are what the direct
+warehouse path runs, and for the audience that path can only sum rows: it has
+no GROUP BY to reach for, and it shows the same over-count the YouTube and
+Telegram subscriber tiles do off it. The impacted expression is at least held
+to the suspended profiles, so it is a subset of the total even there.
+*/
+func socialVODKPIs(table string, shape tableShape) map[string]string {
+	out := map[string]string{}
+	if !strings.EqualFold(strings.TrimSpace(table), "dashboards.SocialMediaDashboard") {
+		return out
+	}
+	if c := shape.firstOf([]string{"TotalAutoClaims"}); c != "" {
+		out["autoClaims"] = fmt.Sprintf("SUM(%s)", c)
+	}
+	if c := shape.firstOf([]string{"TotalManualClaims"}); c != "" {
+		out["manualClaims"] = fmt.Sprintf("SUM(%s)", c)
+	}
+	if subs := shape.firstOf([]string{"TotalSubscribers"}); subs != "" {
+		out["totalSubscribers"] = fmt.Sprintf("SUM(%s)", subs)
+		if st := shape.firstOf([]string{"ProfileRemovalStatus"}); st != "" {
+			out["impactedSubscribers"] = fmt.Sprintf("SUM(CASE WHEN %s = 'Dead' THEN %s ELSE 0 END)", st, subs)
 		}
 	}
 	return out
@@ -1274,6 +1326,9 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 	for k, expr := range sportsHeadlineKPIs(shape) {
 		s.ExtraKPI[k] = expr
 	}
+	for k, expr := range socialVODKPIs(table, shape) {
+		s.ExtraKPI[k] = expr
+	}
 	if shape.has("RemovalChannelStatus") && shape.has("ChannelURL") {
 		/* RemovalChannelStatus, not ChannelStatus — the CHANNEL's own status,
 		   distinct from RemovalStatus which is about the row (the URL/post).
@@ -1290,6 +1345,30 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 		   this expression, which is what the API-bridge path actually runs. */
 		s.ExtraKPI["channelsSuspended"] = "COUNT(DISTINCT CASE WHEN RemovalChannelStatus = 'Dead' THEN ChannelURL END)"
 	}
+
+	/* The account identity for the "Total Subscribers" tile — see
+	   reportSpec.SubscriberAccountCol's own comment, and totalSubscribersFor /
+	   maxPerAccountTotal, which read whatever column this resolves to.
+
+	   Only meaningful beside a Subscribers column — a table with an account
+	   but no audience figure has nothing for the tile to sum. Preferred order
+	   is how STABLE an identity each column is: ChannelURL/ProfileURL over
+	   ChannelName, because a display name can be reused or edited while the
+	   account itself has not changed. Telegram's VOD rollup table happens to
+	   carry ChannelURL too, so it resolves the same way YouTube's does; a
+	   table with only ChannelName (no URL at all) still gets the tile off
+	   that. */
+	if shape.has(colSubscriberCnt) {
+		switch {
+		case shape.has(colChannelURL):
+			s.SubscriberAccountCol = colChannelURL
+		case shape.has(colProfileURL):
+			s.SubscriberAccountCol = colProfileURL
+		case shape.has(colChannelName):
+			s.SubscriberAccountCol = colChannelName
+		}
+	}
+
 	for _, c := range extraKPICandidates {
 		if _, filled := s.ExtraKPI[c.Key]; filled {
 			continue
@@ -2271,9 +2350,50 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	// computed from the live one.
 	kpiOut["removed"] = removed
 	kpiOut["pending"] = max64(0, ident-removed)
+	/*
+		THE RATE IS A SHARE OF WHAT COULD BE REMOVED.
+
+		Normally that is everything identified. On YouTube it is not: the section
+		counts manual claims and Content ID's automatic ones together, and an
+		automatic claim has no removal to be a share of — nothing was reported,
+		so nothing can come down. Dividing by the combined total reported DAZN's
+		enforcement at 16.51% where it is 95.42%, and it would fall further every
+		time Content ID did its job better.
+
+		manualClaims is set only where that distinction exists (see
+		ytautoclaim.go); everywhere else this is the identified figure and the
+		arithmetic is unchanged.
+
+		Computed HERE and not in the spec result, because the merge above
+		discards removalPct on purpose — it is derived, not additive — and
+		recomputes it from the merged totals. A rate set upstream never survives
+		this line, which is why the first attempt to hold it to manual claims
+		had no effect at all.
+	*/
+	/* ONLY where the automatic claims are Content ID's.
+
+	   This used to key on manualClaims being present at all, which was the
+	   same thing while YouTube was the only section carrying it. Social media
+	   carries manual and auto claims too — SocialMediaDashboard splits every
+	   infringement between them — and there the premise is false: an auto
+	   claim on a social platform IS reported and does come down. Across the
+	   six clients with social auto claims, removals exceed manual claims on
+	   five, so dividing by manual put their Social removal rate at 115%,
+	   120%, 160%. The premise holds for one table, so the rule names it. */
+	ytClaims := false
+	for _, sp := range specs {
+		if tableHasAutoClaims(sp.Table) {
+			ytClaims = true
+			break
+		}
+	}
+	base := ident
+	if m := numOf(kpi["manualClaims"]); m > 0 && ytClaims {
+		base = m
+	}
 	pct := 0.0
-	if ident > 0 {
-		pct = float64(removed) / float64(ident) * 100
+	if base > 0 {
+		pct = float64(removed) / float64(base) * 100
 	}
 	kpiOut["removalPct"] = roundTo(pct, 2)
 

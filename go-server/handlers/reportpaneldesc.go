@@ -42,13 +42,18 @@ var kpiTileDescriptions = map[string]string{
 	"impactedSubscribers": "Combined subscriber count of the channels carrying infringements — the audience they could reach, not the audience they did. Counted only on accounts that have been SUSPENDED, so it is the reach enforcement has taken off the table; Total Subscribers is the whole of it.",
 	"totalSubscribers":    "The combined audience of every profile found infringing in this window — one figure per account, taken as its highest reading, however many posts it made. NOT a sum of the column: an account appears on every post, so adding it up counts the same followers over and over. Total Channels is how many accounts that audience is spread across.",
 	"impactedTraffic":     "Estimated traffic to the pages carrying infringing content.",
-	"views":               "Total views on the infringing content found in this window.",
-	"viewsImpacted":       "Views on the infringing content that is now DOWN — the share of the audience above that the takedowns removed. Counted where the removal status is Dead.",
-	"totalTVChannels":     "A count of the distinct TV channel names on the infringements found. Rows with no channel name recorded are not counted, exactly as a distinct count does not count them. Not the same as Channels beside it, which counts accounts rather than channel names.",
-	"viewsSaved":          "Views the infringing content would have gone on to take, counted from what came down.",
-	"savedRevenue":        "Views saved, valued at a fixed per-view rate set in the server configuration. A range because the rate is a commercial assumption, not a measurement.",
-	"likes":               "Total likes on the infringing content found in this window.",
-	"crawled":             "URLs crawled while searching, whether or not they turned out to be infringing.",
+
+	/* YouTube's two routes. Each says which ACT it counts, because the two are
+	   only distinguishable by how the claim was made. See ytautoclaim.go. */
+	"manualClaims":    "Infringing uploads found on YouTube and reported for takedown — the route that produces the removal figures beside it. Total Infringements is this plus the automatic claims.",
+	"autoClaims":      "Uploads YouTube's Content ID matched to your titles and claimed by itself. No notice was sent and nothing was taken down, so these carry no removal of their own — which is why the removal rate is measured against manual claims only.",
+	"views":           "Total views on the infringing content found in this window.",
+	"viewsImpacted":   "Views on the infringing content that is now DOWN — the share of the audience above that the takedowns removed. Counted where the removal status is Dead.",
+	"totalTVChannels": "A count of the distinct TV channel names on the infringements found. Rows with no channel name recorded are not counted, exactly as a distinct count does not count them. Not the same as Channels beside it, which counts accounts rather than channel names.",
+	"viewsSaved":      "Views the infringing content would have gone on to take, counted from what came down.",
+	"savedRevenue":    "Views saved, valued at a fixed per-view rate set in the server configuration. A range because the rate is a commercial assumption, not a measurement.",
+	"likes":           "Total likes on the infringing content found in this window.",
+	"crawled":         "URLs crawled while searching, whether or not they turned out to be infringing.",
 
 	/* The two that are most often misread, and the reason this file exists: an
 	   action id is stamped on every URL it covered, so the row count answers a

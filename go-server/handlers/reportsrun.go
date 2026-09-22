@@ -130,6 +130,18 @@ func ReportsSections(w http.ResponseWriter, r *http.Request) {
 			extras = append(extras, k)
 		}
 		sort.Strings(extras)
+		/* The YouTube claim cards, on the sections that read that table AND for
+		   a client that has claims to show.
+
+		   Added to THIS list and not to platformExtraKPIs, which is the layout
+		   editor's: the tiles the page draws come from here, so a metric added
+		   only there is offered to an admin arranging panels and never rendered
+		   for a reader.
+
+		   Gated per client because the table is empty for most of them, and a
+		   tile the layout offers is drawn whatever the figures say — an absent
+		   value is an em dash, not a hidden card. See withAutoClaimTiles. */
+		extras = withAutoClaimTiles(r.Context(), extras, specs, clientID)
 
 		entry := map[string]any{
 			"key": p.Key, "label": p.Label,
@@ -221,6 +233,27 @@ func sectionDimensions(p platformDef) []map[string]any {
 	for _, sp := range specs {
 		for _, d := range sp.Dimensions {
 			if dimSeen[d.Key] || labelSeen[d.Label] {
+				continue
+			}
+			/* A PANEL THE SERVICE CANNOT ANSWER IS NOT OFFERED.
+
+			   inferSpec matches a dimension on the table HAVING the column,
+			   which is not the same as reports_api being willing to group by
+			   it. Where the two differ the panel was still promised here, the
+			   breakdown came back 422, and the card drew empty under "Some
+			   panels could not be loaded".
+
+			   "Overall Piracy - Day-wise Identification & Removal" is the whole
+			   class in one: it groups by URLUploadDate, no dataset offers a
+			   date as a dimension, so it has never been able to render on any
+			   report — while the trend card above it answers the same question
+			   from the timeseries endpoint and always has.
+
+			   Deliberately NOT marked seen, so the label can still be claimed
+			   by another form of the same panel: Country is offered as both
+			   CountryName and CountryId, and dropping the name form must let
+			   the id form take the card rather than take the card with it. */
+			if !panelIsComputedHere(d.Key) && !apiCanGroupBy(sp.Table, d.Column) {
 				continue
 			}
 			dimSeen[d.Key] = true
@@ -464,6 +497,33 @@ func specHonoursFilters(s reportSpec, q map[string]string) bool {
 	return true
 }
 
+/*
+totalSubscribersFor is the "Total Subscribers" tile — the combined audience of
+every account the WHERE-scoped rows cover, each counted once at its highest
+reading.
+
+Not a plain SUM(Subscribers): the same account appears on one row per day (this
+table is a daily aggregate), carrying its subscriber count on each, so summing
+the column counts that audience once per day instead of once. See
+SubscriberAccountCol's own comment on reportSpec, and rowmetrics.go's
+computeRowMetrics, which this mirrors for the tables read directly by SQL
+instead of through reports_api.
+
+Run as its own query rather than folded into the flat KPI SELECT alongside
+identified/removed: those are plain aggregates over the whole WHERE-scoped set,
+and this needs a GROUP BY pass first. `where`/`args` are passed through
+unchanged, so the inner grouping sees exactly the same window and filters as
+every other figure on the tile band.
+*/
+func totalSubscribersFor(run func(string) []map[string]any, table, where, accountCol string) int64 {
+	rows := run(fmt.Sprintf(
+		`SELECT COALESCE(SUM(maxSubs), 0) AS total FROM (
+			SELECT MAX(%s) AS maxSubs FROM %s %s GROUP BY %s
+		) t`,
+		colSubscriberCnt, table, where, accountCol))
+	return numOf(firstRow(rows)["total"])
+}
+
 // runSpec executes one section and returns the payload the page renders.
 func runSpec(s reportSpec, q map[string]string, bg bool) map[string]any {
 	/* Same section, same returned shape, different source. Everything above
@@ -528,6 +588,9 @@ func runSpec(s reportSpec, q map[string]string, bg bool) map[string]any {
 	if s.DelistedExpr != "" {
 		kpi["delisted"] = numOf(kpiRow["delisted"])
 	}
+	if s.SubscriberAccountCol != "" {
+		kpi["totalSubscribers"] = totalSubscribersFor(run, s.Table, where, s.SubscriberAccountCol)
+	}
 
 	// ── The same measures over the preceding window ──────────────────────────
 	// So a tile can say what its figure DID as well as what it is. The identical
@@ -569,6 +632,16 @@ func runSpec(s reportSpec, q map[string]string, bg bool) map[string]any {
 			}
 			if s.DelistedExpr != "" {
 				kpiPrev["delisted"] = numOf(prevRow["delisted"])
+			}
+			if s.SubscriberAccountCol != "" {
+				runPrev := func(sqlStr string) []map[string]any {
+					rows, err := db.ReportsQuery(sqlStr, pArgs...)
+					if err != nil {
+						return nil
+					}
+					return rows
+				}
+				kpiPrev["totalSubscribers"] = totalSubscribersFor(runPrev, s.Table, pWhere, s.SubscriberAccountCol)
 			}
 		}
 	}
@@ -684,7 +757,7 @@ func runSpec(s reportSpec, q map[string]string, bg bool) map[string]any {
 				d.LookupTable, d.LookupIDCol, d.Column,
 				w, d.Column, d.Column,
 				d.Column, limit))
-			breakdowns[d.Key] = sortedDimRows(d.Key, rows)
+			breakdowns[d.Key] = sortedDimRows(d.Key, s.Table, rows)
 			continue
 		}
 
@@ -721,7 +794,7 @@ func runSpec(s reportSpec, q map[string]string, bg bool) map[string]any {
 		if d.Key == dimAppSource {
 			rows = nameAppSourceRows(rows)
 		}
-		breakdowns[d.Key] = sortedDimRows(d.Key, rows)
+		breakdowns[d.Key] = sortedDimRows(d.Key, s.Table, rows)
 	}
 
 	out := map[string]any{

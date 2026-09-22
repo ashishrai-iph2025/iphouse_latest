@@ -125,14 +125,33 @@ type Occ = {
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}/
 const DAY = 86400000
 
-/* Dates arrive as RFC3339 at UTC midnight. Reading them with the LOCAL calendar
-   would move a date across the boundary for anyone west of UTC, so the day is
-   taken from the UTC parts and compared as a UTC-midnight stamp. */
+/* IST is UTC+5:30, fixed — India does not observe DST, so this never needs to
+   change with the calendar date the way a real timezone conversion might. */
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000
+
+/* The IST calendar day for a real instant, encoded as a UTC-midnight stamp —
+   the same key space every other date in this file uses. Every date this
+   calendar reads (an asset's own dates, and "today") goes through this one
+   function, so event placement and the "today" test can never disagree about
+   where the day boundary falls. */
+function istDayOf(ms: number): number {
+  const ist = new Date(ms + IST_OFFSET_MS)
+  return Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate())
+}
+
+/* Dates arrive as RFC3339, but NOT reliably at UTC midnight — a title can carry
+   a real time of day, and reports_api's own timestamps are UTC instants, not
+   the IST wall-clock the warehouse and every reader actually mean by "day".
+   Reading the UTC date parts directly (as this used to) moves a date across
+   the boundary for anything airing in IST's late evening: 2026-09-20T19:00:00Z
+   is 2026-09-21 00:30 IST and belongs on the 21st, but its UTC date is the
+   20th. So the instant is shifted into IST FIRST, via istDayOf, and only then
+   is the day read off it. */
 function toDay(s?: string | null): number | null {
   if (!s || !ISO_DAY.test(String(s).trim())) return null
   const d = new Date(s)
   if (isNaN(d.getTime())) return null
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+  return istDayOf(d.getTime())
 }
 
 const addMonths = (ts: number, n: number) => {
@@ -155,10 +174,14 @@ const fmtDayLong = (ts: number) =>
 const monthLabel = (ts: number) =>
   new Date(ts).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' })
 
-const nowDay = () => {
-  const n = new Date()
-  return Date.UTC(n.getFullYear(), n.getMonth(), n.getDate())
-}
+/* "Today" has to be the same IST day toDay() produces for events, or the two
+   would disagree about the boundary at exactly the hours this fix is for: the
+   old version read the BROWSER's local calendar date and mislabelled it as UTC
+   (`n.getFullYear()`, not `n.getUTCFullYear()`), so a reader west of India
+   could have "today" fall a day behind IST — and even a reader in IST already
+   only agreed with it by coincidence of offset, not because the code said IST
+   anywhere. */
+const nowDay = () => istDayOf(Date.now())
 
 const truthy = (v: unknown) => v === true || v === 1 || v === '1'
 

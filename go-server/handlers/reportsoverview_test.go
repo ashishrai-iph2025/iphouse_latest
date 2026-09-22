@@ -26,7 +26,7 @@ func TestDatasetKeyOKRejectsAnythingThatCouldSteerThePath(t *testing.T) {
 }
 
 /*
-The overview is NOT under /v1/sports, and this is the test that says so.
+The overview is NOT under /v1/vod, and this is the test that says so.
 
 reports_api routes it as GET /v1/overview/{dataset} and its own source explains
 why: it takes a dataset name, but what it answers is "how did this client's

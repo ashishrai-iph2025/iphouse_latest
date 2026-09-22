@@ -142,14 +142,18 @@ function RequireAdmin({ children }: { children: ReactNode }) {
  */
 function AccessDenied({ moduleName, reason = 'grant' }: {
   moduleName: string
-  reason?: 'grant' | 'api' | 'error'
+  /* 'auth' should never reach here — ClientModuleGuard redirects to sign-in
+     before rendering this. It is accepted anyway, and treated as 'error'
+     below, so that removing that redirect degrades to "try again" rather than
+     back to telling a reader they lack a permission they hold. */
+  reason?: 'grant' | 'api' | 'error' | 'auth'
 }) {
   /* 'error' is the third answer, and it is deliberately NOT drawn as a refusal.
      The check itself failed — a dropped request, a reload mid-flight — so the
      reader's permissions are not in question and the card must not imply they
      are. It borrows the API card's shape because the two share a remedy: wait a
      moment and try again. */
-  const err = reason === 'error'
+  const err = reason === 'error' || reason === 'auth'
   const api = reason === 'api' || err
   const tint = api ? '#FC934C' : '#b3091a'
   return (
@@ -290,10 +294,18 @@ function AccessDenied({ moduleName, reason = 'grant' }: {
 */
 function ClientModuleGuard({ children }: { children: ReactNode }) {
   const pathname = usePathname()
+  const search = useSearchParams()
   const { data: session, status } = useSession()
   const user = session?.user as any
   const [state, setState] = useState<{
-    checked: boolean; allowed: boolean; label: string; reason: 'grant' | 'api' | 'error'
+    checked: boolean
+    allowed: boolean
+    label: string
+    /* 'auth' is a FOURTH answer, and it is not a verdict about permissions at
+       all: the session was not accepted, so nothing was checked. It is handled
+       by sending the reader back to sign in rather than by drawing a card — see
+       the render below. */
+    reason: 'grant' | 'api' | 'error' | 'auth'
   }>({ checked: false, allowed: false, label: '', reason: 'grant' })
 
   useEffect(() => {
@@ -308,7 +320,7 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
        after the reader has moved on is dropped rather than applied to whatever
        is on screen now. */
     let live = true
-    const settle = (s: { allowed: boolean; label: string; reason: 'grant' | 'api' | 'error' }) => {
+    const settle = (s: { allowed: boolean; label: string; reason: 'grant' | 'api' | 'error' | 'auth' }) => {
       if (live) setState({ checked: true, ...s })
     }
 
@@ -334,10 +346,37 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
     // live response (it heals after a transient Markscan failure at login);
     // the session's apiAccess claim — frozen at select-login — is the fallback.
     fetch('/api/user/nav', { credentials: 'include' })
-      .then(r => r.json())
-      .then(d => {
-        if (!d.success) {
-          settle({ allowed: false, label: item.label, reason: 'grant' })
+      .then(async r => ({ http: r.status, d: await r.json().catch(() => ({}) as any) }))
+      .then(({ http, d }) => {
+        /* A 401 IS NOT A PERMISSIONS ANSWER.
+
+           /api/user/nav replies 401 {"success":false,"error":"Not authenticated"}
+           whenever the session is not accepted, and this branch used to fold
+           that into the grant refusal below — so a reader whose session had
+           just expired was told, in the strongest words the portal has, that
+           they do not have permission to a module they hold. It reproduced
+           exactly on signing out and back in on the same page: the check fires
+           while the new session is still being established, and the refusal is
+           what lands.
+
+           That is the same mistake AccessDenied's own header describes — two
+           different failures wearing one face — and it is the worse direction
+           to get wrong, because the remedy it prints ("contact the IP House
+           team to request access") sends the reader to ask for something they
+           already have, and sends whoever fields it hunting a permissions bug
+           that does not exist.
+
+           Sent back to sign in instead, carrying this path, so finishing the
+           login returns them to the page they were on. */
+        if (http === 401) {
+          settle({ allowed: false, label: item.label, reason: 'auth' })
+          return
+        }
+        /* Any other failure to get an answer is 'error': retryable, and
+           explicitly not a statement about the reader's permissions. Only the
+           check below can conclude 'grant'. */
+        if (!d || d.success !== true) {
+          settle({ allowed: false, label: item.label, reason: 'error' })
           return
         }
         const liveApiAccess = typeof d.apiAccess === 'boolean' ? d.apiAccess : !!user?.apiAccess
@@ -366,6 +405,12 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
   }, [pathname, status, user?.apiAccess])
 
   if (!state.checked || status === 'loading') return <PageLoader />
+  /* The session, not the grant. Handled before the card because there is no
+     card to draw: nothing was checked, so there is nothing to report. Signing
+     in again returns here, which is what the reader was trying to do. */
+  if (!state.allowed && state.reason === 'auth') {
+    return <Navigate to={loginRedirectTarget(pathname, search)} replace />
+  }
   if (!state.allowed) return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <AccessDenied moduleName={state.label} reason={state.reason} />

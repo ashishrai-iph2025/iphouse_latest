@@ -36,7 +36,7 @@ Dataset is one table reports_api will answer for, as IT describes itself.
 Nothing here is written down twice. The portal does not keep its own list of
 which dataset key corresponds to which warehouse table, which columns exist, or
 which dimensions can be grouped — it reads all of that from
-GET /v1/sports/datasets at run time. A dataset added over there becomes readable
+GET /v1/vod/datasets at run time. A dataset added over there becomes readable
 here with no change to this code, and more importantly, the two cannot drift
 into disagreeing about a column name.
 */
@@ -272,6 +272,40 @@ func envDuration(k string, def time.Duration) time.Duration {
 // BaseURL is what the portal is currently pointed at — read live, because it is
 // used in error messages and one that names the previous target is worse than
 // none.
+/*
+Where reports_api serves its datasets, and which prefix each one answers to.
+
+TWO FAMILIES, TWO PREFIXES:
+
+	vodPrefix     the pre-summed report dashboards - every vertical. These
+	              answered to /v1/sports until that name stopped describing
+	              them: the same tables carry film, television and originals.
+	sportsPrefix  the raw dashboards.Sports* tables, one row per
+	              infringement. These ARE sports, and keep the prefix.
+
+The service routes EVERY dataset under BOTH, so either spelling reaches a
+handler. Sending the one that matches the dataset is still worth doing: the
+query log over there records the path, and a request for a raw sports table
+filed under /v1/vod describes itself wrongly to whoever reads that log next.
+
+One constant each rather than literals at the call sites: the paths are built by
+concatenation in five different methods, and a rename that reaches four of them
+is the kind that gets found in production.
+*/
+const (
+	vodPrefix    = "/v1/vod/"
+	sportsPrefix = "/v1/sports/"
+)
+
+// pathPrefix is the prefix this dataset is served under, by its group - the
+// same rule the service itself publishes (see Dataset.pathPrefix over there).
+func (d Dataset) pathPrefix() string {
+	if d.Group == "reports" {
+		return vodPrefix
+	}
+	return sportsPrefix
+}
+
 func (c *Client) BaseURL() string { b, _ := current(); return b }
 
 /*
@@ -416,7 +450,7 @@ func (c *Client) Catalog(ctx context.Context) ([]Dataset, error) {
 	var body struct {
 		Datasets []Dataset `json:"datasets"`
 	}
-	err := c.get(ctx, "/v1/sports/datasets", nil, &body)
+	err := c.get(ctx, vodPrefix+"datasets", nil, &body)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -609,7 +643,7 @@ here is worse than a slow one.
 `schema` empty means the warehouse this service is pointed at. `q` is a
 contains-match on the table name, applied by the service.
 
-This lives under /v1/admin rather than /v1/sports, which is a different gate:
+This lives under /v1/admin rather than /v1/vod, which is a different gate:
 the far side restricts it by address as well as by credential. A portal outside
 that allowlist gets a refusal that names neither — hence the error being
 returned verbatim rather than folded into "unavailable".
@@ -650,7 +684,7 @@ func (c *Client) Summary(ctx context.Context, ds Dataset, q url.Values) (map[str
 	var body struct {
 		Summary map[string]any `json:"summary"`
 	}
-	if err := c.get(ctx, "/v1/sports/"+ds.Key+"/summary", q, &body); err != nil {
+	if err := c.get(ctx, ds.pathPrefix()+ds.Key+"/summary", q, &body); err != nil {
 		return nil, err
 	}
 	return body.Summary, nil
@@ -663,7 +697,7 @@ func (c *Client) Timeseries(ctx context.Context, ds Dataset, q url.Values, bucke
 	var body struct {
 		Points []map[string]any `json:"points"`
 	}
-	if err := c.get(ctx, "/v1/sports/"+ds.Key+"/timeseries", qq, &body); err != nil {
+	if err := c.get(ctx, ds.pathPrefix()+ds.Key+"/timeseries", qq, &body); err != nil {
 		return nil, err
 	}
 	return body.Points, nil
@@ -714,7 +748,7 @@ func (c *Client) BreakdownFull(ctx context.Context, ds Dataset, q url.Values, by
 		Rows      []map[string]any `json:"rows"`
 		Truncated bool             `json:"truncated"`
 	}
-	if err := c.get(ctx, "/v1/sports/"+ds.Key+"/breakdown", qq, &body); err != nil {
+	if err := c.get(ctx, ds.pathPrefix()+ds.Key+"/breakdown", qq, &body); err != nil {
 		return nil, false, err
 	}
 	return body.Rows, body.Truncated, nil
@@ -733,7 +767,7 @@ func (c *Client) Clients(ctx context.Context) ([]map[string]any, error) {
 	var body struct {
 		Clients []map[string]any `json:"clients"`
 	}
-	if err := c.get(ctx, "/v1/sports/clients", nil, &body); err != nil {
+	if err := c.get(ctx, vodPrefix+"clients", nil, &body); err != nil {
 		return nil, err
 	}
 	return body.Clients, nil
@@ -984,7 +1018,7 @@ func Probe(ctx context.Context, base, key string) ProbeResult {
 	}
 
 	// Then the key, against the one endpoint the portal cannot work without.
-	code, body, err = do("/v1/sports/datasets")
+	code, body, err = do(vodPrefix + "datasets")
 	if err != nil {
 		if out.Detail == "" {
 			out.Detail = err.Error()
@@ -1006,7 +1040,7 @@ func Probe(ctx context.Context, base, key string) ProbeResult {
 		out.Detail = "The key was rejected (HTTP " + fmt.Sprint(code) + ")."
 	default:
 		if out.Detail == "" {
-			out.Detail = fmt.Sprintf("/v1/sports/datasets returned %d", code)
+			out.Detail = fmt.Sprintf("%sdatasets returned %d", vodPrefix, code)
 		}
 	}
 	return out
@@ -1084,9 +1118,9 @@ func (c *Client) Rows(ctx context.Context, ds Dataset, q url.Values, limit int, 
 		NextCursor string           `json:"nextCursor"`
 		HasMore    bool             `json:"hasMore"`
 	}
-	// The dataset's own path with no suffix — /v1/sports/social is the rows
-	// endpoint, /v1/sports/social/breakdown is the aggregate over it.
-	if err := c.get(ctx, "/v1/sports/"+ds.Key, qq, &body); err != nil {
+	// The dataset's own path with no suffix — /v1/vod/social is the rows
+	// endpoint, /v1/vod/social/breakdown is the aggregate over it.
+	if err := c.get(ctx, ds.pathPrefix()+ds.Key, qq, &body); err != nil {
 		return nil, "", false, err
 	}
 	return body.Rows, body.NextCursor, body.HasMore, nil

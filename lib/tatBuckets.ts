@@ -22,13 +22,35 @@
 //   · the five bands come out in duration order, always, whatever order the
 //     server sent them in.
 //
-// Keep the bands here in step with sportsTATBands in the Go file. They are the
-// same five, and the day they are not, a client's Summary and their Open Web
-// report stop being addable.
+// Keep the bands here in step with sportsTATBands and vodTATBands in the Go
+// file. They are the same sets, and the day they are not, a client's Summary and
+// their Open Web report stop being addable.
+//
+// ── TWO RULERS, AND WHY THIS FILE HAS TO KNOW BOTH ───────────────────────────
+//
+// This used to hold the five minute-scale bands and nothing else, and folded
+// EVERY turnaround panel through them. That silently destroyed the VOD panels:
+// the server bands Agg_Daily_Youtube_MasterNew and Agg_Daily_Telegram_MasterNew
+// on an hour scale — "0-6 hours" through "24 hours+", which is what those
+// tables actually store — and every one of those labels is over two hours, so
+// all four landed in "2 hr+". YouTube and Telegram drew one bar holding 100% of
+// the rows under five labels of which four were permanently zero, and no
+// amount of correctness on the server could survive the trip through here.
+//
+// So the ruler is DETECTED rather than imposed: a breakdown whose every
+// measured label is one of the hour bands is folded on the hour ruler, and
+// everything else on the minute ruler. Detection is safe here in a way it is
+// not on the server — see tatBandsFor's note over there, which warns that a
+// quiet fortnight leaves a VOD table with no hour-scale label to detect. By the
+// time rows reach this file the server has already chosen, and what arrives is
+// a complete band set; all this has to do is not wreck it. Where nothing
+// parses as a duration at all there is nothing to fold either way, and the
+// minute ruler's empty set is what comes back.
 
 /** One band: lo < minutes <= hi. */
 interface Band { label: string; lo: number; hi: number }
 
+/** The bands a live event is judged on — sports, Open Web, and the Summary. */
 export const TAT_BANDS: Band[] = [
   { label: '0-15 min', lo: -1, hi: 15 },
   { label: '15-30 min', lo: 15, hi: 30 },
@@ -36,6 +58,24 @@ export const TAT_BANDS: Band[] = [
   { label: '1-2 hr', lo: 60, hi: 120 },
   { label: '2 hr+', lo: 120, hi: Infinity },
 ]
+
+/**
+ * The bands the VOD tables are judged on — a different SCALE, not a different
+ * opinion. A live stream is worth little an hour after kick-off; a film is
+ * worth the same tomorrow, and the warehouse bands it in hours.
+ *
+ * Mirrors vodTATBands in go-server/handlers/tatbuckets.go, labels included:
+ * these strings are matched against what the server sent, so a difference of
+ * one character here puts the panel back on the wrong ruler.
+ */
+export const VOD_TAT_BANDS: Band[] = [
+  { label: '0-6 hours', lo: -1, hi: 360 },
+  { label: '6-12 hours', lo: 360, hi: 720 },
+  { label: '12-24 hours', lo: 720, hi: 1440 },
+  { label: '24 hours+', lo: 1440, hi: Infinity },
+]
+
+const VOD_LABELS = new Set(VOD_TAT_BANDS.map(b => b.label))
 
 const UNIT_MINUTES: Record<string, number> = {
   sec: 1 / 60, second: 1 / 60,
@@ -100,14 +140,38 @@ export function durationMinutes(label: string): number | null {
  * direction would claim those rows came down inside a quarter of an hour, which
  * is a claim about enforcement nothing supports. A fold never flatters.
  */
-export function tatBandFor(label: string): number {
+export function tatBandFor(label: string, bands: Band[] = TAT_BANDS): number {
   const upper = durationMinutes(label)
   if (upper === null) return -1
-  const i = TAT_BANDS.findIndex(b => upper > b.lo && upper <= b.hi)
-  return i >= 0 ? i : TAT_BANDS.length - 1
+  const i = bands.findIndex(b => upper > b.lo && upper <= b.hi)
+  return i >= 0 ? i : bands.length - 1
 }
 
 const num = (v: unknown) => (typeof v === 'number' ? v : Number(v) || 0)
+
+/**
+ * The ruler a breakdown is already on.
+ *
+ * The hour ruler only where EVERY measured label is one of its own — an exact
+ * label match, not a parse, because the question being asked is "did the server
+ * already band this on the hour scale", and only the server's own strings can
+ * answer it. One foreign spelling in the set means this is not a VOD band set
+ * and folding it on four hour-wide bands would lump a minute-scale report into
+ * its first one.
+ *
+ * Rows that are not durations at all ("Pending") are ignored for the purpose of
+ * deciding: they appear on both rulers and say nothing about which is in use.
+ */
+function rulerFor(rows: any[]): Band[] {
+  let measured = 0
+  for (const r of rows) {
+    const label = String(r?.label ?? '')
+    if (durationMinutes(label) === null) continue
+    measured++
+    if (!VOD_LABELS.has(label.trim())) return TAT_BANDS
+  }
+  return measured > 0 ? VOD_TAT_BANDS : TAT_BANDS
+}
 
 /**
  * A turnaround breakdown as the five bands, in order, with everything that is
@@ -121,12 +185,13 @@ const num = (v: unknown) => (typeof v === 'number' ? v : Number(v) || 0)
 export function foldTatRows(rows: any[]): any[] {
   if (!Array.isArray(rows) || rows.length === 0) return rows
 
-  const urls = TAT_BANDS.map(() => 0)
-  const removed = TAT_BANDS.map(() => 0)
+  const bands = rulerFor(rows)
+  const urls = bands.map(() => 0)
+  const removed = bands.map(() => 0)
   let any = false
 
   for (const r of rows) {
-    const i = tatBandFor(String(r?.label ?? ''))
+    const i = tatBandFor(String(r?.label ?? ''), bands)
     if (i < 0) continue          // "Pending", "Unknown", a blank
     urls[i] += num(r?.urls)
     removed[i] += num(r?.removed)
@@ -134,7 +199,7 @@ export function foldTatRows(rows: any[]): any[] {
   }
   if (!any) return []
 
-  return TAT_BANDS.map((b, i) => ({
+  return bands.map((b, i) => ({
     label: b.label,
     /* No `value`. A band is computed rather than stored, so there is nothing in
        the warehouse a click could narrow to. */

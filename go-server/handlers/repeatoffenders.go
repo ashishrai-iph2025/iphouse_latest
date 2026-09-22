@@ -450,3 +450,142 @@ func sortRepeatRows(rows []map[string]any) {
 		return strFromAny(rows[i]["label"]) < strFromAny(rows[j]["label"])
 	})
 }
+
+/*
+── The same question, asked of a DAILY ROLLUP ───────────────────────────────
+
+computeRepeatOffenders measures the comeback against a removal TIMESTAMP, and
+the VOD aggregates do not carry one. Agg_Daily_Youtube_MasterNew,
+Agg_Daily_Telegram_MasterNew, SocialMediaDashboard and Unified_BI_Dashboard all
+carry the account URL — so they are offered the panel — and none of them carries
+RemovalTime, RemovalDate or RemovalDoneAt. The stamp path therefore recorded no
+batches at all, repeatOffences() returned 0 for every account, and the card read
+"No channel or profile came back after a takedown in this window" on every VOD
+report, for every client, always. An empty panel that can never be non-empty is
+worse than no panel: it is a standing claim that nobody reoffends.
+
+── What replaces the stamp ─────────────────────────────────────────────────
+
+The rollup's grain IS the answer. One row is one account on one day, carrying
+that day's identified and removed counts, so the day is the clock:
+
+	the takedown  — the EARLIEST day the account has RemovedCount > 0
+	a comeback    — any LATER day the account was identified on at all
+
+which is the same cycle the timestamp path measures — content up, content
+removed, more content up afterwards — read at the only resolution this table
+has. Each qualifying day counts once, matching the stamp path's rule that one
+request counts once however many URLs it carried.
+
+── The two ways this could have been got wrong ─────────────────────────────
+
+Counting every day with activity would rank the busiest account rather than the
+most defiant one, which is the exact mistake the day-count version of the
+timestamp path was replaced for — see minRepeatOffences' own note. Only days
+strictly AFTER the first removal count here.
+
+Counting the removal day itself as a comeback would give every account that was
+ever removed a score of at least one, since a day with a removal is nearly
+always a day with activity. `After`, not `!Before`.
+*/
+func computeRepeatOffendersDaily(rows []map[string]any, urlCol, dateCol, identCol, removedCol string, limit int) []map[string]any {
+	// Every one of these is required: without the removed count there is no
+	// takedown to measure from, and without the date there is no clock.
+	if urlCol == "" || dateCol == "" || removedCol == "" {
+		return []map[string]any{}
+	}
+	if limit <= 0 {
+		limit = repeatOffenderLimit
+	}
+
+	type dayFigures struct{ identified, removed int64 }
+	type acct struct {
+		urls, removed int64
+		days          map[time.Time]*dayFigures
+		dead          bool
+	}
+	tally := map[string]*acct{}
+
+	for _, r := range rows {
+		url := strings.TrimSpace(strFromAny(r[urlCol]))
+		if url == "" {
+			continue
+		}
+		a := tally[url]
+		if a == nil {
+			a = &acct{days: map[time.Time]*dayFigures{}}
+			tally[url] = a
+		}
+
+		ident := numOf(r[identCol])
+		if identCol == "" {
+			ident = 1
+		}
+		removed := numOf(r[removedCol])
+		a.urls += ident
+		a.removed += removed
+
+		/* The account's own state, read off whichever column this table spells
+		   it with — the same pair accountStatusCol resolves for the subscriber
+		   tiles, so the panel's "Suspended" and that tile agree. */
+		if isDead(r[colProfileStatus]) || accountTakenDown(r[colChannelStatus]) {
+			a.dead = true
+		}
+
+		ts, ok := parseTATTime(r[dateCol])
+		if !ok {
+			continue
+		}
+		/* TRUNCATED TO THE DAY, which is the opposite of what the timestamp
+		   path needs and right for the same reason: a rollup row already stands
+		   for a whole day, and any time component on it is an artefact of how
+		   the column is typed rather than a moment anything happened. Left
+		   whole, two rows for one day could sort either side of a removal. */
+		day := ts.Truncate(24 * time.Hour)
+		f := a.days[day]
+		if f == nil {
+			f = &dayFigures{}
+			a.days[day] = f
+		}
+		f.identified += ident
+		f.removed += removed
+	}
+
+	out := make([]map[string]any, 0, len(tally))
+	for url, a := range tally {
+		var firstRemoval time.Time
+		for day, f := range a.days {
+			if f.removed <= 0 {
+				continue
+			}
+			if firstRemoval.IsZero() || day.Before(firstRemoval) {
+				firstRemoval = day
+			}
+		}
+		// Never removed from: not a repeat offender, however much it posted.
+		// The volume panel beside this one is where that account belongs.
+		if firstRemoval.IsZero() {
+			continue
+		}
+		var repeats int64
+		for day, f := range a.days {
+			if f.identified > 0 && day.After(firstRemoval) {
+				repeats++
+			}
+		}
+		if repeats < minRepeatOffences {
+			continue
+		}
+		out = append(out, map[string]any{
+			"label": url, "value": url,
+			"urls": a.urls, "removed": a.removed,
+			"repeats":       repeats,
+			"profileStatus": profileStatusLabel(a.dead),
+		})
+	}
+	sortRepeatRows(out)
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}

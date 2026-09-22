@@ -54,7 +54,7 @@ const (
 	colProfileStatus = "RemovalProfileStatus"
 	colProfileURL    = "ProfileURL"
 	colSubscriberCnt = "Subscribers"
-	colViews = "Views"
+	colViews         = "Views"
 	// The CHANNEL's own status — a different question from colRemovalStatus,
 	// which is about the ROW (the URL/post). A post can come down while the
 	// channel that carried it stays up, and a channel can be suspended with
@@ -351,6 +351,40 @@ func computeRowMetrics(rows []map[string]any, dateCol string, groupCols []string
 }
 
 /*
+maxPerAccountTotal is the "Total Subscribers" tile, generalized to whatever
+column a spec names as its account identity (reportSpec.SubscriberAccountCol)
+rather than the two hardcoded profile/channel columns rowMetrics keeps as
+their own fields.
+
+Same MAX-per-account rule as the profile and channel blocks in
+computeRowMetrics, and for the same reason: the account appears on one row per
+day this table carries it (or per post, on a raw table), so summing the column
+counts its audience once per row instead of once. UNGATED by any removal
+status — this is the whole audience a report covers, not only the
+suspended/removed slice, which is impactedSubscribers' question.
+*/
+func maxPerAccountTotal(rows []map[string]any, accountCol string) int64 {
+	if accountCol == "" {
+		return 0
+	}
+	max := map[string]int64{}
+	for _, r := range rows {
+		acct := strings.TrimSpace(strFromAny(r[accountCol]))
+		if acct == "" {
+			continue
+		}
+		if subs := numOf(r[colSubscriberCnt]); subs > max[acct] {
+			max[acct] = subs
+		}
+	}
+	var total int64
+	for _, v := range max {
+		total += v
+	}
+	return total
+}
+
+/*
 dateColOf is the column a dataset's daily series is bucketed by.
 
 The catalogue names the PARAMETER (URLUploadDateFrom / URLUploadDateTo) rather
@@ -498,6 +532,12 @@ const (
 	colTVChannelName = "TVChannelName"
 	colChannelName   = "ChannelName"
 	colChannelURL    = "ChannelURL"
+
+	/* The channel's status as the VOD aggregates spell it. Distinct from
+	   colRemovalChannelStatus, which the raw tables carry and these do not — the
+	   gap that left Impacted Subscribers reading a raw SUM. See
+	   accountStatusCol. */
+	colChannelStatus = "ChannelStatus"
 )
 
 /*
@@ -556,4 +596,87 @@ func countNamedGroups(rows []map[string]any) int64 {
 		seen[name] = true
 	}
 	return int64(len(seen))
+}
+
+/*
+── The impacted audience, on a table that fits neither fixed shape ──────────
+
+maxPerAccountTotal's twin: the same MAX-per-account rule, narrowed to the
+accounts that have actually been taken down.
+
+── Why this exists ─────────────────────────────────────────────────────────
+
+"Impacted Subscribers" is a SUBSET of "Total Subscribers" by construction — the
+reach enforcement has removed, against the reach that was there. On a DAZN
+Telegram report it read 16.3M against a total of 5.5M, which is not a subset of
+anything.
+
+The cause is a hole between two mechanisms rather than a wrong sum. Telegram's
+and YouTube's VOD tables carry ChannelStatus, not RemovalChannelStatus, so
+hasChannelColumns is false and the replacement block that fixes BOTH tiles never
+runs. wantTotalSubscribers was added to rescue Total on exactly these tables —
+and there was no twin for Impacted, so it was left holding the service's
+SUM(Subscribers): one channel's followers counted once per post it made.
+
+MAX per account, not SUM, for the reason maxPerAccountTotal gives: the account
+appears on one row per post, and its follower count is a property of the account
+rather than of the post.
+*/
+func maxPerAccountImpacted(rows []map[string]any, accountCol, statusCol string) int64 {
+	if accountCol == "" || statusCol == "" {
+		return 0
+	}
+	max := map[string]int64{}
+	for _, r := range rows {
+		if !accountTakenDown(r[statusCol]) {
+			continue
+		}
+		acct := strings.TrimSpace(strFromAny(r[accountCol]))
+		if acct == "" {
+			continue
+		}
+		if subs := numOf(r[colSubscriberCnt]); subs > max[acct] {
+			max[acct] = subs
+		}
+	}
+	var total int64
+	for _, v := range max {
+		total += v
+	}
+	return total
+}
+
+/*
+accountStatusCol is the column that says whether the ACCOUNT is down.
+
+Deliberately not the row's RemovalStatus: a post can come down while the account
+stays up, and an account can be suspended with its posts still listed. Resolved
+in priority order because the warehouse names the same fact three ways across
+these tables, and the dedicated columns are the more precise ones where present.
+*/
+func accountStatusCol(ds reportsapi.Dataset) string {
+	for _, c := range []string{colRemovalChannelStatus, colProfileStatus, colChannelStatus} {
+		if hasColumn(ds, c) {
+			return c
+		}
+	}
+	return ""
+}
+
+/*
+accountTakenDown reads one of those status values.
+
+Two spellings, because the warehouse uses two. 'Dead' is what the raw tables
+write — see isDead and the channelsSuspended expression in reportplatforms.go —
+while the VOD YouTube table's own suspended-channel measure in reports_api keys
+on LIKE '%Suspend%'. Matching only one of them silently yields zero on the
+tables that use the other, which is the failure this whole path already has a
+history of.
+*/
+func accountTakenDown(v any) bool {
+	s := strings.TrimSpace(strFromAny(v))
+	if s == "" {
+		return false
+	}
+	return isDead(s) || strings.Contains(strings.ToLower(s), "suspend")
 }

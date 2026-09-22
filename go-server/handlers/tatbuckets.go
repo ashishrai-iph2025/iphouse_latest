@@ -107,8 +107,8 @@ func sortTATRows(rows []map[string]any) {
 		   replaces: an index is 0-4 and a parsed label is a count of minutes, so
 		   a list holding both kinds put "2 hr+" (index 4) ahead of "15 - 30 min"
 		   (30 minutes). Both scales have to be minutes or neither is. */
-		if b := canonicalTATIndex(label); b >= 0 {
-			cells[i] = cell{row: r, key: sportsTATBands[b].lo, known: true}
+		if lo, ok := canonicalTATLowerEdge(label); ok {
+			cells[i] = cell{row: r, key: lo, known: true}
 			continue
 		}
 		k, ok := tatSortKey(label)
@@ -138,10 +138,34 @@ Matched on the exact label rather than by parsing, because these strings are
 this file's own output and an exact match cannot be fooled by a coincidence of
 spelling the way tatSortKey can.
 */
+/*
+canonicalTATLowerEdge is a band label's lower edge in MINUTES, on whichever
+ruler it belongs to.
+
+The edge and not the index: an index is 0-4 and a parsed label is a count of
+minutes, and a list holding both kinds sorted "2 hr+" (index 4) ahead of
+"15-30 min" (30 minutes). Both scales have to be minutes or neither is.
+*/
+func canonicalTATLowerEdge(label string) (float64, bool) {
+	for _, bands := range [][]tatBand{sportsTATBands, vodTATBands} {
+		for _, b := range bands {
+			if b.label == label {
+				return b.lo, true
+			}
+		}
+	}
+	return 0, false
+}
+
 func canonicalTATIndex(label string) int {
-	for i, b := range sportsTATBands {
-		if b.label == label {
-			return i
+	/* BOTH rulers. A VOD band label reaching the generic sorter would otherwise
+	   fall through to tatSortKey, which reads "12-24 hours" and "24 hours+" as
+	   the same 24 and leaves their order to whoever built the list. */
+	for _, bands := range [][]tatBand{sportsTATBands, vodTATBands} {
+		for i, b := range bands {
+			if b.label == label {
+				return i
+			}
 		}
 	}
 	return -1
@@ -161,13 +185,20 @@ path.
 The query already sorts by volume, which is right for every dimension except
 this one — a distribution over an ordered axis is read along the axis.
 */
-func sortedDimRows(key string, rows []map[string]any) []map[string]any {
+func sortedDimRows(key, table string, rows []map[string]any) []map[string]any {
 	out := mapRows(rows, "label", "value", "urls", "removed")
 	if key == dimTAT {
-		// The same fold the API path applies, for the same reason: one set of
-		// bands across every platform, whichever road the panel came down. nil
-		// only where the breakdown was empty, and an empty panel needs no order.
-		if folded := foldTATRows(out); folded != nil {
+		/* The same fold the API path applies, for the same reason: one set of
+		   bands per TABLE, whichever road the panel came down. nil only where
+		   the breakdown was empty, and an empty panel needs no order.
+
+		   The table decides the ruler — see tatBandsFor. This used to fold
+		   every platform on the sports bands, which put all four of the VOD
+		   tables' hour-scale values in "2 hr+" on any deployment reading the
+		   warehouse directly. The API path had already been given the
+		   selector; this is the same panel down the other road, and the two
+		   disagreeing is worse than either being wrong. */
+		if folded := foldTATRowsInto(out, tatBandsFor(table)); folded != nil {
 			return folded
 		}
 	}
@@ -233,6 +264,62 @@ var sportsTATBands = []tatBand{
 }
 
 /*
+vodTATBands are the bands the VOD tables are judged on — a different SCALE, not
+a different opinion.
+
+A live stream is worth little an hour after kick-off, so a quarter of an hour is
+the unit that matters there and "2 hr+" is the tail. A film or a series is worth
+the same tomorrow, the warehouse bands it in hours, and the tables say so:
+Agg_Daily_Youtube_MasterNew and Agg_Daily_Telegram_MasterNew hold exactly
+"0-6 hours", "6-12 hours", "12-24 hours", "24 hours+" and "Pending".
+
+── What this fixes ─────────────────────────────────────────────────────────
+
+Folded into the sports bands, every hour-scale value lands in the last one: 6,
+12 and 24 hours are all "2 hr+". YouTube's panel drew a single bar holding
+697,377 of 708,648 URLs under five labels of which four were permanently zero.
+The sports bands were right for the report they were written for and said
+nothing about this one.
+
+── The cost, stated plainly ────────────────────────────────────────────────
+
+sportsTATBands' own note says the bands are fixed so two reports can be read
+against each other. That still holds WITHIN a scale and no longer holds across
+one. The Summary keeps the sports bands: its stored column carries both scales
+at once — "00 - 30min" beside "24 hours+" — so a merge has to pick a ruler, and
+that is the one every sports platform already speaks. Its hour-scale
+contributors stay the lump in the tail they always were. Naming the scale per
+report does not make that worse; it stops two genuinely different measurements
+pretending to share a ruler.
+
+"Pending" is in neither set, for the same reason: it is not a turnaround.
+tatBandFor drops it, as it drops "Unknown" and a blank.
+*/
+var vodTATBands = []tatBand{
+	{"0-6 hours", -1, 360},
+	{"6-12 hours", 360, 720},
+	{"12-24 hours", 720, 1440},
+	{"24 hours+", 1440, math.Inf(1)},
+}
+
+/*
+tatBandsFor is the ruler a table is read with.
+
+Keyed on the TABLE rather than inferred from the labels, because inference gets
+the empty case wrong: a window in which every VOD row is "Pending" carries no
+hour-scale label to detect, and the panel would switch rulers whenever a client
+had a quiet fortnight.
+*/
+func tatBandsFor(table string) []tatBand {
+	switch strings.ToLower(strings.TrimSpace(table)) {
+	case "dashboards.agg_daily_youtube_masternew",
+		"dashboards.agg_daily_telegram_masternew":
+		return vodTATBands
+	}
+	return sportsTATBands
+}
+
+/*
 ── Folding somebody else's bands into ours ───────────────────────────────────
 
 	For the tables that cannot be measured, the stored TATBucket column is all
@@ -271,7 +358,10 @@ Lenient about spelling on purpose. This reads a column three different systems
 write into, and the alternative to being lenient is a bucket silently vanishing
 from the report the day somebody adds a space.
 */
-func tatBandFor(label string) int {
+func tatBandFor(label string) int { return tatBandForIn(label, sportsTATBands) }
+
+// tatBandForIn is tatBandFor against a named ruler - see tatBandsFor.
+func tatBandForIn(label string, bands []tatBand) int {
 	s := strings.ToLower(strings.TrimSpace(label))
 	if s == "" {
 		return -1
@@ -312,13 +402,13 @@ func tatBandFor(label string) int {
 		upper = mins[len(mins)-1] + 0.001
 	}
 
-	for i, b := range sportsTATBands {
+	for i, b := range bands {
 		if upper > b.lo && upper <= b.hi {
 			return i
 		}
 	}
 	// Past the last edge, which the open-ended band should already have caught.
-	return len(sportsTATBands) - 1
+	return len(bands) - 1
 }
 
 /*
@@ -349,14 +439,19 @@ foldTATRows rebuilds a stored-label breakdown as the five bands.
 	legend of five noughts.
 */
 func foldTATRows(rows []map[string]any) []map[string]any {
+	return foldTATRowsInto(rows, sportsTATBands)
+}
+
+// foldTATRowsInto is foldTATRows against a named ruler - see tatBandsFor.
+func foldTATRowsInto(rows []map[string]any, bands []tatBand) []map[string]any {
 	if len(rows) == 0 {
 		return nil
 	}
-	urls := make([]int64, len(sportsTATBands))
-	removed := make([]int64, len(sportsTATBands))
+	urls := make([]int64, len(bands))
+	removed := make([]int64, len(bands))
 
 	for _, r := range rows {
-		i := tatBandFor(strFromAny(r["label"]))
+		i := tatBandForIn(strFromAny(r["label"]), bands)
 		if i < 0 {
 			// "Pending", "Unknown", a blank. Found, but not a turnaround.
 			continue
@@ -364,7 +459,7 @@ func foldTATRows(rows []map[string]any) []map[string]any {
 		urls[i] += numOf(r["urls"])
 		removed[i] += numOf(r["removed"])
 	}
-	return tatBandRows(urls, removed)
+	return tatBandRowsIn(urls, removed, bands)
 }
 
 /*
@@ -389,6 +484,11 @@ rows with the same five labels on every platform add up; a variable set does not
 	contributing nothing add up the same.
 */
 func tatBandRows(urls, removed []int64) []map[string]any {
+	return tatBandRowsIn(urls, removed, sportsTATBands)
+}
+
+// tatBandRowsIn is tatBandRows against a named ruler - see tatBandsFor.
+func tatBandRowsIn(urls, removed []int64, bands []tatBand) []map[string]any {
 	empty := true
 	for i := range urls {
 		if urls[i] != 0 || removed[i] != 0 {
@@ -400,8 +500,8 @@ func tatBandRows(urls, removed []int64) []map[string]any {
 		return nil
 	}
 
-	out := make([]map[string]any, 0, len(sportsTATBands))
-	for i, b := range sportsTATBands {
+	out := make([]map[string]any, 0, len(bands))
+	for i, b := range bands {
 		out = append(out, map[string]any{
 			/* No `value`. A band is computed rather than stored, so there is
 			   nothing in the warehouse a click could narrow to — see the note on
@@ -482,7 +582,7 @@ func tatTimeCols(columns []string) (found, removed string, ok bool) {
 /*
 tatTimeLayouts are how the service writes a timestamp.
 
-RFC3339 is what /v1/sports/{dataset} returns ("2025-06-03T10:37:32Z"); the
+RFC3339 is what /v1/vod/{dataset} returns ("2025-06-03T10:37:32Z"); the
 others are what a direct warehouse read gives, and cost nothing to accept.
 */
 var tatTimeLayouts = []string{
@@ -532,7 +632,16 @@ carries the same count as `urls`, which is what the panel's Identified/Removed
 pair means here.
 */
 func bandTATRows(rows []map[string]any, foundCol, removedCol string) []map[string]any {
-	counts := make([]int64, len(sportsTATBands))
+	return bandTATRowsIn(rows, foundCol, removedCol, sportsTATBands)
+}
+
+// bandTATRowsIn is bandTATRows against a named ruler - see tatBandsFor. A
+// MEASURED turnaround is a count of minutes and belongs on the same ruler the
+// table's stored column would have been folded onto, or one platform reports
+// the same duration under two different sets of labels depending on whether
+// its table happens to carry a removal timestamp.
+func bandTATRowsIn(rows []map[string]any, foundCol, removedCol string, bands []tatBand) []map[string]any {
+	counts := make([]int64, len(bands))
 
 	for _, r := range rows {
 		mins, ok := tatMinutes(r, foundCol, removedCol)
@@ -552,7 +661,7 @@ func bandTATRows(rows []map[string]any, foundCol, removedCol string) []map[strin
 			   and it answers it over the whole report rather than over one. */
 			continue
 		}
-		for i, b := range sportsTATBands {
+		for i, b := range bands {
 			if mins > b.lo && mins <= b.hi {
 				counts[i]++
 				break
@@ -562,5 +671,72 @@ func bandTATRows(rows []map[string]any, foundCol, removedCol string) []map[strin
 
 	// Every row in a measured band has, by definition, come down, so the two
 	// series carry the same count.
-	return tatBandRows(counts, counts)
+	return tatBandRowsIn(counts, counts, bands)
+}
+
+/*
+── Turnaround recorded as COLUMNS ───────────────────────────────────────────
+
+dashboards.SocialMediaDashboard has no TATBucket to group by. It carries the
+four bands as counts on every row — TAT_0_6_Hrs, TAT_6_12_Hrs, TAT_12_24_Hrs,
+TAT_24_Plus_Hrs — which is the same question in a different shape: the other VOD
+tables answer it with one grouped query, this one with four sums.
+
+So the Social turnaround panel had no road to travel at all. There is no
+TATBucket column, so the dimension was never offered, and the section simply had
+no Turnaround card while YouTube and Telegram beside it did.
+
+The four measures are declared on the dataset in reports_api and read off the
+summary the section already fetches, so this costs no extra query.
+
+The bands are vodTATBands, in the same order and with the same labels, because
+they ARE the same bands: a reader moving between Social and YouTube is looking
+at one ruler.
+*/
+var socialTATMeasures = []string{"tat0to6", "tat6to12", "tat12to24", "tat24plus"}
+
+// tableHasColumnTAT reports whether a table records turnaround as counts per
+// band rather than as a bucket to group by.
+func tableHasColumnTAT(table string) bool {
+	return strings.EqualFold(strings.TrimSpace(table), "dashboards.SocialMediaDashboard")
+}
+
+/*
+columnTATRows builds the panel from those four sums.
+
+`urls` is the count in each band; there is no separate removed series, and that
+is not an omission. Every one of these columns counts something that HAS come
+down — a turnaround only exists once a removal has happened — so identified and
+removed are the same number here, and drawing a second identical series would
+invite a reader to compare a bar with itself.
+
+nil where the summary carried none of them, or where every band is zero:
+tatBandRowsIn already treats all-zero as "no data for this period" rather than
+as a ring with no arc.
+*/
+func columnTATRows(sum map[string]any) []map[string]any {
+	if sum == nil {
+		return nil
+	}
+	any := false
+	for _, m := range socialTATMeasures {
+		if _, ok := sum[m]; ok {
+			any = true
+			break
+		}
+	}
+	if !any {
+		return nil
+	}
+	urls := make([]int64, len(vodTATBands))
+	removed := make([]int64, len(vodTATBands))
+	for i, m := range socialTATMeasures {
+		if i >= len(urls) {
+			break
+		}
+		n := numOf(sum[m])
+		urls[i] = n
+		removed[i] = n
+	}
+	return tatBandRowsIn(urls, removed, vodTATBands)
 }

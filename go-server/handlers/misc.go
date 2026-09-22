@@ -37,7 +37,7 @@ Which means a caller polling this endpoint in a loop keeps its own session alive
 That is inherent to any keepalive and is bounded by the same thing that bounds
 the cookie: whoever holds it was already authenticated.
 
-WHY THE WINDOW IS PER-USER AND NOT THE PORTAL DEFAULT
+# WHY THE WINDOW IS PER-USER AND NOT THE PORTAL DEFAULT
 
 A client can be given its own idle window on its Edit Client page (user_idle_settings,
 keyed by the same userId as these claims). That row used to be enforced only in the

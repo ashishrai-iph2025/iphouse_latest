@@ -20,11 +20,11 @@ reports_api serves GET /v1/overview/{dataset}, which already defaults to the
 window the client landing page shows: the last seven days, against the seven
 before them. This is the portal's door to it.
 
-NOT under /v1/sports, and that is deliberate over there rather than an accident
+NOT under /v1/vod, and that is deliberate over there rather than an accident
 of routing: the question it answers is "how did this client's enforcement go
 this week", across every platform — search engines, Open Web, YouTube, Telegram,
 social — which is a question about the dashboards, not about sports. The masters
-endpoints sit outside /v1/sports for the same reason. Guessing the sports prefix
+endpoints sit outside /v1/vod for the same reason. Guessing the sports prefix
 is what produced "reports API returned 404" here.
 
 ── Passed through, not assembled ────────────────────────────────────────────
@@ -131,7 +131,7 @@ func ReportsOverview(w http.ResponseWriter, r *http.Request) {
 		Which dataset the overview is asked of.
 
 		The default is NAMED rather than taken from the catalog's first entry,
-		which is what it was. /v1/sports/datasets lists every dataset the service
+		which is what it was. /v1/vod/datasets lists every dataset the service
 		can be queried over — open-web, open-web-source and the rest — in an
 		order that is the registry's business, so the first of them is whichever
 		one happens to be declared first and has no relationship to the measures
