@@ -296,6 +296,27 @@ var migrations = []Migration{
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		},
 	},
+	/*
+		007 moves the client login code from the COMPANY to the PERSON.
+
+		It lived on dcp_user, and a company has several logins, so they shared one
+		code: whichever colleague signed in last held it, and everyone else's
+		emailed code came back "Incorrect". Reported by users in France and
+		Vietnam, where mail is slow enough that a Resend — which also replaced the
+		code — landed before the first email did. See SendOTP.
+
+		Nullable with no default, like 001: adding them cannot fail on existing
+		rows, and the previous build never reads them, so the two can run side by
+		side. dcp_user.twofa_code is left in place and simply stops being read.
+	*/
+	{
+		Version: 7,
+		Name:    "dcp_user_login: twofa_code, twofa_code_expires (per-person OTP)",
+		Statements: []string{
+			`ALTER TABLE dcp_user_login ADD COLUMN twofa_code VARCHAR(10) NULL DEFAULT NULL`,
+			`ALTER TABLE dcp_user_login ADD COLUMN twofa_code_expires DATETIME NULL DEFAULT NULL`,
+		},
+	},
 }
 
 /*
@@ -324,6 +345,11 @@ var expected = []struct{ Table, Column string }{
 	   logs and hands back nil, so the catalogue renders as a portal with no
 	   report modules in it. */
 	{"dcp_module", "category"},
+	/* Every client login needs these. Their absence is loud on send — the code
+	   cannot be stored and sign-in stops with "Could not start verification" —
+	   but on verify a failed read looks exactly like "No active code". */
+	{"dcp_user_login", "twofa_code"},
+	{"dcp_user_login", "twofa_code_expires"},
 }
 
 const migrationsTable = "schema_migrations"

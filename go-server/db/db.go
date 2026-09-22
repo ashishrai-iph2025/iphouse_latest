@@ -341,12 +341,6 @@ func Migrate() {
 	addColumnIfMissing("dcp_super_admin", "loginId", "INT NULL")
 	addColumnIfMissing("dcp_super_admin", "twofa_code", "VARCHAR(10) NULL")
 	addColumnIfMissing("dcp_super_admin", "twofa_code_expires", "DATETIME NULL")
-	/* The client login code, per PERSON. It used to live on dcp_user — the
-	   client COMPANY — so every login of one company shared a single code:
-	   a colleague signing in overwrote yours, and the code in your inbox was
-	   "Incorrect". See SendOTP. dcp_user.twofa_code is left in place, unused. */
-	addColumnIfMissing("dcp_user_login", "twofa_code", "VARCHAR(10) NULL")
-	addColumnIfMissing("dcp_user_login", "twofa_code_expires", "DATETIME NULL")
 	// Per-staff OTP login: each Admin/Super Admin can independently require an
 	// email OTP after their password (default off). Managed per row on the
 	// Super Admin Control → Admins & Super Admins tab.
