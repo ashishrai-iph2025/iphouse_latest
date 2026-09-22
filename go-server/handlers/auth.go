@@ -349,6 +349,38 @@ func otpUserID(email string, fallback int64) int64 {
 	return fallback
 }
 
+/*
+otpEmailFor is the address a client's login code is keyed on — the PERSON.
+
+The code used to be keyed on the company (dcp_user.userId), and a company has
+several logins: whoever signed in last held the only code, and everyone else's
+emailed code came back "Incorrect". The entered email wins; the userId fallback
+is for a caller that sends only a userId, and is ordered so that send and verify
+settle on the same login.
+*/
+func otpEmailFor(email string, userID int64) string {
+	if e := strings.TrimSpace(email); e != "" {
+		return e
+	}
+	if userID != 0 {
+		if row, _ := db.QueryOne("SELECT login_username FROM dcp_user_login WHERE userId = ? AND is_active = 1 ORDER BY loginId ASC LIMIT 1", userID); row != nil {
+			return strFromAny(row["login_username"])
+		}
+	}
+	return ""
+}
+
+// otpPersonKey keys the in-memory wrong-guess counter by person rather than by
+// company: the lowest active loginId for the email, so every request agrees. 0
+// where the email has no active login, which no real person's counter uses.
+func otpPersonKey(email string) int64 {
+	row, _ := db.QueryOne("SELECT MIN(loginId) AS id FROM dcp_user_login WHERE login_username = ? AND is_active = 1", email)
+	if row == nil {
+		return 0
+	}
+	return intFromAny(row["id"])
+}
+
 func SendOTP(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		UserID int64  `json:"userId"`
@@ -393,7 +425,7 @@ func SendOTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if recipient == "" {
-		loginRow, _ := db.QueryOne("SELECT login_username, first_name, last_name FROM dcp_user_login WHERE userId = ? AND is_active = 1 LIMIT 1", body.UserID)
+		loginRow, _ := db.QueryOne("SELECT login_username, first_name, last_name FROM dcp_user_login WHERE userId = ? AND is_active = 1 ORDER BY loginId ASC LIMIT 1", body.UserID)
 		if loginRow == nil {
 			Fail(w, 404, "Login not found")
 			return
@@ -402,14 +434,45 @@ func SendOTP(w http.ResponseWriter, r *http.Request) {
 		loginName = strings.TrimSpace(strFromAny(loginRow["first_name"]) + " " + strFromAny(loginRow["last_name"]))
 	}
 
-	digits := genOTPDigits()
+	/* ONE code per PERSON, and Resend repeats it while it is still valid.
 
-	// A newly issued code starts with a clean attempt budget.
-	clearOTPAttempts(body.UserID)
+	   Both halves were "Incorrect code" for a person holding the right email:
 
-	// Use MySQL's own clock (explicitly UTC_TIMESTAMP(), not NOW()) for the expiry
-	// so verification never depends on the connection's or server's tz config.
-	db.Exec("UPDATE dcp_user SET twofa_code = ?, twofa_code_expires = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE) WHERE userId = ?", digits, body.UserID)
+	     · The code lived on dcp_user, the COMPANY, so any colleague signing in
+	       replaced it. Now it lives on the person's own login rows.
+	     · Resend minted a new code and discarded the old. Mail to some regions
+	       takes longer than the 60 seconds before Resend unlocks — European
+	       corporate servers greylist a first delivery for minutes — so the
+	       delayed FIRST email arrived and its code had already been replaced.
+	       Repeating the live code makes every email for this sign-in carry the
+	       same digits, whichever lands first.
+
+	   A repeated code KEEPS its remaining guesses. Resetting the budget on
+	   resend would make Resend a way to buy unlimited attempts at one code. */
+	digits := ""
+	if cur, _ := db.QueryOne(`SELECT twofa_code FROM dcp_user_login
+		WHERE login_username = ? AND is_active = 1 AND twofa_code IS NOT NULL
+		  AND twofa_code_expires > UTC_TIMESTAMP()
+		ORDER BY twofa_code_expires DESC LIMIT 1`, recipient); cur != nil {
+		digits = strFromAny(cur["twofa_code"])
+	}
+	if digits == "" {
+		digits = genOTPDigits()
+		clearOTPAttempts(otpPersonKey(recipient))
+	}
+
+	/* Every active login row for this address, because one person can hold
+	   logins on several client accounts and verify reads whichever is freshest.
+	   MySQL's own UTC clock for the expiry, so neither the connection's nor the
+	   reader's timezone can move it. MustExec rather than Exec: the old path
+	   ignored a failed write and emailed a code that was never stored. */
+	if err := db.MustExec(`UPDATE dcp_user_login
+		SET twofa_code = ?, twofa_code_expires = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE)
+		WHERE login_username = ? AND is_active = 1`, digits, recipient); err != nil {
+		log.Printf("[send-otp] storing the code for %s failed: %v", recipient, err)
+		Fail(w, 500, "Could not start verification. Please try again.")
+		return
+	}
 
 	// Greet the person signing in (login first/last name). Fall back to the email
 	// address, then the client/company name, if no personal name is on the login.
@@ -487,24 +550,36 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve the same canonical userId the OTP was stored against.
+	// Resolve the same canonical userId and PERSON the OTP was stored against.
 	body.UserID = otpUserID(body.Email, body.UserID)
-	if body.UserID == 0 || body.Code == "" {
+	email := otpEmailFor(body.Email, body.UserID)
+	code := strings.TrimSpace(body.Code)
+	if email == "" || code == "" {
 		Fail(w, 400, "Missing parameters")
 		return
 	}
 
-	// Compute the expiry check in SQL using MySQL's own UTC_TIMESTAMP() — avoids
-	// any Go/driver timezone dependency entirely.
-	user, _ := db.QueryOne("SELECT userId, twofa_code, (twofa_code_expires IS NOT NULL AND twofa_code_expires > UTC_TIMESTAMP()) AS not_expired FROM dcp_user WHERE userId = ? LIMIT 1", body.UserID)
-	if user == nil {
-		OK(w, map[string]any{"success": false, "error": "User not found"})
-		return
+	/* The person's own code — see SendOTP for why it is not the company's.
+	   The freshest across their login rows, which SendOTP keeps identical.
+	   Expiry is decided in SQL against MySQL's UTC_TIMESTAMP(), so no Go,
+	   driver or reader timezone takes part. */
+	user, _ := db.QueryOne(`SELECT twofa_code,
+		(twofa_code_expires IS NOT NULL AND twofa_code_expires > UTC_TIMESTAMP()) AS not_expired
+		FROM dcp_user_login
+		WHERE login_username = ? AND is_active = 1 AND twofa_code IS NOT NULL
+		ORDER BY twofa_code_expires DESC LIMIT 1`, email)
+	storedCode := ""
+	if user != nil {
+		storedCode = strFromAny(user["twofa_code"])
 	}
-	storedCode := strFromAny(user["twofa_code"])
 	if storedCode == "" {
 		OK(w, map[string]any{"success": false, "error": "No active code"})
 		return
+	}
+	attemptKey := otpPersonKey(email)
+	burnCode := func() {
+		db.Exec("UPDATE dcp_user_login SET twofa_code = NULL, twofa_code_expires = NULL WHERE login_username = ?", email)
+		clearOTPAttempts(attemptKey)
 	}
 
 	/* The OTP lockout, alongside the per-code cap below.
@@ -524,26 +599,23 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	// brute-forced (per-IP rate limiting alone is not enough — an attacker with
 	// several source addresses still gets there). Burn the code after too many
 	// wrong guesses and force the user to request a fresh one.
-	if otpAttemptsExceeded(body.UserID) {
-		db.Exec("UPDATE dcp_user SET twofa_code = NULL, twofa_code_expires = NULL WHERE userId = ? LIMIT 1", body.UserID)
-		clearOTPAttempts(body.UserID)
+	if otpAttemptsExceeded(attemptKey) {
+		burnCode()
 		OK(w, map[string]any{"success": false, "error": "Too many incorrect attempts. Please request a new code."})
 		return
 	}
 	// Constant-time compare so the response time can't leak the code prefix.
-	if subtle.ConstantTimeCompare([]byte(storedCode), []byte(body.Code)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(storedCode), []byte(code)) != 1 {
 		lock := RecordFailure(AcctLogin, otpAcct, FailOTP)
 		if lock.Locked {
-			db.Exec("UPDATE dcp_user SET twofa_code = NULL, twofa_code_expires = NULL WHERE userId = ? LIMIT 1", body.UserID)
-			clearOTPAttempts(body.UserID)
+			burnCode()
 			notifyIfJustLocked(lock, body.Email, "")
 			OK(w, map[string]any{"success": false, "locked": true, "error": LockMessage(lock)})
 			return
 		}
-		left := registerOTPFailure(body.UserID)
+		left := registerOTPFailure(attemptKey)
 		if left <= 0 {
-			db.Exec("UPDATE dcp_user SET twofa_code = NULL, twofa_code_expires = NULL WHERE userId = ? LIMIT 1", body.UserID)
-			clearOTPAttempts(body.UserID)
+			burnCode()
 			OK(w, map[string]any{"success": false, "error": "Too many incorrect attempts. Please request a new code."})
 			return
 		}
@@ -555,9 +627,8 @@ func VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clearOTPAttempts(body.UserID)
 	ClearFailures(AcctLogin, otpAcct, FailOTP)
-	db.Exec("UPDATE dcp_user SET twofa_code = NULL, twofa_code_expires = NULL WHERE userId = ? LIMIT 1", body.UserID)
+	burnCode()
 
 	// The username MUST be the exact email the user authenticated with — never
 	// re-derived by userId (a client account can have several different logins,
