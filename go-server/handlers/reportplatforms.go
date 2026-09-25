@@ -578,6 +578,21 @@ var (
 			Needs: colDelistingBatchID, APIMeasure: "delistingBatches", Role: "linking"},
 		{Key: "byKeyword", Column: "Keyword", Alts: []string{"KeywordName"},
 			Label: "Top 10 Keywords", Viz: "hbar"},
+		/* WHICH SEARCH-RESULTS PAGE the infringing link was found on — 1, 2, 3,
+		   4, 5+. A link on page one is the one a viewer actually clicks, so the
+		   distribution is how visible the piracy was, not merely how much.
+
+		   Identification only (`ordinal` draws one series): the bucket describes
+		   where a link was FOUND, and a removal count split by it would read as
+		   "page-five links are harder to take down", which the column cannot say.
+
+		   Pinned to the LINKING side because a page number belongs to a search
+		   result — the host table records no such thing. Kept in bucket order,
+		   never ranked by volume, and the "(none)" group is dropped: until the ETL
+		   fills the column every row lands there, and a single "(none)" bar would
+		   read as a finding rather than as a column not yet populated. */
+		{Key: dimPageNo, Column: "PageNoBucket",
+			Label: "Page Number - Identification", Viz: "ordinal", Role: "linking"},
 		// Columns: a handful of languages carrying wildly different volumes, where
 		// the pair of bars per language is the comparison being made.
 		{Key: "byLanguage", Column: "LanguageName", Alts: []string{"Language", "AudioLanguage"},
@@ -685,10 +700,15 @@ var (
 	extraKPICandidates = []struct{ Key, Expr, NeedsCol string }{
 		{"views", "SUM(TotalViews)", "TotalViews"},
 		{"views", "SUM(Views)", "Views"},
-		{"viewsSaved", "SUM(ViewsSaved)", "ViewsSaved"},
+		/* FLOORED AT ZERO PER ROW — see viewsSavedFloor for the whole of why.
+		   Briefly: the warehouse writes this column negative where content had
+		   already out-earned the value its genre is assumed to be worth, and a
+		   plain SUM both publishes a negative headline and lets those rows
+		   cancel the ones that did save views. */
+		{"viewsSaved", "SUM(GREATEST(ViewsSaved, 0))", "ViewsSaved"},
 		// dashboards.SocialMediaDashboard spells the same column TotalViewsSaved,
 		// which is why Social & UGC showed Views and no Views Saved beside it.
-		{"viewsSaved", "SUM(TotalViewsSaved)", "TotalViewsSaved"},
+		{"viewsSaved", "SUM(GREATEST(TotalViewsSaved, 0))", "TotalViewsSaved"},
 		{"impactedSubscribers", "SUM(Subscribers)", "Subscribers"},
 		/* The WHOLE audience, against impactedSubscribers' "audience we took
 		   down". Same column, different question, and both are wrong as a plain
@@ -832,6 +852,55 @@ func channelKPIs(shape tableShape) map[string]string {
 }
 
 /*
+vodAccountsSuspendedKPI is "how many of those accounts are GONE" for the VOD
+daily rollups — the tile that belongs beside channelKPIs' count and had no way
+of being offered.
+
+── WHY IT WAS MISSING FROM EVERY VOD SECTION ───────────────────────────────
+
+inferSpec offers channelsSuspended off RemovalChannelStatus, and correctly so:
+on the SPORTS raw tables that is the channel's own status, while ChannelStatus
+beside it is about something else and reading it there was a documented column
+mix-up. But the VOD rollups — Agg_Daily_Youtube_MasterNew and
+Agg_Daily_Telegram_MasterNew — carry no RemovalChannelStatus at all. They record
+the channel's status in ChannelStatus, and nothing was looking for it, so the
+YouTube and Telegram reports drew a Channels tile with nothing beside it saying
+how many of those channels enforcement had closed.
+
+── WHY THE GUARD IS THE WHOLE FUNCTION ─────────────────────────────────────
+
+The condition is "has ChannelStatus AND has NO RemovalChannelStatus", and the
+second half is what keeps the old mix-up from coming back. A table carrying both
+is a sports table, where RemovalChannelStatus is the right column and inferSpec's
+own branch already claims it; this must not offer a second, wrong expression for
+the same tile. Presence alone is exactly the test that went wrong before, so it
+is not the test used.
+
+'Dead' is the warehouse's spelling and it is matched as an equality rather than
+LIKE '%Suspend%' — the LIKE matched no row on any table and reported every
+client as having suspended nothing. The comparison is case-insensitive by
+collation, which matters because this warehouse stores 'DEAD' as well as 'Dead'
+on other tables.
+
+Counted over the channel's ADDRESS where there is one, its name otherwise: the
+same identity channelKPIs counts, so "suspended" can never exceed "total" by
+counting the two off different columns.
+*/
+func vodAccountsSuspendedKPI(shape tableShape) map[string]string {
+	out := map[string]string{}
+	if !shape.has(colChannelStatus) || shape.has(colRemovalChannelStatus) {
+		return out
+	}
+	id := shape.firstOf([]string{colChannelURL, colChannelName})
+	if id == "" {
+		return out
+	}
+	out["channelsSuspended"] = fmt.Sprintf(
+		"COUNT(DISTINCT CASE WHEN %s = 'Dead' THEN %s END)", colChannelStatus, id)
+	return out
+}
+
+/*
 socialVODKPIs are the Social Media & UGC report's own tiles: the claim split and
 the audience.
 
@@ -865,6 +934,40 @@ func socialVODKPIs(table string, shape tableShape) map[string]string {
 		out["totalSubscribers"] = fmt.Sprintf("SUM(%s)", subs)
 		if st := shape.firstOf([]string{"ProfileRemovalStatus"}); st != "" {
 			out["impactedSubscribers"] = fmt.Sprintf("SUM(CASE WHEN %s = 'Dead' THEN %s ELSE 0 END)", st, subs)
+		}
+	}
+	/* ── The accounts the platform has CLOSED ────────────────────────────
+
+	   This report's twin of the channel tables' channelsSuspended, under the
+	   key that names what a social account is. It had neither: the tile only
+	   ever reached a section through a row walk over RemovalProfileStatus, a
+	   column this rollup does not have — it spells the same thing
+	   ProfileRemovalStatus — so Social & UGC showed how many accounts were
+	   carrying infringements and never how many of them were gone.
+
+	   EITHER SIGNAL COUNTS. The warehouse records a closed account two ways
+	   here and does not always fill both: TotalProfilesSuspended is the per-row
+	   flag, ProfileRemovalStatus the account's own status. Requiring both would
+	   report the intersection.
+
+	   COUNT(DISTINCT ProfileURL), never SUM(TotalProfilesSuspended): this
+	   table's grain is (day, asset, platform, …) and one profile spans many
+	   rows, so summing the flag counts a single closed account once per row it
+	   appears on. Counted over ProfileURL — the same identity channelKPIs
+	   counts for this table — so the figure can never exceed the Channels tile
+	   beside it. */
+	if p := shape.firstOf([]string{colProfileURL}); p != "" {
+		var tests []string
+		if f := shape.firstOf([]string{"TotalProfilesSuspended"}); f != "" {
+			tests = append(tests, f+" > 0")
+		}
+		if st := shape.firstOf([]string{"ProfileRemovalStatus"}); st != "" {
+			tests = append(tests, st+" = 'Dead'")
+		}
+		if len(tests) > 0 {
+			out["profilesSuspended"] = fmt.Sprintf(
+				"COUNT(DISTINCT CASE WHEN %s THEN %s END)",
+				strings.Join(tests, " OR "), p)
 		}
 	}
 	return out
@@ -1180,6 +1283,8 @@ tell a bucket with no rows from a bucket that was truncated.
 var closedSetDims = map[string]bool{
 	"byTAT": true, "byGroupType": true, "byQuality": true,
 	"byMatchDay": true,
+	// Five page buckets; a cut one is a hole in the sequence.
+	dimPageNo: true,
 	/* Every day in the window, including the quiet ones — a day-wise panel cut
 	   to its ten busiest days reads as a timeline and is not one. */
 	dimOverallByDay: true,
@@ -1200,6 +1305,50 @@ func rankOfDim(key string) int {
 // inferSpec derives a runnable spec for one table. `ok` is false when the table
 // has no recognisable client or date column, which means it cannot be reported
 // on at all — the caller says so rather than running a broken query.
+/*
+delistedExprFor is how a table says "a search engine dropped this link", and the
+two shapes the warehouse records it in.
+
+	IsGoogleDelisted / IsBingDelisted   a FLAG per URL, on the sports raw tables.
+	                                    The union is a real distinct count and
+	                                    this is exact.
+	GoogleDelistedCount / BingDelistedCount
+	                                    two SUMMED counts per day, on the VOD
+	                                    linking rollup. See below.
+
+── THE ROLLUP CANNOT ANSWER IT EXACTLY ─────────────────────────────────────
+
+From two sums the size of the union is not recoverable. Only its bounds are:
+
+	GREATEST(g, b)  <=  |G u B|  <=  g + b
+
+GREATEST. Delisting is sent to both engines as one batch — the table carries a
+single DelistingBatchId per group — so the two counts are the same URLs and
+their sum is close to double the truth. On a client month with Google and Bing
+both at 478,861 against 812,400 identifications, the sum reports 957,722
+de-indexings: more links dropped than were ever found.
+
+It also feeds the Removed tile on a two-sided report (see
+openWebRemovedFromDelisting), so the bound that can only UNDER-report is the one
+to take.
+
+Without the second branch the VOD Open Web report had no de-indexing figure at
+all: its De-Indexing card drew an em dash while the Google De-Indexed and Bing
+De-Indexed cards beside it each showed 478.9K.
+
+A function rather than inline code so it can be tested without a warehouse — the
+same reason channelKPIs and socialVODKPIs are functions.
+*/
+func delistedExprFor(shape tableShape) string {
+	if shape.has("IsGoogleDelisted") && shape.has("IsBingDelisted") {
+		return "COUNT(CASE WHEN IsGoogleDelisted=1 OR IsBingDelisted=1 THEN 1 END)"
+	}
+	if shape.has("GoogleDelistedCount") && shape.has("BingDelistedCount") {
+		return "GREATEST(SUM(GoogleDelistedCount), SUM(BingDelistedCount))"
+	}
+	return ""
+}
+
 func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 	shape := tableShapeOf(table)
 	if len(shape.Columns) == 0 {
@@ -1254,9 +1403,7 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 
 	// Delisting is a third measure, and only the linking side has it — a link
 	// dropped by a search engine is a different event from a page taken down.
-	if shape.has("IsGoogleDelisted") && shape.has("IsBingDelisted") {
-		s.DelistedExpr = "COUNT(CASE WHEN IsGoogleDelisted=1 OR IsBingDelisted=1 THEN 1 END)"
-	}
+	s.DelistedExpr = delistedExprFor(shape)
 
 	/* The ENFORCEMENT ACTION this table records, counted per day beside the
 	   volumes — see actionMeasures. One per table by construction: the notice id
@@ -1327,6 +1474,15 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 		s.ExtraKPI[k] = expr
 	}
 	for k, expr := range socialVODKPIs(table, shape) {
+		s.ExtraKPI[k] = expr
+	}
+	/* The suspended-account tile for the VOD rollups, whose channel status lives
+	   in a column inferSpec's branch below does not look at. Set BEFORE that
+	   branch so the branch's assignment wins on any table that has both — see
+	   vodAccountsSuspendedKPI, which also declines such a table outright. Two
+	   guards for one rule because the tile being wrong looks exactly like the
+	   tile being right. */
+	for k, expr := range vodAccountsSuspendedKPI(shape) {
 		s.ExtraKPI[k] = expr
 	}
 	if shape.has("RemovalChannelStatus") && shape.has("ChannelURL") {
@@ -1474,7 +1630,7 @@ func inferSpec(platformKey, label, table string) (reportSpec, bool) {
 			   per match day" means every match day, and a top 15 would silently
 			   drop the rest of the season. Franchise used to be here and is a
 			   ranking now — see its candidate. */
-			"byMatchDay",
+			"byMatchDay", dimPageNo,
 			// Every day in the window, quiet ones included.
 			dimOverallByDay:
 			limit = 0
@@ -1588,6 +1744,9 @@ func DIMFilterParam(dimKey string) string {
 		return "domain"
 	case "byTAT":
 		return "tatBucket"
+	// The open-web dataset's own parameter for the column.
+	case dimPageNo:
+		return "pageNoBucket"
 	case "byPlatform":
 		return "platform"
 	case "byChannel":
@@ -1756,11 +1915,38 @@ func ReportPlatformsList(w http.ResponseWriter, r *http.Request) {
 	canReveal := maySeeWarehouseNames(r)
 	reveal := canReveal && r.URL.Query().Get("reveal") == "1"
 
+	/* WHICH REPORT PAGE EACH PLATFORM BELONGS TO — the VOD one or the Sports one.
+
+	   Resolved once for the whole list rather than per row: vodOnlyPlatformKeys
+	   walks every configured platform to answer, so asking it per platform would
+	   be that walk once per platform.
+
+	   It is published because /api/reports/* is scoped, and a caller that does
+	   not say which page it is asking about is answered for the SPORTS one. That
+	   is right for a reader — the two pages are separate grants — and it is what
+	   made the Page layout tab say "Client list unavailable" against every VOD
+	   report: it asked /api/reports/options with no scope, got a 403 saying this
+	   account has no access to that report, and rendered an empty picker with
+	   nothing to say the question had been the wrong one. The configuration
+	   screen spans both pages, so it has to be told which each platform is
+	   rather than guessing from the key. */
+	vodOnly := vodOnlyPlatformKeys()
+
 	out := []map[string]any{}
 	for _, p := range loadPlatforms() {
 		item := map[string]any{
 			"key": p.Key, "label": p.Label, "order": p.Order,
 			"enabled": p.Enabled,
+			/* The value to send as `scope` on /api/reports/*: "vod", or empty
+			   for the Sports page, which is that API's own default. Named for
+			   the parameter it fills so there is nothing to translate at the
+			   call site. */
+			"reportScope": func() string {
+				if vodOnly[p.Key] {
+					return scopeVOD
+				}
+				return ""
+			}(),
 			/* What the platform IS. Reported to everyone who can open this
 			   screen, aliased view included: which kind of report a platform is
 			   says nothing about a warehouse table, and a page that cannot see
@@ -2122,6 +2308,14 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	ran := 0
 	// Per-source, for platforms whose tables are not the same kind of thing.
 	roleKPI := map[string]map[string]int64{}
+	/* The same, for the COMPARISON window.
+
+	   Only openWebRemovedFromDelisting reads it, and it needs it: that rule
+	   rebuilds `removed` out of two per-side figures, so a previous window left
+	   as the plain sum would put a recomposed figure beside a differently
+	   composed one and report the difference between the two DEFINITIONS as a
+	   change in enforcement. */
+	roleKPIPrev := map[string]map[string]int64{}
 	/* Open Web's share of `removed`, per window, so the live figure can be swapped
 	   in for it — see openWebLiveRemoved. Attributed BY TABLE and not by role: the
 	   role is inferred from the presence of an InfringingDomain column, which the
@@ -2135,6 +2329,13 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	// enforcementactions.go. At most one per role, because at most one of a
 	// role's tables carries an action id at all.
 	roleAction := map[string]string{}
+	// The client's hostnames across every table, for the suspension tiles.
+	clientHosts := map[string]bool{}
+	hostsReported, hostsPartial := false, false
+	// A summary's Total Websites, composed per channel — see summaryWebsites.
+	summaryWeb := isSummaryPlatform(p)
+	var webNow, webPrev int64
+	webSeen, webPrevSeen := false, false
 
 	/* ── The platform's tables, together ──────────────────────────────────
 	   A platform reading two tables ran them one after the other, so Open Web
@@ -2216,6 +2417,12 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 					mergeKPI(roleKPI[role], k, numOf(v))
 				}
 			}
+			if summaryWeb {
+				if n, ok := summaryWebsites(s.Table, pk); ok {
+					webNow += n
+					webSeen = true
+				}
+			}
 			if isOpenWebSportsTable(s.Table) {
 				sawOpenWebTable = true
 				openWebETLNow += numOf(pk["removed"])
@@ -2242,9 +2449,23 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 					continue // derived, or the window itself — not summable
 				}
 				kpiPrev[k] += numOf(v)
+				// Kept per side as well, so the comparison window can be
+				// recomposed exactly as the current one is.
+				if role != "" {
+					if roleKPIPrev[role] == nil {
+						roleKPIPrev[role] = map[string]int64{}
+					}
+					mergeKPI(roleKPIPrev[role], k, numOf(v))
+				}
 			}
 			if isOpenWebSportsTable(s.Table) {
 				openWebETLPrev += numOf(pp["removed"])
+			}
+			if summaryWeb {
+				if n, ok := summaryWebsites(s.Table, pp); ok {
+					webPrev += n
+					webPrevSeen = true
+				}
 			}
 		}
 		for _, row := range asRows(part["daily"]) {
@@ -2315,6 +2536,17 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 		for _, d := range s.Dimensions {
 			dimLabels[d.Key] = d.Label
 		}
+		/* Every hostname this client's rows carry, on either side, unioned —
+		   a site that both links and hosts is one site. See domainsuspension.go. */
+		if hs, has := part[specHostnamesKey]; has {
+			hostsReported = true
+			for _, h := range asStrings(hs) {
+				clientHosts[h] = true
+			}
+			if part[specHostnamesPartialKey] == true {
+				hostsPartial = true
+			}
+		}
 	}
 
 	ident, removed := kpi["identified"], kpi["removed"]
@@ -2337,6 +2569,27 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 		}
 	}
 
+	/* ── A two-sided open-web report counts de-indexing as its linking half's
+	   enforcement, not that half's takedowns. See openWebRemovedFromDelisting
+	   for the whole of why, and for why the linking side's own RemovalCount
+	   drops out rather than being added to.
+
+	   AFTER the live swap above, deliberately. That swap is the SPORTS open-web
+	   table's, keyed on `sawOpenWebTable`, and the two never apply to the same
+	   platform — but ordering them anyway means that if a platform is ever
+	   configured to read both, the recomposition is what survives, and it is the
+	   one built from the sides rather than from a total. */
+	if v, ok := openWebRemovedFromDelisting(roleKPI, platformRoles); ok {
+		removed = v
+		/* The trend has to move with the tile. It is what the removal-rate chart
+		   is drawn from, so leaving it summed would put this figure on a card
+		   above a line computed from a different one. */
+		for d := range daily {
+			daily[d]["removed"] = openWebDailyFromDelisting(
+				roleDaily["linking"][d], roleDaily["host"][d])
+		}
+	}
+
 	/* The reader named the assets, so the count of titles in scope is how many
 	   they named — exact, and needing no query. Applied after the merge so it
 	   wins over the estimate above. */
@@ -2350,6 +2603,22 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	// computed from the live one.
 	kpiOut["removed"] = removed
 	kpiOut["pending"] = max64(0, ident-removed)
+	/* Domains Suspended and Total Traffic Impacted — this client's hostnames
+	   against the suspended list. A truncated hostname list undercounts, and
+	   the band says so rather than presenting the figure as whole. */
+	applySuspensionKPIs(kpiOut, clientHosts, hostsReported)
+	/* A summary's Total Websites is every PLACE the content was found — the
+	   Open Web domains on both sides, plus the social profiles and Telegram
+	   channels — not only the tables that happen to have a domain column. */
+	if webSeen {
+		kpiOut["totalDomains"] = webNow
+	}
+	if hostsPartial {
+		if _, set := kpiOut[kpiDomainsSuspended]; set {
+			notices = append(notices, "Domains Suspended and Total Traffic Impacted cover the "+
+				"hostnames the reports service returned, which was capped for this window.")
+		}
+	}
 	/*
 		THE RATE IS A SHARE OF WHAT COULD BE REMOVED.
 
@@ -2370,27 +2639,15 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 		this line, which is why the first attempt to hold it to manual claims
 		had no effect at all.
 	*/
-	/* ONLY where the automatic claims are Content ID's.
+	/* Removals over the TOTAL, on every platform including YouTube.
 
-	   This used to key on manualClaims being present at all, which was the
-	   same thing while YouTube was the only section carrying it. Social media
-	   carries manual and auto claims too — SocialMediaDashboard splits every
-	   infringement between them — and there the premise is false: an auto
-	   claim on a social platform IS reported and does come down. Across the
-	   six clients with social auto claims, removals exceed manual claims on
-	   five, so dividing by manual put their Social removal rate at 115%,
-	   120%, 160%. The premise holds for one table, so the rule names it. */
-	ytClaims := false
-	for _, sp := range specs {
-		if tableHasAutoClaims(sp.Table) {
-			ytClaims = true
-			break
-		}
-	}
+	   This divided by manualClaims wherever that tile existed, to keep the
+	   YouTube rate from collapsing when Content ID's claims were added to the
+	   total but not to the removals. The claims are now counted as removed —
+	   see applyAutoClaimKPIs, where they belong — so the compensation is not
+	   only unnecessary, it would report more than 100%: the numerator now
+	   includes the very claims this denominator left out. */
 	base := ident
-	if m := numOf(kpi["manualClaims"]); m > 0 && ytClaims {
-		base = m
-	}
 	pct := 0.0
 	if base > 0 {
 		pct = float64(removed) / float64(base) * 100
@@ -2414,12 +2671,25 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 				kpiPrevOut["removed"] = pRemoved
 			}
 		}
+		/* And the same recomposition, off the comparison window's own per-side
+		   figures. Both windows or neither: a recomposed current against a
+		   summed previous would report the difference between two DEFINITIONS
+		   as a change in enforcement, on the one number a reader takes at a
+		   glance. See openWebRemovedFromDelisting. */
+		if v, ok := openWebRemovedFromDelisting(roleKPIPrev, platformRoles); ok {
+			pRemoved = v
+			kpiPrevOut["removed"] = pRemoved
+		}
 		kpiPrevOut["pending"] = max64(0, pIdent-pRemoved)
 		pPct := 0.0
 		if pIdent > 0 {
 			pPct = float64(pRemoved) / float64(pIdent) * 100
 		}
 		kpiPrevOut["removalPct"] = roundTo(pPct, 2)
+		// Composed exactly as the current window's — see summaryWebsites.
+		if webPrevSeen {
+			kpiPrevOut["totalDomains"] = webPrev
+		}
 	}
 
 	dates := make([]string, 0, len(daily))
@@ -2453,6 +2723,11 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 				rows = rows[:repeatOffenderLimit]
 			}
 			bdOut[key] = rows
+			continue
+		}
+		// Search-result pages read in page order, without the unfilled bucket.
+		if key == dimPageNo {
+			bdOut[key] = pageNoRows(rows)
 			continue
 		}
 		sort.Slice(rows, func(i, j int) bool { return numOf(rows[i]["urls"]) > numOf(rows[j]["urls"]) })

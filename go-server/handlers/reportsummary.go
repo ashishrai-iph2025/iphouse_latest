@@ -60,6 +60,8 @@ var knownFilterParams = []string{
 	"assetId", "language", "country", "searchEngine", "tatBucket",
 	"platform", "channel", "groupType", "quality", "genre", "infringementType",
 	"deliveryType", "keyword", "domain",
+	// Open Web linking side: the search-results page a link was found on.
+	"pageNoBucket",
 	// Mobile apps.
 	"sourceFeed", "appName", "category", "developer", "storeType",
 	"contentRating", "removalStatus",
@@ -224,6 +226,14 @@ func summaryDimKey(key string) string {
 // dropped rather than shown as a zero.
 var summaryKPIOrder = []string{
 	"totalAssets", "totalPlaces", "channelsSuspended",
+	/* Beside it, not folded into it. Social records the closed account as a
+	   PROFILE and the other platforms as a CHANNEL, and the Summary reads every
+	   platform at once — so leaving this out meant the band counted the channels
+	   YouTube and Telegram had closed and silently dropped the accounts social
+	   had. Kept as its own tile because the two are counted off different
+	   columns on different tables, and a single merged figure would be one both
+	   halves could disagree with. */
+	"profilesSuspended",
 	"impactedSubscribers", "viewsSaved", "savedRevenue",
 }
 
@@ -571,7 +581,8 @@ func summarySection(platforms []platformDef, clientID string) (map[string]any, b
 	tiles := []string{}
 	for _, k := range []string{
 		"totalAssets", "identified", "totalPlaces", "removalPct",
-		"channelsSuspended", "impactedSubscribers", "viewsSaved", "savedRevenue",
+		"channelsSuspended", "profilesSuspended",
+		"impactedSubscribers", "viewsSaved", "savedRevenue",
 	} {
 		if k == "identified" || k == "removalPct" || extraSeen[k] {
 			tiles = append(tiles, k)

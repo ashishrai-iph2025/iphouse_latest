@@ -259,6 +259,19 @@ var apiMeasure = map[string][]string{
 	// `installs` has no counterpart: InstallCount is a column on the table but
 	// not a measure the service sums, so the tile is absent rather than zero.
 	"channelsSuspended": {"channelsSuspended"},
+	/* The social report's twin of the tile above, and its absence from this map
+	   is why Social & UGC never drew one: the service has declared a
+	   profilesSuspended measure all along, and with no entry here nothing ever
+	   asked for it. The figure reached a section only from a row walk over
+	   RemovalProfileStatus — a column the social DASHBOARD does not carry, it
+	   spells the same thing ProfileRemovalStatus — so on that report it was
+	   neither served nor counted.
+
+	   Deliberately not an alias of channelsSuspended. A suspended account and a
+	   suspended channel are the same act under two names, but a report that
+	   shows both must not fold them into one tile, and the two are counted off
+	   different columns on different tables. */
+	"profilesSuspended": {"profilesSuspended"},
 	"views":             {"views"},
 	/* Views on the rows that are now down. Its own measure rather than anything
 	   derived here: the narrowing is `RemovalStatus = 'Dead'`, a test on rows
@@ -1170,6 +1183,13 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			wantAction = false
 		}
 	}
+	/* The VOD Open Web linking table has no batch id on its rows, so the row
+	   walk below would count nothing. Its batches come from the capture tables
+	   instead — see openwebdelisting.go — and the rows are not paged for them. */
+	var owBatches *openWebBatches
+	if s.ActionKey == "delistingBatches" {
+		owBatches = fetchOpenWebBatches(ctx, c, ds, scope, note)
+	}
 	if !wantAction {
 		for _, d := range s.Dimensions {
 			// Every enforcement panel — see isActionPanel, which is the one list
@@ -1416,21 +1436,45 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			kpi["totalTVChannels"] = n
 		}
 
-		/* The auto-claim figures, and the combined total built from the
-		   `identified` this section actually published — set just above, after
-		   every substitution the block makes — rather than from a second
-		   reading of the summary, so the two halves of that sum can never come
-		   from different windows. */
-		if autoClaimOK {
-			applyAutoClaimKPIs(kpi, autoClaim)
-		}
-
 		// The spec's extra tiles, each only where the dataset actually has it.
 		for name := range s.ExtraKPI {
 			if m, ok := apiMeasureFor(name, ds); ok {
 				kpi[name] = numOf(sum[m])
 			}
 		}
+
+		/* The auto-claim figures, and the combined total built from the
+		   `identified` this section actually published — set above, after
+		   every substitution the block makes — rather than from a second
+		   reading of the summary, so the two halves of that sum can never come
+		   from different windows.
+
+		   AFTER THE LOOP, WHICH IS THE POINT OF THIS ORDER.
+
+		   It ran before, and three of the five figures it sets were silently
+		   thrown away one statement later. totalAssets, totalChannels and views
+		   are all ExtraKPI entries that the YouTube dataset answers — `assets`,
+		   `channels`, `views` — so the loop overwrote the union and the sum with
+		   the daily table's own count, which is the MANUAL side alone. The
+		   unions were computed, four grouped queries were spent on them, and the
+		   result was discarded before anything could read it.
+
+		   Nothing here needs the pre-loop values: `identified` is not an
+		   ExtraKPI key, so the manual figure this reads back is the same one it
+		   read before. What the loop publishes for these three is exactly what
+		   this is meant to replace.
+
+		   The narrowedAssetRows override further down still wins over
+		   totalAssets, deliberately — a reader who named the titles gets the
+		   titles they named. */
+		if autoClaimOK {
+			applyAutoClaimKPIs(kpi, autoClaim)
+		}
+		/* Views Saved is floored here as well as in the service, because THIS
+		   is the side that survives a version skew: a portal talking to a
+		   reports_api that still sums the raw column would otherwise put a
+		   negative back on the tile. See viewsSavedFloor. */
+		floorViewsSaved(kpi)
 		if s.DelistedExpr != "" && ds.HasMeasure("delisted") {
 			kpi["delisted"] = numOf(sum["delisted"])
 		}
@@ -1540,6 +1584,13 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			if rows, ok := narrowedAssetRows(); ok {
 				kpi["totalAssets"] = int64(len(rows))
 			}
+		}
+	}
+
+	if ds.Key == openWebDelistingDataset && s.ActionKey == "delistingBatches" {
+		wantAction = false
+		if owBatches != nil {
+			kpi[s.ActionKey] = owBatches.Total
 		}
 	}
 
@@ -1726,6 +1777,17 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 		   is zero for every group — an empty panel that looks exactly like a
 		   provider nobody has noticed. The raw rows still carry the id. Falls back
 		   to warehouse if reports_api does not return the id columns. */
+		if isActionPanel(d.Key) && ds.Key == openWebDelistingDataset {
+			// See openwebdelisting.go — nil is "No data", never the row walk.
+			switch {
+			case owBatches == nil:
+				return []map[string]any{}
+			case d.Key == dimEngineDelistingBatches:
+				return owBatches.engineRows()
+			case d.Key == dimBatchesByDay:
+				return owBatches.dayRows()
+			}
+		}
 		if isActionPanel(d.Key) {
 			if _, served := apiMeasureFor(d.APIMeasure, ds); !served {
 				if d.CountDistinctCol == "" {
@@ -2401,9 +2463,19 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 	   the linking half counts linking ones — the two figures the report shows
 	   side by side, and the pair that would silently become one number if this
 	   asked the table for whichever domain column it happened to have. */
+	var hostnames []string
 	if s.DomainCol != "" {
 		if rows, ok := domainRows(s.DomainCol); ok {
 			kpi["brands"] = int64(len(foldDomainRows(rows, domainRootBrand)))
+			/* The same full list, handed up for the suspension tiles — which
+			   need the union across BOTH sides, so they are counted in
+			   runPlatform rather than here. See domainsuspension.go. */
+			hostnames = make([]string, 0, len(rows))
+			for _, r := range rows {
+				if h := strFromAny(r["label"]); h != "" {
+					hostnames = append(hostnames, h)
+				}
+			}
 		}
 	}
 
@@ -2420,6 +2492,15 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 	}
 	if len(notices) > 0 {
 		out["notices"] = notices
+	}
+	if hostnames != nil {
+		out[specHostnamesKey] = hostnames
+		hostMu.Lock()
+		partial := hostTruncated[s.DomainCol]
+		hostMu.Unlock()
+		if partial {
+			out[specHostnamesPartialKey] = true
+		}
 	}
 	if failed > 0 {
 		out["queryWarning"] = fmt.Sprintf("%d of this report's requests to reports_api failed for %s: %s",

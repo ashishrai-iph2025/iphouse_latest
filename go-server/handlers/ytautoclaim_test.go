@@ -114,7 +114,7 @@ func TestATruncatedUnionIsWithheld(t *testing.T) {
 /*
 The tiles: what adds, what replaces, and what is measured against what.
 */
-func TestCombinedKPIsAddClaimsAndKeepTheRateOnManual(t *testing.T) {
+func TestCombinedKPIsCountClaimsAsBothIdentifiedAndRemoved(t *testing.T) {
 	kpi := map[string]any{
 		"identified": int64(41095), "removed": int64(39213),
 		"views": int64(2128203552), "totalAssets": int64(170),
@@ -142,17 +142,25 @@ func TestCombinedKPIsAddClaimsAndKeepTheRateOnManual(t *testing.T) {
 	if got := numOf(kpi["totalChannels"]); got != 39000 {
 		t.Errorf("totalChannels = %d, want the union", got)
 	}
-	/* The rate stays against MANUAL. A claim has no removal to be a share of,
-	   so dividing by the combined total would report the rate collapsing every
-	   time Content ID does its job — 39,213/237,582 is 16.5%, against a real
-	   95.4%. */
-	if got := numOf(kpi["removalPct"]); got != 95 {
-		t.Errorf("removalPct rounded to %d%%, want ~95 — measured against manual "+
-			"claims. Against the combined total it reads about 16%%, which is not a "+
-			"fall in performance but a change of denominator", got)
+	/* A claim is counted on BOTH sides. It is in the total because it is an
+	   infringement that was acted on, and in the removals because the claim is
+	   the action — nothing further is owed on it. */
+	if got := numOf(kpi["removed"]); got != 39213+196487 {
+		t.Errorf("removed = %d, want the manual removals plus every claim (235700)", got)
 	}
-	if got := numOf(kpi["pending"]); got != 237582-39213 {
-		t.Errorf("pending = %d, want the combined total less removals", got)
+	/* Pending is what MANUAL enforcement still owes: 41,095 reported, 39,213
+	   down. Counting the claims as outstanding put 196,487 of a client's
+	   237,582 infringements in this tile. */
+	if got := numOf(kpi["pending"]); got != 41095-39213 {
+		t.Errorf("pending = %d, want 1882 — the manual work still outstanding, "+
+			"not every Content ID claim", got)
+	}
+	/* Removals over the TOTAL, like every other platform. The old reading
+	   divided by manual claims to avoid 39,213/237,582 = 16.5%; with the claims
+	   counted as removed the honest figure is 235,700/237,582. */
+	if got := numOf(kpi["removalPct"]); got != 99 {
+		t.Errorf("removalPct rounded to %d%%, want ~99 — removals over the combined "+
+			"total, with the claims counted on both sides", got)
 	}
 }
 
@@ -419,15 +427,21 @@ func TestAnEmptyClaimWindowTouchesNothing(t *testing.T) {
 }
 
 /*
-The removal rate is a share of what COULD be removed.
+The removal rate is removals over the TOTAL — on every platform, YouTube too.
 
-Set in the spec result, it never survives: the per-platform merge drops
-removalPct on purpose — it is derived, not additive — and recomputes it from the
-merged totals. So holding the rate to manual claims has to happen at that
-recompute, and the first attempt, which set it upstream, had no effect at all.
-DAZN's YouTube enforcement showed as 16.51% where it is 95.42%.
+The rate set in the spec result never survives: the per-platform merge drops
+removalPct on purpose, because it is derived rather than additive, and
+recomputes it from the merged totals. So whatever the rate is held to has to be
+decided at that recompute — an earlier attempt to set it upstream had no effect
+at all.
+
+It used to be held to manual claims there. That was compensation for counting
+Content ID's claims in the total and not in the removals, which also left every
+claim sitting in Pending Removal. The claims are now counted on both sides (see
+applyAutoClaimKPIs), so the compensation has to be GONE: with the claims in the
+numerator, dividing by manual claims alone reports more than 100%.
 */
-func TestTheRateIsHeldToManualClaimsAtTheRecompute(t *testing.T) {
+func TestTheRateIsRemovalsOverTheTotalAtTheRecompute(t *testing.T) {
 	src, err := os.ReadFile("reportplatforms.go")
 	if err != nil {
 		t.Fatalf("read reportplatforms.go: %v", err)
@@ -445,16 +459,40 @@ func TestTheRateIsHeldToManualClaimsAtTheRecompute(t *testing.T) {
 	}
 	seg := body[from:i]
 
-	if !strings.Contains(seg, `kpi["manualClaims"]`) {
-		t.Error("the rate is computed from the identified total with no regard for " +
-			"manualClaims — on YouTube that divides removals by the automatic claims " +
-			"too, and an automatic claim has no removal to be a share of. The figure " +
-			"then falls every time Content ID does its job better.")
+	if strings.Contains(seg, `kpi["manualClaims"]`) {
+		t.Error("the denominator is held to manualClaims again. The automatic claims " +
+			"are counted as removed now, so they are already in the numerator — " +
+			"dividing by the manual figure alone reports a rate above 100%")
 	}
-	/* And only where the distinction exists. Every other report has no
-	   manualClaims, so the denominator must stay the identified figure. */
 	if !strings.Contains(seg, "base := ident") {
-		t.Error("the denominator does not default to the identified figure, so every " +
-			"report without manual claims loses its rate")
+		t.Error("the denominator is not the identified figure, so the rate is not " +
+			"removals over what was found")
+	}
+}
+
+/*
+A claim is counted on both sides, and the two halves have to agree.
+
+Counting it as identified without counting it as removed is the state this
+replaces: it put every claim in Pending Removal and pulled the rate to 16.5%.
+Counting it as removed without counting it as identified would be the opposite
+error — a removal of something never found.
+*/
+func TestAClaimIsBothIdentifiedAndRemoved(t *testing.T) {
+	kpi := map[string]any{"identified": int64(100), "removed": int64(60), "views": int64(0)}
+	applyAutoClaimKPIs(kpi, autoClaimFigures{claims: 40, views: 0, assets: -1, channels: -1})
+
+	if got := numOf(kpi["identified"]); got != 140 {
+		t.Errorf("identified = %d, want 140", got)
+	}
+	if got := numOf(kpi["removed"]); got != 100 {
+		t.Errorf("removed = %d, want 100 — the 60 manual removals plus 40 claims", got)
+	}
+	if got := numOf(kpi["pending"]); got != 40 {
+		t.Errorf("pending = %d, want 40 — the manual work outstanding (100-60), "+
+			"with no claim counted as waiting", got)
+	}
+	if numOf(kpi["removed"]) > numOf(kpi["identified"]) {
+		t.Error("removed exceeds identified")
 	}
 }

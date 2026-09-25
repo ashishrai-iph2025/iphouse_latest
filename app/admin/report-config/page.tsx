@@ -75,7 +75,7 @@ interface LayoutPanel {
   /** `realtime` is the live counts strip above a sports report — a panel like
       any other here, so it is moved, resized, hidden, renamed and described on
       this screen alongside the charts it sits with. */
-  kind: 'tile' | 'heading' | 'trend' | 'rate' | 'dim' | 'filter' | 'realtime'
+  kind: 'tile' | 'heading' | 'trend' | 'trendsplit' | 'rate' | 'dim' | 'filter' | 'realtime'
   name: string
   label?: string
   viz?: string
@@ -137,6 +137,11 @@ interface RealtimePlatformChoice {
 const KIND_LABEL: Record<LayoutPanel['kind'], string> = {
   tile: 'KPI card', heading: 'Section rule', trend: 'Trend', rate: 'Trend', dim: 'Chart',
   filter: 'Filter', realtime: 'Live counts',
+  // Both sides of a two-sided report on one monthly axis. Named as its own
+  // thing rather than "Trend": it is the only card on the page whose grain does
+  // not follow the reader's date range, and an admin deciding whether to keep
+  // it needs that distinction from the list.
+  trendsplit: 'Monthly split',
 }
 
 /* ── The filter pane ──────────────────────────────────────────────────────────
@@ -193,10 +198,33 @@ const KIND_STYLE: Record<LayoutPanel['kind'], { tint: string; glyph: React.React
     tint: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-200',
     glyph: <><path d="M3 12h4l2.5-7 5 14L17 12h4" /></>,
   },
+  // Grouped columns: this card's whole point is four series standing side by
+  // side, where the trend glyph above is one line moving over time.
+  trendsplit: {
+    tint: 'bg-[#FC934C]/15 text-[#c2691f] dark:text-[#FDBE94]',
+    glyph: <><path d="M5 20v-6M9.5 20V8M14.5 20v-9M19 20V5" /><path d="M21 20H3V4" /></>,
+  },
+}
+
+/* The style for a panel kind this build has never heard of.
+
+   Not decoration, and not defensive coding for its own sake. KIND_STYLE is keyed
+   by a union declared in THIS file while the kinds themselves are decided by the
+   server — so the moment one is added in go-server/handlers/reportlayout.go and
+   this file is not changed in the same breath, the lookup returns undefined and
+   reading `.tint` off it takes the whole Report Configuration page down.
+
+   That is exactly what happened when the monthly split card was added: a screen
+   for arranging panels stopped opening because one panel had no icon, and the
+   message a super admin got was "Cannot read properties of undefined (reading
+   'tint')". A missing glyph is worth a grey square. It is not worth the page. */
+const KIND_STYLE_FALLBACK = {
+  tint: 'bg-gray-100 text-gray-400 dark:bg-white/5 dark:text-white/40',
+  glyph: <><rect x="4" y="4" width="16" height="16" rx="2" /></>,
 }
 
 function KindIcon({ kind }: { kind: LayoutPanel['kind'] }) {
-  const s = KIND_STYLE[kind]
+  const s = KIND_STYLE[kind] ?? KIND_STYLE_FALLBACK
   return (
     <span className={`w-7 h-7 rounded-lg grid place-items-center flex-shrink-0 ${s.tint}`}>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -243,6 +271,13 @@ interface Platform {
    *  column, and read as 'table' — which is what such a platform is. */
   sourceKind?: string
   powerbiModuleId?: number
+  /** Which report PAGE this platform belongs to: 'vod', or empty for the Sports
+   *  one. /api/reports/* answers per page — a request that names no scope is
+   *  answered for Sports — so anything this screen asks that API has to send
+   *  it, or every VOD platform comes back 403. Absent on a response from a
+   *  server that predates the field, and read as the Sports default, which is
+   *  exactly the behaviour there was before. */
+  reportScope?: string
 }
 /** One row per platform × table: a platform reading three tables gets three. */
 interface InventoryRow {
@@ -664,9 +699,25 @@ export default function ReportConfigPage() {
     if (!key) return
     setLayoutClients([])
     setClientsWithLayout([])
+    /* SCOPED TO THE PAGE THIS PLATFORM BELONGS TO.
+
+       /api/reports/options answers for one report page at a time, and a request
+       that names no scope is answered for the Sports one — so asking it about
+       YouTube, Telegram or any other VOD platform without this came back 403
+       "You do not have access to this report", and the picker rendered empty
+       under "Client list unavailable" with nothing to say the question had been
+       wrong rather than the data missing.
+
+       The built-in summary tab has no row in `platforms`, and it is the VOD
+       summary — the Sports one is a platform of its own ("Summary - Sports"),
+       which does have a row. */
+    const scope = key === 'summary'
+      ? 'vod'
+      : (platforms.find(p => p.key === key)?.reportScope ?? '')
+    const scoped = scope ? `&scope=${encodeURIComponent(scope)}` : ''
     try {
       const [optRes, mineRes] = await Promise.all([
-        fetch(`/api/reports/options?type=${encodeURIComponent(key)}`, { credentials: 'include' }),
+        fetch(`/api/reports/options?type=${encodeURIComponent(key)}${scoped}`, { credentials: 'include' }),
         fetch(`/api/admin/report-layout/clients?platform=${encodeURIComponent(key)}`, { credentials: 'include' }),
       ])
       const opt = await optRes.json()
@@ -676,7 +727,13 @@ export default function ReportConfigPage() {
       const mine = await mineRes.json()
       if (Array.isArray(mine.clients)) setClientsWithLayout(mine.clients.map(String))
     } catch { /* the picker degrades to the all-clients default */ }
-  }, [])
+    /* `platforms` is a real dependency now, not a lint appeasement: the scope
+       above is read off it, and with an empty dep list this closure would keep
+       the first render's empty array for the life of the page — so every VOD
+       platform would resolve to the Sports scope and 403 exactly as before the
+       fix. The effect that calls this already re-runs when the identity
+       changes, which is what makes the list arrive. */
+  }, [platforms])
 
   const loadClientMap = useCallback(async () => {
     setBusy('clients')

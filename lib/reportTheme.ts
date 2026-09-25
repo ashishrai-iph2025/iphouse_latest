@@ -450,6 +450,24 @@ const lighten = (c: string, t: number) => mix(c, '#ffffff', t)
 const darken = (c: string, t: number) => mix(c, '#000000', t)
 
 /**
+ * A lighter step of ANY mark colour, for a chart that draws the same measure
+ * twice — once per side of a two-sided report.
+ *
+ * The rule those charts follow is that HUE carries the measure and LIGHTNESS
+ * carries the side: identification stays navy and removal stays orange, in every
+ * palette, and the second side is the same two hues a step lighter. So one
+ * function applied to both, rather than `identSoft` for the navy and something
+ * invented for the orange — `identSoft` is tuned per palette for "the
+ * remainder" of a split, and borrowing it here would lighten the two sides of
+ * one legend by different amounts for no reason a reader could see.
+ *
+ * Exported from this module rather than written at the call site so it moves
+ * with the palettes it has to stay legible against. 0.45 is the same step
+ * extendCat already uses to generate its overflow slots.
+ */
+export const softMark = (c: string) => lighten(c, 0.45)
+
+/**
  * Perceived brightness, 0-1 (WCAG relative luminance).
  *
  * Used for one question only, asked in several places: is this fill light

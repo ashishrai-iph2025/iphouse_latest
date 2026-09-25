@@ -333,11 +333,16 @@ var reportSpecs = map[string]reportSpec{
 		IdentExpr:   "SUM(TotalCount)",
 		RemovedExpr: "SUM(RemovedCount)",
 		ExtraKPI: map[string]string{
-			"views":               "SUM(TotalViews)",
-			"viewsSaved":          "SUM(ViewsSaved)",
+			"views": "SUM(TotalViews)",
+			// Floored per row — see viewsSavedFloor.
+			"viewsSaved":          "SUM(GREATEST(ViewsSaved, 0))",
 			"impactedSubscribers": "SUM(Subscribers)",
-			"channelsSuspended":   "COUNT(DISTINCT CASE WHEN ChannelStatus LIKE '%Suspend%' THEN ChannelURL END)",
-			"totalChannels":       "COUNT(DISTINCT ChannelURL)",
+			/* = 'Dead', NOT LIKE '%Suspend%'. The LIKE matched no row on any
+			   table — this column holds exactly 'Dead' and 'Active' — so this
+			   tile reported every client as having suspended nothing, for as
+			   long as it existed. See vodAccountsSuspendedKPI. */
+			"channelsSuspended": "COUNT(DISTINCT CASE WHEN ChannelStatus = 'Dead' THEN ChannelURL END)",
+			"totalChannels":     "COUNT(DISTINCT ChannelURL)",
 		},
 		SubscriberAccountCol: colChannelURL,
 		Dimensions: []dimension{
@@ -357,10 +362,17 @@ var reportSpecs = map[string]reportSpec{
 		IdentExpr:   "SUM(TotalCount)",
 		RemovedExpr: "SUM(RemovedCount)",
 		ExtraKPI: map[string]string{
-			"views":               "SUM(TotalViews)",
-			"viewsSaved":          "SUM(ViewsSaved)",
+			"views": "SUM(TotalViews)",
+			// Floored per row — see viewsSavedFloor.
+			"viewsSaved":          "SUM(GREATEST(ViewsSaved, 0))",
 			"impactedSubscribers": "SUM(Subscribers)",
 			"totalChannels":       "COUNT(DISTINCT ChannelName)",
+			/* How many of those channels are GONE. Counted over ChannelName,
+			   the same identity totalChannels above uses on this table, so the
+			   two tiles can never be counted off different columns. See
+			   vodAccountsSuspendedKPI for why ChannelStatus is the right column
+			   on the VOD rollups and RemovalChannelStatus on the sports ones. */
+			"channelsSuspended": "COUNT(DISTINCT CASE WHEN ChannelStatus = 'Dead' THEN ChannelName END)",
 		},
 		// This table carries no ChannelURL, so ChannelName is the identity —
 		// the same column its own totalChannels above counts distinct values of.
@@ -390,6 +402,19 @@ var reportSpecs = map[string]reportSpec{
 		ExtraKPI: map[string]string{
 			"views": "SUM(TotalViews)",
 			"likes": "SUM(TotalLikes)",
+			/* Social & UGC's own spelling of the column — TotalViewsSaved, not
+			   ViewsSaved, which is why this spec had no Views Saved tile beside
+			   its Views one while YouTube and Telegram both did. Floored per
+			   row like theirs; see viewsSavedFloor. */
+			"viewsSaved": "SUM(GREATEST(TotalViewsSaved, 0))",
+			/* The accounts the platform has closed — this report's twin of the
+			   channel tables' channelsSuspended. COUNT(DISTINCT), never
+			   SUM(TotalProfilesSuspended): one profile spans many rows here, so
+			   summing the flag counts a closed account once per row. Either
+			   signal counts it; see socialVODKPIs, which builds the same
+			   expression for a configured platform. */
+			"profilesSuspended": "COUNT(DISTINCT CASE WHEN TotalProfilesSuspended > 0 " +
+				"OR ProfileRemovalStatus = 'Dead' THEN ProfileURL END)",
 		},
 		Dimensions: []dimension{
 			{Key: "byPlatform", Column: "Platform", Label: "Platforms", Limit: 0},

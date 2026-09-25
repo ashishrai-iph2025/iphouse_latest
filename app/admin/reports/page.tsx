@@ -34,7 +34,7 @@ import RealtimeCard from '@/components/shared/RealtimeCard'
 import ReportLoader from '@/components/shared/ReportLoader'
 import PowerBIReport from '@/components/shared/PowerBIReport'
 import ReportLayoutEditor from '@/components/reports/ReportLayoutEditor'
-import { DEFAULT_THEME, themeFor, type CustomPalette, type MarkTheme } from '@/lib/reportTheme'
+import { DEFAULT_THEME, softMark, themeFor, type CustomPalette, type MarkTheme } from '@/lib/reportTheme'
 import { EngineChart, NATIVE } from '@/lib/charts/engines'
 import type { ChartForm, ChartSpec } from '@/lib/charts/spec'
 import { durationMinutes, foldTatRows } from '@/lib/tatBuckets'
@@ -354,7 +354,7 @@ interface SectionPanel {
       rename it and give it a note; where it SITS still decides one thing no
       other panel's position does, which is whether the reader can pin it. See
       rtLeads below. */
-  kind: 'tile' | 'heading' | 'trend' | 'rate' | 'dim' | 'realtime'
+  kind: 'tile' | 'heading' | 'trend' | 'trendsplit' | 'rate' | 'dim' | 'realtime'
   label?: string
   sub?: string     // heading only
   viz?: string     // breakdown only
@@ -495,7 +495,7 @@ const ROLE_LABELS: Record<string, string> = { linking: 'Linking', host: 'Host' }
 /** Display labels for the slicers a section may declare. */
 const FILTER_LABELS: Record<string, string> = {
   assetId: 'Asset', language: 'Language', country: 'Country',
-  searchEngine: 'Search Engine', tatBucket: 'TAT Bucket', platform: 'Platform',
+  searchEngine: 'Search Engine', tatBucket: 'TAT Bucket', pageNoBucket: 'Page Number', platform: 'Platform',
   channel: 'Channel Name', groupType: 'Group Type', quality: 'Print Quality',
   genre: 'Genre', infringementType: 'Infringement Type',
   deliveryType: 'Delivery Type', keyword: 'Keyword', domain: 'Domain',
@@ -541,7 +541,17 @@ const KPI_LABELS: Record<string, string> = {
   googleDelisted: 'Google De-Indexed', bingDelisted: 'Bing De-Indexed',
   totalDomains: 'Total Websites', totalAssets: 'Total Assets',
   suspendedWebsites: 'Suspended Websites', impactedTraffic: 'Impacted Traffic',
-  totalChannels: 'Channels', channelsSuspended: 'Website / Channel Suspended',
+  // This client's hostnames against the website-suspension register, and those
+  // sites' peak SimilarWeb traffic — see go-server/handlers/domainsuspension.go.
+  domainsSuspended: 'Domains Suspended', trafficImpacted: 'Total Traffic Impacted',
+  totalChannels: 'Channels',
+  // "Channels Suspended", not "Website / Channel Suspended": the metric is
+  // offered off a CHANNEL status column and never lands on a website report —
+  // Open Web has suspendedWebsites above for that — so the "Website /" half was
+  // naming a case this tile cannot be in, on the YouTube and Telegram cards
+  // where it actually appears. Overridable per platform and client in Report
+  // Configuration, like every label here.
+  channelsSuspended: 'Channels Suspended',
   profilesSuspended: 'Profiles Suspended',
   views: 'Total Views', viewsSaved: 'Total Views Saved',
   // The part of that audience the takedown removed — the pair to Total Views,
@@ -748,7 +758,7 @@ const DIM_FILTER: Record<string, string> = {
   byQualityId: 'quality',
   byCountry: 'country', byCountryId: 'country',
   bySearchEngine: 'searchEngine', bySearchEngineId: 'searchEngine',
-  bySearchEngineNotices: 'searchEngine', byTAT: 'tatBucket',
+  bySearchEngineNotices: 'searchEngine', byTAT: 'tatBucket', byPageNo: 'pageNoBucket',
   byPlatform: 'platform', byChannel: 'channel', byGroupType: 'groupType',
   byQuality: 'quality', byGenre: 'genre', byGenreId: 'genre',
   byInfringementType: 'infringementType', byInfringementTypeId: 'infringementType',
@@ -1032,6 +1042,23 @@ function trendTableData(rows: any[], first: string, second: string, grain: strin
     rows: rows.map(t => [shortDate(t.label), Number(t.urls) || 0, Number(t.removed) || 0, `${t.rate}%`]),
     /* The raw label, not the printed one: the column reads "11 Aug" and the
        range needs "2026-08-11". */
+    pickValues: rows.map(t => String(t.label ?? '')),
+  }
+}
+
+/**
+ * The same, for a dated panel with MORE than two series.
+ *
+ * No rate column, and that is the point rather than an omission: with two sides
+ * on one axis there are two rates and neither is "the" rate, so a single column
+ * headed "Removal rate" would have to pick one and say nothing about which. The
+ * per-side cards above carry each side's own rate already.
+ */
+function splitTableData(rows: any[], series: Array<{ key: string; name: string }>, grain: string): PanelTable {
+  return {
+    head: [grainHead(grain), ...series.map(s => s.name)],
+    // Numbers as numbers, for the same reason trendTableData gives.
+    rows: rows.map(t => [shortDate(t.label), ...series.map(s => Number(t[s.key]) || 0)]),
     pickValues: rows.map(t => String(t.label ?? '')),
   }
 }
@@ -2134,6 +2161,8 @@ const KPI_ICON: Record<string, string> = {
   channelsSuspended: 'M5 5l14 14M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z',     // barred
   profilesSuspended: 'M5 5l14 14M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z',
   suspendedWebsites: 'M5 5l14 14M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z',
+  domainsSuspended: 'M5 5l14 14M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z',       // barred
+  trafficImpacted: 'M3 17l6-6 4 4 8-8M15 7h6v6',                           // trend line
   impactedSubscribers: 'M16 19v-2a4 4 0 0 0-8 0v2M12 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
   // Same glyph as impactedSubscribers: the same audience, differently narrowed.
   totalSubscribers: 'M16 19v-2a4 4 0 0 0-8 0v2M12 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
@@ -2173,8 +2202,14 @@ type KpiDelta = { text: string; dir: 'up' | 'down'; tone: 'good' | 'bad' | 'flat
 
 /** Metrics where up is the outcome you want, and where it is the one you don't. */
 const KPI_UP_IS_GOOD = new Set(['removed', 'removalPct', 'delisted', 'googleDelisted',
-  'bingDelisted', 'channelsSuspended', 'suspendedWebsites', 'viewsSaved', 'savedRevenue',
-  'notices'])
+  // profilesSuspended sits beside channelsSuspended here for the same reason it
+  // sits beside it everywhere else: it is the same outcome on a platform that
+  // calls the account a profile. Left out, its delta drew in neutral ink while
+  // the identical figure on the YouTube card next to it drew green.
+  'bingDelisted', 'channelsSuspended', 'profilesSuspended', 'suspendedWebsites',
+  // More of the client's sites offline, and more audience gone with them.
+  'domainsSuspended', 'trafficImpacted',
+  'viewsSaved', 'savedRevenue', 'notices'])
 const KPI_UP_IS_BAD = new Set(['pending', 'views', 'impactedSubscribers', 'impactedTraffic'])
 
 /**
@@ -2407,8 +2442,22 @@ function columnWidth(avail: number, categories: number, seriesCount: number, ins
 /* Exported for .preview-trend.tsx, which renders THIS component rather than a
    copy of it — see the note on MirrorBars. */
 export function Trend({ data, m, firstName = 'Identified', secondName = 'Removed', mode = 'auto',
-  single = false, color, onPick }: {
+  single = false, color, onPick, series: seriesProp }: {
   data: any[]; m: MarkTheme
+  /* MORE THAN TWO SERIES, for the card that draws both sides of a two-sided
+     report on one axis.
+
+     Everything below this line already maps over a `series` list — the bars,
+     the areas, the gradients, the end-label stack and the legend all iterate
+     it — so the only thing that ever made this a two-series chart was the two
+     hardcoded entries it built for itself. Naming the list from outside is
+     therefore an opening, not a rewrite: the four-series card gets the same
+     tooltip, the same stacked end labels and the same column sizing as the
+     two-series ones, rather than a second chart that drifts from them.
+
+     Left undefined, the pair is built from firstName/secondName exactly as
+     before, which is every other caller. */
+  series?: Array<{ key: string; name: string; color: string }>
   /* Clicking a period narrows the whole report to it — see periodSpan and
      pickPeriod. Every other panel on this page has cross-filtered on click
      since it was built; the dated ones were the exception, which made the axis
@@ -2438,7 +2487,11 @@ export function Trend({ data, m, firstName = 'Identified', secondName = 'Removed
   if (data.length === 0) {
     return <div className="text-sm text-gray-400 py-16 text-center">No dated rows in this range.</div>
   }
-  if (data.length === 1) {
+  /* `!seriesProp`: one period IS a chart when there are four series, because
+     the comparison is between them rather than across time — a single month
+     showing linking against host is the whole point of that card, where a
+     single month of one series repeats a KPI tile. */
+  if (data.length === 1 && !seriesProp) {
     // One period is a number, not a chart — a single column tells you nothing a
     // KPI tile has not already said.
     const d = data[0]
@@ -2456,7 +2509,7 @@ export function Trend({ data, m, firstName = 'Identified', secondName = 'Removed
   }
 
   const axis = { tickLine: false, axisLine: false, tick: { fill: m.axis, fontSize: 11 } }
-  const series = [
+  const series = seriesProp ?? [
     { key: 'urls', name: firstName, color: color ?? m.ident },
     ...(single ? [] : [{ key: 'removed', name: secondName, color: m.removed }]),
   ]
@@ -2581,7 +2634,12 @@ export function Trend({ data, m, firstName = 'Identified', secondName = 'Removed
     )
   }
 
-  const ticks = niceTicks(Math.max(...data.map(d => single ? d.urls : Math.max(d.urls, d.removed))))
+  /* Off the SERIES actually drawn, not off `urls` and `removed` by name. With
+     four series named something else, a scale built from two fixed keys is a
+     scale of NaN — and the axis then renders, empty, over bars that are all
+     clipped to nothing. */
+  const ticks = niceTicks(Math.max(0, ...data.map(d =>
+    Math.max(...series.map(s => Number(d[s.key]) || 0)))))
   const yAxis = { ...axis, width: 46, ticks, domain: [0, ticks[ticks.length - 1]], tickFormatter: axisNum }
 
   /* Recharts reports the clicked CATEGORY on the chart itself rather than on
@@ -5839,6 +5897,58 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
       .filter(s => s.rows.length > 0)
   }, [data])
 
+  /**
+   * Both sides of a two-sided report on ONE monthly axis.
+   *
+   * The two cards above answer "how did each side move". This answers "how much
+   * of each month was which", which no pair of separately-scaled charts can:
+   * read side by side, a host side an order of magnitude smaller fills its own
+   * card exactly as the larger one fills its own, and the eye reads them as
+   * comparable.
+   *
+   * ALWAYS MONTHS, where toTrend switches grain at 62 rows. This card is the
+   * shape of a year, and a reader comparing two halves of a business over
+   * twelve months should not be handed days because the range happened to be
+   * short. Folded here rather than asked for from the server: `dailyBySource`
+   * is already on the response for the cards above, so the whole of this is
+   * arithmetic over data the page has.
+   *
+   * The keys are per side and flat — linkingUrls, linkingRemoved, … — because
+   * Trend reads each series by key off one row, so four series means four keys
+   * on one object rather than a nested shape it would have to be taught.
+   */
+  const splitTrend = useMemo(() => {
+    if (sourceTrends.length < 2) return { rows: [] as any[], series: [] as any[] }
+    const months = new Map<string, any>()
+    for (const s of sourceTrends) {
+      const daily = (data?.dailyBySource?.[s.role] || []) as any[]
+      for (const d of daily) {
+        const key = String(d.date || '').slice(0, 7)
+        if (!key) continue
+        const row = months.get(key) ?? { label: key }
+        row[`${s.role}Urls`] = (row[`${s.role}Urls`] ?? 0) + (Number(d.urls) || 0)
+        /* Each side's OWN second series — the linking half counts de-indexings
+           where the host half counts removals, and adding those two together
+           would be one column labelled with a word that is wrong for half of
+           what is in it. See `secondKey`, which the cards above already carry
+           for exactly this reason. */
+        row[`${s.role}Removed`] = (row[`${s.role}Removed`] ?? 0) + (Number(d[s.secondKey]) || 0)
+        months.set(key, row)
+      }
+    }
+    const rows = [...months.values()].sort((a, b) => a.label.localeCompare(b.label))
+    /* Identification in the ident hue and enforcement in the removal hue, one
+       pair per side, so the legend reads down two sides rather than across four
+       unrelated colours. The host side takes the muted variants: it is the
+       smaller half on every client measured, and the louder hue belongs to the
+       series a reader is looking for first. */
+    const series = sourceTrends.flatMap((s, i) => [
+      { key: `${s.role}Urls`, name: `${s.label} Identified`, color: i === 0 ? m.ident : softMark(m.ident) },
+      { key: `${s.role}Removed`, name: `${s.label} ${s.secondName}`, color: i === 0 ? m.removed : softMark(m.removed) },
+    ])
+    return { rows, series }
+  }, [sourceTrends, data, m])
+
   const isSummary = activeSection?.key === SUMMARY
 
   /**
@@ -6030,6 +6140,12 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
       ...(sourceTrends.length > 0
         ? sourceTrends.map(s => ({ key: `trend:${s.role}`, kind: 'trend' as const, role: s.role, span: 'half' as const }))
         : [{ key: 'trend', kind: 'trend' as const, span: 'full' as const }]),
+      /* Both sides on one monthly axis, under the pair that draws them apart.
+         Only where there ARE two sides — with one, this card and the trend
+         above it would be the same chart twice. */
+      ...(sourceTrends.length > 1
+        ? [{ key: 'trend:split', kind: 'trendsplit' as const, span: 'full' as const }]
+        : []),
       /* No action trends here either — what each side SENT is a breakdown panel
          now, and it arrives with `dims` below. Mirrors defaultPanels in
          go-server/handlers/reportlayout.go, which this list is the fallback for. */
@@ -6086,6 +6202,7 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
           ? `${src.label} Identification & ${src.secondName}`
           : isSummary ? 'Infringement Identification & Removal' : 'Identification & Removal'
       }
+      case 'trendsplit': return 'Overall Identification & Removal - Monthly'
       case 'rate': return 'Removal rate'
       case 'dim': return (activeSection?.dimensions ?? []).find(d => d.key === p.key)?.label ?? p.key
       default: return p.key
@@ -6106,6 +6223,10 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
           src ? `${src.label} URLs` : 'Identified',
           src ? src.secondName : 'Removed', trendGrain)
       }
+      case 'trendsplit':
+        return splitTrend.rows.length > 0
+          ? splitTableData(splitTrend.rows, splitTrend.series, 'month')
+          : null
       case 'rate':
         return rateTableData(trend, trendGrain)
       case 'dim': {
@@ -6612,6 +6733,56 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
                     trendForm(trendMode, rows.length), rows,
                     [{ key: 'urls', name: first, color: m.ident },
                      { key: 'removed', name: second, color: m.removed }],
+                    { m, dark: isDark, height: 190, onPick: pickPeriod })} />}
+          </Card>
+        )
+      }
+
+      /* ── Both sides, one monthly axis ────────────────────────────────────
+         The card the two above it cannot be: they scale to their own figures,
+         so a side an order of magnitude smaller fills its card exactly as the
+         larger one fills its own, and no amount of looking from one to the
+         other recovers the proportion. Four series on one scale does. */
+      case 'trendsplit': {
+        const rows = splitTrend.rows
+        const title = 'Overall Identification & Removal - Monthly'
+        if (rows.length === 0) {
+          return (
+            <Card key={p.key} title={p.label || title} info={p.desc} className={spanClass}>
+              <NoData note="No dated rows for either side in this period" />
+            </Card>
+          )
+        }
+        const splitKey = `${section}:${p.key}`
+        /* Columns by default and not `auto`. Auto resolves to an area past
+           twelve points, and four overlapping washes is a chart nobody can read
+           a value off — the whole card is a comparison BETWEEN series, which
+           grouped columns show and stacked translucency hides. The reader can
+           still pick another shape from the card's menu. */
+        const splitMode = vizFor(splitKey, 'column') as 'auto' | 'column' | 'line' | 'area'
+        const splitTd = splitTableData(rows, splitTrend.series, 'month')
+        return (
+          <Card key={p.key} title={p.label || title} info={p.desc} className={spanClass}
+            exportTable={splitTd} exportSubtitle={exportScope} exportFooter={EXPORT_FOOTER}
+            action={<VizPicker options={TREND_VIZ} value={splitMode} fallback="column"
+              saved={vizDefault[splitKey]}
+              onPick={v => setViz(splitKey, v)}
+              onSetDefault={v => saveVizDefault(splitKey, v)} />}
+            table={<DataTable head={splitTd.head} rows={splitTd.rows}
+              onPick={pickPeriod} activeVal={drilled ? drill!.label : ''}
+              pickValues={splitTd.pickValues} />}>
+            {/* One month is still a chart here — see the `seriesProp` guard in
+                Trend. The comparison is across the four series, not across
+                time, so a single month has something to show where a single
+                month of one series would only repeat a tile. */}
+            {rows.length < 2
+              ? <Trend data={rows} m={m} series={splitTrend.series}
+                  mode={splitMode} onPick={pickPeriod} />
+              : <EngineChart engine={engine}
+                  fallback={<Trend data={rows} m={m} series={splitTrend.series}
+                    mode={splitMode} onPick={pickPeriod} />}
+                  spec={trendSpec(
+                    trendForm(splitMode, rows.length), rows, splitTrend.series,
                     { m, dark: isDark, height: 190, onPick: pickPeriod })} />}
           </Card>
         )

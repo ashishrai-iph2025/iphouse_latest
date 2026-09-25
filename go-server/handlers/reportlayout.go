@@ -281,8 +281,22 @@ const (
 	panelHeading = "heading" // a section rule with a title
 	panelTrend   = "trend"   // identification over time, merged or per source
 	panelRate    = "rate"    // removal rate over time
-	panelDim     = "dim"     // one breakdown
-	panelFilter  = "filter"  // ONE slicer in the report's filter pane
+	/* Both sides of a two-sided report, on ONE monthly axis.
+
+	   Not a third panelTrend: a trend card draws one source's two series, and
+	   the comparison this exists for is BETWEEN the sources — how much of a
+	   month's identification was linking and how much was hosting, and how each
+	   side's removal moved against its own. Four series on one axis is a
+	   different chart from two charts of two, and forcing it through panelTrend
+	   would mean a `role` that names two roles.
+
+	   MONTHLY by construction, where the per-side cards switch to months only
+	   once a window is long enough to need it. This card is the shape of the
+	   year, and a reader comparing two halves of a business over twelve months
+	   should not get days because they happened to pick a short range. */
+	panelTrendSplit = "trendsplit"
+	panelDim        = "dim"    // one breakdown
+	panelFilter     = "filter" // ONE slicer in the report's filter pane
 	/* The live counts strip — RealtimeCard, above the report on the sports
 	   pages. A panel like the rest, so it can be moved, resized, hidden,
 	   renamed and described on the same screen as everything else it sits
@@ -298,10 +312,14 @@ const (
 	keyHeadDims  = "head:breakdowns"
 	keyTrend     = "trend"
 	keyRate      = "rate"
-	keyTrendRole = "trend:"  // + role, e.g. trend:linking
-	keyTilePfx   = "kpi:"    // + metric, e.g. kpi:totalAssets
-	keyFilterPfx = "filter:" // + slicer parameter, e.g. filter:country
-	keyRealtime  = "realtime"
+	keyTrendRole = "trend:" // + role, e.g. trend:linking
+	/* The two sides on one monthly axis. A key of its own rather than a role of
+	   "both" on keyTrendRole, so an admin's stored layout row for it cannot be
+	   confused with a per-side card that has been renamed. */
+	keyTrendSplit = "trend:split"
+	keyTilePfx    = "kpi:"    // + metric, e.g. kpi:totalAssets
+	keyFilterPfx  = "filter:" // + slicer parameter, e.g. filter:country
+	keyRealtime   = "realtime"
 )
 
 /*
@@ -336,15 +354,18 @@ func validSpan(s string) bool {
 // app/admin/reports/page.tsx; this copy exists so the configuration screen can
 // name a tile without the warehouse having been queried.
 var kpiTileLabels = map[string]string{
-	"identified":        "Total Infringements",
-	"removed":           "Removed",
-	"removalPct":        "Total Removal %",
-	"pending":           "Pending Removal",
-	"totalAssets":       "Total Assets",
-	"totalDomains":      "Total Websites",
-	"totalChannels":     "Channels",
-	"totalPlaces":       "No. of Website / Channel / Page",
-	"channelsSuspended": "Website / Channel Suspended",
+	"identified":    "Total Infringements",
+	"removed":       "Removed",
+	"removalPct":    "Total Removal %",
+	"pending":       "Pending Removal",
+	"totalAssets":   "Total Assets",
+	"totalDomains":  "Total Websites",
+	"totalChannels": "Channels",
+	"totalPlaces":   "No. of Website / Channel / Page",
+	// Names the CHANNEL only: this metric is offered off a channel-status column
+	// and never reaches a website report, which has suspendedWebsites below for
+	// that. See the same entry in app/admin/reports/page.tsx.
+	"channelsSuspended": "Channels Suspended",
 	// The social equivalent, and deliberately its own key: a suspended ACCOUNT
 	// is not a suspended channel, and one report shows both.
 	"profilesSuspended": "Profiles Suspended",
@@ -352,6 +373,12 @@ var kpiTileLabels = map[string]string{
 	// "channel" here is the PROFILE — see channelKPIs.
 	"totalSubscribers":  "Total Subscribers",
 	"suspendedWebsites": "Suspended Websites",
+	/* Not the tile above: that one reads a per-row flag some tables carry;
+	   these read mediascan.WebsiteSuspension and SimilarWeb through the
+	   domain-reporting master, for this client's hostnames. See
+	   domainsuspension.go. */
+	kpiDomainsSuspended: "Domains Suspended",
+	kpiTrafficImpacted:  "Total Traffic Impacted",
 	/* YouTube's two routes — see ytautoclaim.go. The pair is named by HOW the
 	   claim was made, because that is the only thing that distinguishes them:
 	   one was found and reported, the other Content ID matched by itself. Total
@@ -701,11 +728,28 @@ func defaultPanels(platformKey string, dims []map[string]any, roles []string, ti
 			Label: "Realtime",
 		})
 	}
+	/* The Removed tile means something different on a two-sided report whose
+	   linking half is enforced by de-indexing — see openWebRemovedFromDelisting,
+	   which is where the figure is built. The generic note ("how many have since
+	   come down") is then wrong in the way that matters: most of this number is
+	   links that have NOT come down, they have been made unfindable. Set here
+	   rather than in kpiTileDescriptions because that map is keyed by metric
+	   alone and this depends on the platform. */
+	splitRemoval := len(roles) > 1 && delisting["linking"]
+
 	for _, metric := range tiles {
-		out = append(out, panelDef{
+		p := panelDef{
 			Key: keyTilePfx + metric, Kind: panelTile, Metric: metric,
 			Label: kpiTileLabel(metric), Span: spanQuarter,
-		})
+		}
+		if metric == "removed" && splitRemoval {
+			p.DefaultDesc = "Infringements dealt with, counted by what enforcement " +
+				"MEANS on each side of this report: links de-indexed by the search " +
+				"engines on the linking side, plus URLs taken down on the host side. " +
+				"A de-indexed page is still there — it is no longer findable — which " +
+				"is why the linking side's own takedown count is not what this shows."
+		}
+		out = append(out, p)
 	}
 	out = append(out,
 		panelDef{Key: keyHeadTop, Kind: panelHeading, Label: "Volume and enforcement",
@@ -721,6 +765,23 @@ func defaultPanels(platformKey string, dims []map[string]any, roles []string, ti
 				DefaultDesc: trendPanelDesc(role, delisting),
 			})
 		}
+		/* ...and then both of them on ONE monthly axis, full width, directly
+		   under the pair.
+
+		   The two cards above answer "how did the linking side move" and "how
+		   did the hosting side move". Neither answers "how much of this month
+		   was which", which is the question a two-sided report is read for —
+		   and answering it by eye across two charts with two independent y-axes
+		   is exactly the comparison a chart is supposed to remove.
+
+		   Under them rather than above: the per-side cards are where the detail
+		   is, this is the summary of both, and a reader scanning down meets the
+		   halves before the whole. */
+		out = append(out, panelDef{
+			Key: keyTrendSplit, Kind: panelTrendSplit, Span: spanFull,
+			Label:       "Overall Identification & Removal - Monthly",
+			DefaultDesc: trendSplitPanelDesc(delisting),
+		})
 		/* ...and the MERGED trend under them, where the platform is several
 		   reports rather than the two ends of one — see mergesReports.
 
@@ -1224,6 +1285,7 @@ var filterParamLabels = map[string]string{
 	"country":          "Country",
 	"searchEngine":     "Search Engine",
 	"tatBucket":        "TAT Bucket",
+	"pageNoBucket":     "Page Number",
 	"platform":         "Platform",
 	"channel":          "Channel Name",
 	"groupType":        "Group Type",
@@ -1576,6 +1638,34 @@ Computed from the all-clients layout rather than read from the table, because
 hidden or not according to the registry, and the filter pane's default depends
 on which charts survived.
 */
+/*
+adminHiddenPanelsFor is adminHiddenPanels as it applies to ONE client: the
+panels that client may not switch on or arrange.
+
+The shared default hides a panel for everyone, but a client's OWN layout can
+show it — IP House switching a tile on for one company from Report
+Configuration. Such a panel is on that client's report, so it has to be in their
+editor too: leaving it out meant a card on the page that the "Arrange your
+reports" screen did not list and could not move, and the next save the client
+made forced it hidden again, silently undoing what IP House had turned on.
+
+So a panel shown in the client's own layout is theirs to arrange; everything
+else the shared default hides stays locked, exactly as before.
+*/
+func adminHiddenPanelsFor(platformKey, clientID string) map[string]bool {
+	hidden := adminHiddenPanels(platformKey)
+	if clientID == layoutAllClients || len(hidden) == 0 {
+		return hidden
+	}
+	own := readLayoutRows(platformKey, clientID)
+	for key, row := range own {
+		if hidden[key] && row.Set && !row.Hidden {
+			delete(hidden, key)
+		}
+	}
+	return hidden
+}
+
 func adminHiddenPanels(platformKey string) map[string]bool {
 	out := map[string]bool{}
 	// The all-clients layer: no client, so a per-client slicer has nothing to
@@ -1672,7 +1762,7 @@ func ReportLayoutGet(w http.ResponseWriter, r *http.Request) {
 	   looking at the layout they control. The client-facing editor lists only
 	   the panels it marks visible, so a client can rearrange what IP House
 	   chose to show them without being offered what IP House chose not to. */
-	adminHidden := adminHiddenPanels(key)
+	adminHidden := adminHiddenPanelsFor(key, clientID)
 
 	out := make([]map[string]any, 0, len(panels))
 	for i, p := range panels {
@@ -1781,7 +1871,10 @@ func ReportLayoutGet(w http.ResponseWriter, r *http.Request) {
 // because theirs depends on the date range the reader chose.
 func panelName(p panelDef) string {
 	switch p.Kind {
-	case panelTrend, panelRate:
+	// The combined monthly card is named here with the other dated ones, for the
+	// same reason: its title comes from defaultPanels, and a configuration screen
+	// that invents a second name for it leaves nothing to match the two by.
+	case panelTrend, panelRate, panelTrendSplit:
 		/* The name the REPORT gives the card, which defaultPanels has already
 		   put on it — see trendPanelLabel. Naming it again here is what made
 		   the configuration screen call a card "Linking identification over
@@ -1915,6 +2008,13 @@ func platformExtraKPIs(p platformDef) []string {
 			break
 		}
 	}
+	/* The suspension tiles, on any platform whose tables record a website —
+	   no spec computes them either; runPlatform does. See domainsuspension.go. */
+	if platformHasHostnames(specs) {
+		for _, k := range suspensionKPIs {
+			seen[k] = true
+		}
+	}
 	out := make([]string, 0, len(seen))
 	for k := range seen {
 		out = append(out, k)
@@ -1937,6 +2037,51 @@ var perSideKPIs = []string{
 	"linkingIdentified", "hostIdentified",
 	"linkingDomains", "hostDomains",
 	"linkingBrands", "hostBrands",
+}
+
+/*
+withPerSideTiles adds those same six to the list the PAGE draws from.
+
+── WHY THIS EXISTS AS A SECOND FUNCTION ────────────────────────────────────
+
+There are two lists, and the distinction has now cost three features. platformExtraKPIs
+above feeds the layout EDITOR — what an admin may place on a band. The list a
+reader's page actually renders is built separately in ReportsSections out of each
+spec's ExtraKPI, and these six are not ExtraKPI entries: no spec computes them,
+because each is one side's figure and a spec only ever knows its own. runPlatform
+assembles them from roleKPI once both sides have answered.
+
+So they were computed, carried in every Open Web response, offered to an admin
+arranging panels — and never drawn. Exactly the failure withAutoClaimTiles was
+written for, on a different set of tiles, which is why this is modelled on it
+rather than solved again.
+
+── THE GUARD ───────────────────────────────────────────────────────────────
+
+Two sides or nothing, the same condition runPlatform and platformExtraKPIs both
+apply. On a single-sided report every one of these is the headline figure under a
+second name, and a band reading "Total Infringements 812,400" beside "Total
+Linking Identification 812,400" invites the reader to hunt for a difference that
+does not exist.
+
+Not gated per client, unlike the claim tiles: whether a platform has two sides is
+a property of its table list, which is the same for everyone looking at it.
+*/
+func withPerSideTiles(extras []string, p platformDef) []string {
+	if len(rolesForPlatform(p)) < 2 {
+		return extras
+	}
+	seen := make(map[string]bool, len(extras))
+	for _, k := range extras {
+		seen[k] = true
+	}
+	for _, k := range perSideKPIs {
+		if !seen[k] {
+			extras = append(extras, k)
+		}
+	}
+	sort.Strings(extras)
+	return extras
 }
 
 // enabledPlatforms is every platform that is switched on, ignoring per-login

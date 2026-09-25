@@ -35,9 +35,15 @@ var kpiTileDescriptions = map[string]string{
 	"totalChannels": "Distinct channels or accounts carrying the identified URLs.",
 	"totalPlaces":   "Distinct websites, channels and pages the infringements were found on, counted together.",
 
-	"channelsSuspended": "Channels or websites taken down in full, rather than a single URL removed from them.",
-	"profilesSuspended": "Social accounts taken down in full, rather than a single post removed from them.",
+	/* Both say the same three things, because all three are what a reader gets
+	   wrong about these tiles: what is counted (the ACCOUNT, not the post), how
+	   it is counted (once, however many days it appeared on) and what "closed"
+	   means in the data. */
+	"channelsSuspended": "Channels or websites taken down in full, rather than a single URL removed from them. Counted once per channel however many days it appeared on, from the channel's own status — so it is a subset of the Channels tile beside it, never a count of removals.",
+	"profilesSuspended": "Social accounts taken down in full, rather than a single post removed from them. Counted once per account however many posts or days it appeared on, from the account's own status or the platform's suspension flag — so it is a subset of the Channels tile beside it, never a count of removed posts.",
 	"suspendedWebsites": "Websites taken down in full, rather than a single URL removed from them.",
+	kpiDomainsSuspended: "Of the websites found carrying this client's content in this window — linking and hosting, each counted once — how many are recorded as suspended in the website-suspension register. Suspension is the site's current state, not an event in this window, so a site suspended last year still counts if it carried content now.",
+	kpiTrafficImpacted:  "The combined monthly visits of those suspended websites, taking each site's highest month on record in SimilarWeb. It is the audience those sites could reach at their peak, not traffic measured in this window; a suspended site with no SimilarWeb figure adds nothing.",
 
 	"impactedSubscribers": "Combined subscriber count of the channels carrying infringements — the audience they could reach, not the audience they did. Counted only on accounts that have been SUSPENDED, so it is the reach enforcement has taken off the table; Total Subscribers is the whole of it.",
 	"totalSubscribers":    "The combined audience of every profile found infringing in this window — one figure per account, taken as its highest reading, however many posts it made. NOT a sum of the column: an account appears on every post, so adding it up counts the same followers over and over. Total Channels is how many accounts that audience is spread across.",
@@ -50,16 +56,19 @@ var kpiTileDescriptions = map[string]string{
 	"views":           "Total views on the infringing content found in this window.",
 	"viewsImpacted":   "Views on the infringing content that is now DOWN — the share of the audience above that the takedowns removed. Counted where the removal status is Dead.",
 	"totalTVChannels": "A count of the distinct TV channel names on the infringements found. Rows with no channel name recorded are not counted, exactly as a distinct count does not count them. Not the same as Channels beside it, which counts accounts rather than channel names.",
-	"viewsSaved":      "Views the infringing content would have gone on to take, counted from what came down.",
-	"savedRevenue":    "Views saved, valued at a fixed per-view rate set in the server configuration. A range because the rate is a commercial assumption, not a measurement.",
-	"likes":           "Total likes on the infringing content found in this window.",
-	"crawled":         "URLs crawled while searching, whether or not they turned out to be infringing.",
+	/* The floor is stated, not just applied. Somebody comparing this against
+	   the warehouse's own view will find a higher number here, and the tooltip
+	   is where they should learn why rather than from the discrepancy. */
+	"viewsSaved":   "Views the infringing content would have gone on to take, counted from what came down. Each item is valued from the per-hour view rate set for its genre, language and platform, less the views it had already taken. Content that had already earned more than that counts as nothing saved rather than as a loss, so this figure never goes below zero.",
+	"savedRevenue": "Views saved, valued at a fixed per-view rate set in the server configuration. A range because the rate is a commercial assumption, not a measurement.",
+	"likes":        "Total likes on the infringing content found in this window.",
+	"crawled":      "URLs crawled while searching, whether or not they turned out to be infringing.",
 
 	/* The two that are most often misread, and the reason this file exists: an
 	   action id is stamped on every URL it covered, so the row count answers a
 	   different question by four orders of magnitude. */
 	"notices":          "Distinct takedown notices sent to hosting providers — counted once each, not once per URL they covered.",
-	"delistingBatches": "Distinct de-indexing sent to search engines — counted once each, not once per link they covered.",
+	"delistingBatches": "De-indexing submissions sent to the search engines (Google and Bing) — counted once each, not once per link they carried. Google De-Indexed and Bing De-Indexed beside it are the links those submissions got dropped.",
 
 	"googleDelisted": "Links Google has dropped from its search results.",
 	"bingDelisted":   "Links Bing has dropped from its search results.",
@@ -133,6 +142,7 @@ var dimDescriptions = map[string]string{
 	"byGroupType":          "Whether the source was a channel or a group.",
 	"byKeyword":            "The search terms the infringing pages were found under.",
 	"byRemovalStatus":      "Where each identified URL currently stands in the removal process.",
+	dimPageNo:              "Infringing links identified, by the search-results page they were found on — page 1 through 5, then everything deeper as 5+. A link on page one is the one a viewer actually clicks, so this shows how visible the piracy was as well as how much there was. Linking side only: a hosting site has no search page.",
 	"byTAT":                "How long removals took, in buckets — from a URL being identified to it coming down. Only the URLs that HAVE come down are in it.",
 
 	"bySearchEngine":   "Which search engines surfaced the infringing links.",
@@ -166,6 +176,7 @@ var filterDescriptions = map[string]string{
 	"country":          "Narrow to one country.",
 	"searchEngine":     "Narrow to links surfaced by one search engine.",
 	"tatBucket":        "Narrow to removals that took a particular length of time.",
+	"pageNoBucket":     "Narrow to links found on one search-results page — 1 to 5, or deeper as 5+. Linking side only, so choosing one leaves the hosting figures out.",
 	"platform":         "Narrow to one social platform.",
 	"channel":          "Narrow to one channel by name.",
 	"channelUrl":       "Narrow to one account by its URL. Picked off the repeat-offenders panel rather than a dropdown — there are too many URLs to list.",
@@ -230,6 +241,34 @@ func trendPanelDesc(role string, delisting map[string]bool) string {
 		"The other trend beside it draws the report's other side."
 }
 
+/*
+trendSplitPanelDesc names what the combined monthly card adds.
+
+It says MONTHLY explicitly, because that is the one way it differs from the two
+cards above it that a reader cannot see from the chart alone — those switch
+between days and months with the length of the window, and this one does not.
+And it says the two sides are on one axis, which is the reason to look at it:
+the per-side cards each scale to their own figures, so a side an order of
+magnitude smaller fills its card exactly as the larger one fills its own.
+*/
+func trendSplitPanelDesc(delisting map[string]bool) string {
+	second := "taken down"
+	// Where either side's second series is a de-indexing rather than a removal,
+	// the card carries both words — the legend names them per side, and a note
+	// promising only removals under a chart drawing both is worse than a vaguer
+	// one that is true.
+	for _, isDelisting := range delisting {
+		if isDelisting {
+			second = "taken down or dropped by search engines"
+			break
+		}
+	}
+	return "Both sides of the report on one monthly axis: linking and host URLs " +
+		"found against those " + second + ", month by month. Always months, where " +
+		"the two cards above it follow the window. On one scale, so the sides can " +
+		"be compared with each other rather than each against itself."
+}
+
 // defaultPanelDesc is the note a panel carries when nobody has written one —
 // looked up by whichever of its fields identifies it.
 func defaultPanelDesc(p panelDef) string {
@@ -240,6 +279,8 @@ func defaultPanelDesc(p panelDef) string {
 		return dimDescriptions[p.Key]
 	case panelFilter:
 		return filterDescriptions[p.Param]
+	case panelTrendSplit:
+		return trendSplitPanelDesc(nil)
 	case panelRate:
 		return "The share of each period's identified URLs that came down. " +
 			"On its own card rather than a second line on the trend: two scales in one " +

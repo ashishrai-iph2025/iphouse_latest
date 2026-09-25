@@ -196,7 +196,9 @@ func scopeSaveBody(w http.ResponseWriter, r *http.Request, clientID string) bool
 		return false
 	}
 
-	hidden := adminHiddenPanels(platform)
+	// Per client: a panel IP House switched on for this client is theirs to
+	// arrange, and a save must not force it hidden again.
+	hidden := adminHiddenPanelsFor(platform, clientID)
 	if len(hidden) > 0 {
 		list, _ := body["panels"].([]any)
 		sent := map[string]bool{}

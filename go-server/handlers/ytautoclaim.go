@@ -288,16 +288,26 @@ func applyAutoClaimKPIs(kpi map[string]any, f autoClaimFigures) {
 	   whole of it — the two are on their own cards above so the split is never
 	   inferred from the difference between two screens. */
 	kpi["identified"] = manual + f.claims
+	/* AND THE SAME CLAIMS COUNT AS REMOVED.
+
+	   A Content ID claim IS the enforcement on that upload: it was caught and
+	   acted on without a notice being sent, so nothing about it is outstanding.
+	   Counting the claims in the total and not in the removals made every one
+	   of them look unresolved — 196,487 of one client's 237,582 infringements
+	   sat in Pending Removal — and pulled the rate down to 16.5%, which was
+	   then rescued by measuring against manual claims instead.
+
+	   Putting the claims on the side they belong to removes both problems at
+	   once: Pending Removal is what manual enforcement still owes, and the rate
+	   is removals over the total, which is what it is on every other platform.
+	   That also retires the manual-claims denominator in runPlatform, which
+	   existed only to compensate for this. */
+	kpi["removed"] = numOf(kpi["removed"]) + f.claims
 	kpi["pending"] = max64(0, numOf(kpi["identified"])-numOf(kpi["removed"]))
 
-	/* Removal rate stays against the MANUAL figure.
-
-	   A claim has no removal to be a share of: nothing was reported, so
-	   dividing removals by the combined total would report the rate falling
-	   every time Content ID does its job. */
 	pct := 0.0
-	if manual > 0 {
-		pct = float64(numOf(kpi["removed"])) / float64(manual) * 100
+	if ident := numOf(kpi["identified"]); ident > 0 {
+		pct = float64(numOf(kpi["removed"])) / float64(ident) * 100
 	}
 	kpi["removalPct"] = roundTo(pct, 2)
 

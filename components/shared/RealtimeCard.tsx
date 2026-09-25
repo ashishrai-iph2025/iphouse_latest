@@ -34,6 +34,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 import InfoDot from '@/components/shared/InfoDot'
 import SearchableSelect from '@/components/ui/SearchableSelect'
@@ -613,7 +614,7 @@ export interface RealtimeDimOptions {
  * filter as — so the clear row is spelled "All" rather than left blank.
  */
 function DimPicker({
-  label, value, options, overridden, onChange,
+  label, value, options, overridden, onChange, dark,
 }: {
   label: string
   value: string
@@ -623,6 +624,9 @@ function DimPicker({
      under it is the one failure these controls introduce. */
   overridden: boolean
   onChange: (v: string) => void
+  /** Force the dark dropdown — the expanded view sits on navy whatever the
+      portal's own theme is. Omitted, the select follows the page theme. */
+  dark?: boolean
 }) {
   /* The report can hold a value this list does not carry. The rail rescopes its
      options as the client, the window and the other slicers move, so for a
@@ -685,7 +689,7 @@ function DimPicker({
         {label}
       </span>
       <SearchableSelect options={opts} value={value} onChange={onChange}
-        placeholder="All" emptyLabel="All" compact marked={overridden}
+        placeholder="All" emptyLabel="All" compact marked={overridden} dark={dark}
         ariaLabel={overridden
           ? `${label} — set on this card, so the live count no longer matches the report below`
           : `${label} — following the report`} />
@@ -998,6 +1002,9 @@ export default function RealtimeCard({
   title?: string
   desc?: string
 }) {
+  /* The card expanded over the whole page — see ExpandedRealtime. Declared
+     with the other hooks because the early returns below come after them. */
+  const [expanded, setExpanded] = useState(false)
   const [data, setData]   = useState<Payload | null>(null)
   const [err, setErr]     = useState('')
   const [live, setLive]   = useState(true)
@@ -1473,7 +1480,36 @@ export default function RealtimeCard({
     ? scopeItems.filter(i => !i.applied)
     : scopeItems)
 
+  /* The scope caption, once — the card's corner and the expanded view's header
+     both print it, and two calls could disagree mid-refresh. */
+  const scopeCaption = scopeBits({
+    assetNames: effAssetNames, assets: shown.assets,
+    franchise: effFranchise || undefined, matchDay: effMatchDay || undefined,
+    startDate: shown.startDate, endDate: shown.endDate, scope: shown.scope,
+    windowHours: shown.windowHours,
+  }).join(' · ')
+
   return (
+    <>
+    {expanded && typeof document !== 'undefined' && createPortal(
+      <ExpandedRealtime
+        title={title} note={desc?.trim() || scopeNote(shown, REFRESH_MS[source] ?? 60_000)}
+        caption={scopeCaption} asOf={shown.asOf}
+        total={total} removed={removed} bumped={totalBumped}
+        hasRemovals={hasRemovals} removalRate={removalRate}
+        removedLabel={removedWords(platforms).join(' / ')}
+        platforms={platforms} peak={peak} partial={shown.partial ?? 0}
+        live={live} onToggleLive={() => setLive(v => !v)}
+        busy={busy} stale={stale} err={err}
+        windowPicker={windowOptions && windowOptions.length > 1
+          ? <WindowPicker options={windowOptions} value={hours} onChange={setHours}
+              className="shrink-0 w-[clamp(150px,15vw,220px)]" />
+          : null}
+        pickers={pickers}
+        onReset={overridden ? () => setOv({}) : undefined}
+        onClose={() => setExpanded(false)}
+      />,
+      document.body)}
     <div aria-busy={busy}
       className={`relative bg-white dark:bg-[#1a2d55] rounded-2xl shadow-card border border-gray-100 dark:border-white/10 ${className}`}>
       {/* ── The read in flight ──────────────────────────────────────────────
@@ -1528,6 +1564,8 @@ export default function RealtimeCard({
                     Updating
                   </span>
                 : <RelativeTime iso={shown.asOf} stale={stale} />}
+              {/* The expanded view — see ExpandedRealtime. */}
+              <ExpandToggle onClick={() => setExpanded(true)} />
               {onTogglePin && (
                 /* Filled and brand-coloured when pinned, hollow and grey when
                    not — the state has to be readable from the icon itself,
@@ -1949,6 +1987,7 @@ export default function RealtimeCard({
 
       {stripItems && stripItems.length > 0 && <ScopeStrip items={stripItems} />}
     </div>
+    </>
   )
 }
 
@@ -1979,5 +2018,474 @@ function RelativeTime({ iso, stale }: { iso: string; stale: boolean }) {
       title={at.toLocaleString()}>
       {text}
     </span>
+  )
+}
+
+/** The button that opens the expanded view — four arrows out, beside the pin. */
+function ExpandToggle({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick}
+      /* Dropped from a printed page, like the pin beside it. */
+      data-print-hide=""
+      title="Expand — show the live counts across the whole page"
+      aria-label="Expand the realtime card"
+      className="w-6 h-6 grid place-items-center rounded-md transition-colors text-gray-300
+        hover:text-[#14254A] hover:bg-[#14254A]/[0.06] dark:text-white/25 dark:hover:text-white
+        dark:hover:bg-white/10">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+      </svg>
+    </button>
+  )
+}
+
+/**
+ * The realtime card, expanded over the whole page.
+ *
+ * NOT the browser's full screen. The page stays the page — its tab, its toolbar,
+ * Escape and the close button bring the report straight back — while the card
+ * takes over its entire body with a layout built for being read across a room:
+ * the headline pair as a hero, the removal rate as a ring, and every platform as
+ * its own tile, ranked.
+ *
+ * ONE SCREEN, NEVER A SCROLL. It is put up on a wall display or a second monitor
+ * during a live event, where nobody is there to scroll, so everything has to be
+ * visible at once whatever the screen and however many platforms answered. The
+ * frame is exactly the viewport; the header, hero and footer size themselves by
+ * viewport HEIGHT; and the platform grid measures what is left and picks the
+ * columns and rows that give the largest tiles for the count it holds — see
+ * fitGrid. Each tile's type then scales with the tile, and a tile too small to
+ * carry its secondary detail drops it rather than cropping the count.
+ *
+ * It draws the card's OWN values, passed in, rather than reading anything of its
+ * own. The card underneath keeps polling and counting up; this is a second view
+ * of the same reading, so the two can never show different numbers — and closing
+ * it loses nothing, because nothing lived here.
+ */
+function ExpandedRealtime({
+  title, note, caption, asOf, total, removed, bumped, hasRemovals, removalRate,
+  removedLabel, platforms, peak, partial, live, onToggleLive, busy, stale, err,
+  windowPicker, pickers, onReset, onClose,
+}: {
+  title: React.ReactNode
+  note: string
+  caption: string
+  asOf: string
+  total: number
+  removed: number
+  bumped: boolean
+  hasRemovals: boolean
+  removalRate: number | null
+  removedLabel: string
+  platforms: RealtimePlatform[]
+  peak: number
+  partial: number
+  live: boolean
+  onToggleLive: () => void
+  busy: boolean
+  stale: boolean
+  err: string
+  windowPicker: React.ReactNode
+  pickers: React.ReactNode[]
+  onReset?: () => void
+  onClose: () => void
+}) {
+  const closeRef = useRef<HTMLButtonElement>(null)
+  /* The latest onClose, read through a ref. The card re-renders on every frame
+     of its count-up, handing a new function each time; as an effect dependency
+     that would re-run the effect below per frame — refocusing Close and
+     flickering the scroll lock while the numbers move. */
+  const closeFn = useRef(onClose)
+  closeFn.current = onClose
+
+  /* Escape closes it, and the report behind stops scrolling while it is open.
+     The previous overflow is put back rather than cleared, in case something
+     else had set it. Focus goes to Close so a keyboard user starts inside the
+     view, not behind it. */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeFn.current() }
+    document.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    closeRef.current?.focus()
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [])
+
+  /* The space the platform grid actually has, re-measured on every resize —
+     a window dragged to another monitor, a browser zoom, a rotated tablet. */
+  const gridRef = useRef<HTMLDivElement>(null)
+  const [box, setBox] = useState({ w: 0, h: 0 })
+  useEffect(() => {
+    const el = gridRef.current
+    if (!el) return
+    const ro = new ResizeObserver(([e]) => {
+      const { width, height } = e.contentRect
+      setBox(b => (Math.abs(b.w - width) < 1 && Math.abs(b.h - height) < 1) ? b : { w: width, h: height })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const gap = Math.round(Math.max(8, Math.min(16, box.h * 0.02)))
+  const fit = fitGrid(platforms.length, box.w, box.h, gap)
+
+  const status = busy ? 'Updating' : stale ? 'Reconnecting' : live ? 'Live' : 'Paused'
+
+  /* Sizes that follow the screen's HEIGHT — the dimension that runs out first
+     on a landscape display, and the one a grid of tiles competes for. */
+  const heroH = 'clamp(4.5rem, 19vh, 12.5rem)'
+  const heroNum = 'clamp(1.25rem, 7.5vh, 5rem)'
+  const heroPad = 'clamp(0.5rem, 2.2vh, 1.75rem)'
+
+  return (
+    <div role="dialog" aria-modal="true" aria-label="Realtime — expanded"
+      className="fixed inset-0 z-[1000] overflow-hidden text-[#14254A] dark:text-white
+        bg-gradient-to-br from-[#EEF3FB] via-[#F8FAFE] to-[#E7EEF8] dark:from-[#0A1833] dark:via-[#122A5C] dark:to-[#0A1833]">
+      {/* Two soft glows in the brand's colours — depth, not decoration that
+          competes with the figures. */}
+      <div aria-hidden className="pointer-events-none absolute -top-40 -right-32 w-[34rem] h-[34rem]
+        rounded-full bg-[#FC934C]/15 dark:bg-[#FC934C]/20 blur-3xl" />
+      <div aria-hidden className="pointer-events-none absolute -bottom-48 -left-40 w-[36rem] h-[36rem]
+        rounded-full bg-[#3B6BD6]/10 dark:bg-[#3B6BD6]/20 blur-3xl" />
+
+      <div className="relative h-full flex flex-col"
+        style={{ padding: 'clamp(0.75rem, 2.2vh, 2rem) clamp(1rem, 2.5vw, 3rem)', gap: 'clamp(0.5rem, 1.8vh, 1.5rem)' }}>
+
+        {/* ── Header ─────────────────────────────────────────────────────── */}
+        <header className="shrink-0 flex items-start justify-between gap-4">
+          <div className="min-w-0 flex items-center flex-wrap gap-x-4 gap-y-1">
+            <h2 className="font-extrabold tracking-tight leading-none"
+              style={{ fontSize: 'clamp(1.25rem, 3.4vh, 2.5rem)' }}>{title}</h2>
+            <button type="button" onClick={onToggleLive}
+              title={live ? 'Pause the live refresh' : 'Resume the live refresh'}
+              className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-[11px] font-bold
+                uppercase tracking-[0.18em] border transition-colors ${
+                stale ? 'border-amber-500/40 bg-amber-400/10 text-amber-700 dark:text-amber-300'
+                  : live || busy ? 'border-[#FC934C]/40 bg-[#FC934C]/10 text-[#D9661F] dark:bg-[#FC934C]/15 dark:text-[#FFB27F]'
+                  : 'border-[#14254A]/15 bg-[#14254A]/5 text-[#14254A]/60 dark:border-white/20 dark:bg-white/5 dark:text-white/60'}`}>
+              <span className="relative flex w-2 h-2">
+                {live && !stale && (
+                  <span className="absolute inline-flex w-full h-full rounded-full bg-[#FC934C] opacity-75 animate-ping" />
+                )}
+                <span className={`relative inline-flex w-2 h-2 rounded-full ${
+                  stale ? 'bg-amber-400' : live || busy ? 'bg-[#FC934C]' : 'bg-[#14254A]/30 dark:bg-white/40'}`} />
+              </span>
+              {status}
+            </button>
+            <RelativeTime iso={asOf} stale={stale} />
+            {caption && (
+              <p className="basis-full text-[#14254A]/60 dark:text-white/60 truncate" title={caption}
+                style={{ fontSize: 'clamp(0.7rem, 1.6vh, 0.95rem)' }}>{caption}</p>
+            )}
+          </div>
+          <div className="shrink-0 flex items-center gap-3">
+            {(stale || partial > 0) && (
+              <p className="hidden md:block max-w-xs truncate text-xs text-amber-800 dark:text-amber-200 bg-amber-400/10 border border-amber-500/30 rounded-lg px-3 py-1.5"
+                title={stale ? err : undefined}>
+                {stale ? 'Showing the last good reading'
+                  : `${partial} platform${partial === 1 ? '' : 's'} did not answer — totals are short`}
+              </p>
+            )}
+            <button ref={closeRef} type="button" onClick={onClose}
+              title="Back to the report (Esc)"
+              className="inline-flex items-center gap-2 pl-3 pr-4 py-2 rounded-xl border border-[#14254A]/15 dark:border-white/15
+                bg-white/80 hover:bg-white dark:bg-white/5 dark:hover:bg-white/10 text-sm font-semibold transition-colors
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-[#FC934C]">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
+              </svg>
+              Close
+              <kbd className="ml-1 text-[10px] font-medium text-[#14254A]/55 dark:text-white/50 border border-[#14254A]/15 dark:border-white/15 rounded px-1">Esc</kbd>
+            </button>
+          </div>
+        </header>
+
+        {/* ── The headline, as a hero — a fixed share of the screen's height ── */}
+        {/* A FLEX ROW OF ONE FIXED HEIGHT, and nothing inside it may set its
+            own. The ring card is exactly as wide as the band is tall, and the
+            ring inside it is sized from the same number — an aspect-ratio box
+            in a grid track grew the band past its height and slid the whole
+            hero under the platform tiles. */}
+        <section className={`shrink-0 flex overflow-hidden transition-opacity duration-300 ${busy ? 'opacity-60' : ''}`}
+          style={{ height: heroH, gap: 'clamp(0.5rem, 1.6vh, 1.25rem)' }}>
+          <div className="flex-1 min-w-0 rounded-3xl border border-[#14254A]/10 bg-white/80 shadow-sm dark:shadow-none dark:border-white/10 dark:bg-white/[0.06] backdrop-blur-sm flex flex-col justify-center"
+            style={{ padding: heroPad }}>
+            <p className="text-[clamp(0.6rem,1.3vh,0.8rem)] font-bold uppercase tracking-[0.2em] text-[#14254A]/55 dark:text-white/50">
+              {hasRemovals ? 'Identified' : 'Found'}
+            </p>
+            <p className={`mt-[1vh] font-extrabold tabular-nums tracking-tight leading-none truncate
+              transition-colors duration-500 ${bumped ? 'text-[#D9661F] dark:text-[#FFB27F]' : 'text-[#14254A] dark:text-white'}`}
+              style={{ fontSize: heroNum }}>
+              {nf.format(total)}
+            </p>
+            <p className="mt-[1vh] text-[clamp(0.65rem,1.5vh,0.9rem)] text-[#14254A]/55 dark:text-white/50 truncate" title={note}>
+              infringements in this window
+            </p>
+          </div>
+
+          {hasRemovals && (
+            <div className="flex-1 min-w-0 rounded-3xl border border-[#FC934C]/25 bg-[#FC934C]/[0.08] backdrop-blur-sm flex flex-col justify-center"
+              style={{ padding: heroPad }}>
+              <p className="text-[clamp(0.6rem,1.3vh,0.8rem)] font-bold uppercase tracking-[0.2em] text-[#D9661F] dark:text-[#FFB27F]/80 truncate">
+                {removedLabel}
+              </p>
+              <p className="mt-[1vh] font-extrabold tabular-nums tracking-tight leading-none text-[#FC934C] truncate"
+                style={{ fontSize: heroNum }}>
+                {nf.format(removed)}
+              </p>
+              <p className="mt-[1vh] text-[clamp(0.65rem,1.5vh,0.9rem)] text-[#14254A]/55 dark:text-white/50 truncate">
+                taken down of those identified
+              </p>
+            </div>
+          )}
+
+          {/* The rate as a ring, square to the hero's height. Only where the
+              card itself would print a percentage; a partial reading gets no
+              ring, for the reason the card gives it no bar. */}
+          <div className="shrink-0 h-full rounded-3xl border border-[#14254A]/10 bg-white/80 shadow-sm dark:shadow-none dark:border-white/10 dark:bg-white/[0.06] backdrop-blur-sm
+            grid place-items-center" style={{ width: heroH }}>
+            {removalRate !== null ? (
+              <div className="relative" style={{ width: `calc(${heroH} - 2 * ${heroPad})`, height: `calc(${heroH} - 2 * ${heroPad})` }}>
+                <svg viewBox="0 0 120 120" className="w-full h-full -rotate-90">
+                  <circle cx="60" cy="60" r="52" fill="none" className="stroke-[#14254A]/10 dark:stroke-white/[0.12]" strokeWidth="10" />
+                  <circle cx="60" cy="60" r="52" fill="none" stroke="#FC934C" strokeWidth="10"
+                    strokeLinecap="round" strokeDasharray={2 * Math.PI * 52}
+                    strokeDashoffset={2 * Math.PI * 52 * (1 - Math.min(100, removalRate) / 100)}
+                    className="transition-[stroke-dashoffset] duration-700" />
+                </svg>
+                <div className="absolute inset-0 grid place-items-center text-center">
+                  <div>
+                    <p className="font-extrabold tabular-nums leading-none"
+                      style={{ fontSize: 'clamp(1rem, 3.4vh, 2rem)' }}>{removalRate}%</p>
+                    <p className="mt-1 text-[clamp(0.5rem,1vh,0.65rem)] uppercase tracking-[0.18em] text-[#14254A]/55 dark:text-white/50">removal</p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center">
+                <p className="font-extrabold tabular-nums leading-none"
+                  style={{ fontSize: 'clamp(1.5rem, 6vh, 3.5rem)' }}>{platforms.length}</p>
+                <p className="mt-1 text-[clamp(0.5rem,1vh,0.7rem)] uppercase tracking-[0.18em] text-[#14254A]/55 dark:text-white/50">
+                  platform{platforms.length === 1 ? '' : 's'}
+                </p>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* ── Every platform, ranked — fitted to whatever height is left ──── */}
+        <section className={`flex-1 min-h-0 flex flex-col transition-opacity duration-300 ${busy ? 'opacity-60' : ''}`}
+          style={{ gap: 'clamp(0.35rem, 1vh, 0.75rem)' }}>
+          <div className="shrink-0 flex items-end justify-between gap-3">
+            <h3 className="text-[clamp(0.6rem,1.4vh,0.85rem)] font-bold uppercase tracking-[0.2em] text-[#14254A]/60 dark:text-white/60">
+              By platform
+            </h3>
+            {hasRemovals && platforms.length > 0 && (
+              <p className="flex items-center gap-4 text-[clamp(0.6rem,1.3vh,0.8rem)] text-[#14254A]/55 dark:text-white/50">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-3 h-1.5 rounded-full bg-[#FC934C]" />{removedLabel}
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-3 h-1.5 rounded-full bg-[#14254A]/20 dark:bg-white/25" />active
+                </span>
+              </p>
+            )}
+          </div>
+          <div ref={gridRef} className="flex-1 min-h-0">
+            {platforms.length === 0 ? (
+              <p className="text-[#14254A]/55 dark:text-white/50">No data found for the selected date range.</p>
+            ) : fit && (
+              /* Explicit track sizes, CAPPED — see fitGrid. Two platforms on a
+                 wide screen are two readable cards, not two half-screen slabs
+                 with a number floating in each. Centred both ways in the space
+                 left, so a short list sits balanced on the screen rather than
+                 hanging from the top with a void beneath it. */
+              <div className="grid h-full justify-center content-center"
+                style={{
+                  gridTemplateColumns: `repeat(${fit.cols}, ${Math.floor(fit.w)}px)`,
+                  gridTemplateRows: `repeat(${fit.rows}, ${Math.floor(fit.h)}px)`,
+                  gap,
+                }}>
+                {platforms.map((p, i) => (
+                  <PlatformTile key={p.key} p={p} rank={i + 1} peak={peak}
+                    w={fit.w} h={fit.h} />
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* ── The card's own controls, in the screen's dress ─────────────────────
+            The same glass panel as the tiles above, in either theme. The
+            controls are the card's own and follow the portal theme exactly as
+            they do on the card — the labels by their dark: styles, the slider by
+            --rt-track, the dropdowns by detecting `.dark` on <html>. Changing
+            one re-reads both views. */}
+        {(windowPicker || pickers.length > 0) && (
+          /* ONE ROW, never wrapped: a wrapped bar doubled its height on a small
+             or zoomed screen and took it straight out of the platform grid. The
+             window slider keeps a fixed width; the dropdowns share the rest and
+             shrink (they are min-w-0), growing again up to their cap. */
+          <footer className="shrink-0 rounded-2xl border border-[#14254A]/10 bg-white/80 shadow-sm dark:shadow-none dark:border-white/10 dark:bg-white/[0.06] backdrop-blur-sm
+            text-[#14254A] dark:text-white px-4 py-2 flex flex-nowrap items-center gap-x-4 min-w-0">
+            {windowPicker}
+            {pickers}
+            {onReset && (
+              <button type="button" onClick={onReset}
+                className="text-[11px] font-semibold text-[#FC934C] hover:underline">
+                match the report
+              </button>
+            )}
+          </footer>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The column and row count that gives `n` tiles the most room in a w × h box.
+ *
+ * Every column count is tried and scored by the size of the tile it yields,
+ * measured as the smaller of its height and its width over a landscape ratio —
+ * so a layout of very wide, very short strips does not win just because it is
+ * wide. Ties go to fewer rows, which reads as a ranking left to right.
+ */
+function fitGrid(n: number, w: number, h: number, gap: number) {
+  if (n <= 0 || w <= 0 || h <= 0) return null
+  const ratio = 1.7
+  let best: { cols: number; rows: number; w: number; h: number; score: number } | null = null
+  /* No column so narrow that a platform's NAME cannot be read — past this a
+     zoomed page produced a row of "Ope…", "Tel…" tiles. Waived only when no
+     layout clears it, so a very small window still gets something. */
+  const minW = Math.min(115, w)
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols)
+    const tw = (w - gap * (cols - 1)) / cols
+    const th = (h - gap * (rows - 1)) / rows
+    if (tw <= 0 || th <= 0 || tw < minW) continue
+    const score = Math.min(th, tw / ratio)
+    if (!best || score > best.score + 0.5) best = { cols, rows, w: tw, h: th, score }
+  }
+  /* Capped, so a short list does not stretch to fill the screen: a tile beyond
+     this size gains nothing but empty space around its number. The height cap
+     follows the width actually given, keeping every tile landscape. */
+  if (best) {
+    best.w = Math.min(best.w, 420)
+    best.h = Math.min(best.h, 210, best.w / 1.45)
+  }
+  return best
+}
+
+/**
+ * One platform, sized to the cell fitGrid gave it.
+ *
+ * LAID OUT FROM A HEIGHT BUDGET. The tile's inner height is spent in order —
+ * the name row, then the removal bar, the caption and the volume bar, each only
+ * if what is left still gives the count a readable size — and the count takes
+ * whatever remains. So the parts always add up to the box: at any window size or
+ * browser zoom, nothing overlaps and nothing is squeezed out from under another.
+ * (Sized by the width alone, a zoomed page shrank the tile and the count ran
+ * into the bars below it.) Every row is shrink-0 for the same reason.
+ */
+function PlatformTile({ p, rank, peak, w, h }: {
+  p: RealtimePlatform; rank: number; peak: number; w: number; h: number
+}) {
+  const rem = typeof p.removed === 'number' ? Math.min(p.removed, p.count) : null
+  const exact = rem !== null && p.count > 0 ? (rem / p.count) * 100 : 0
+  const fill = rem !== null && rem > 0 ? Math.max(2, exact) : exact
+  const top = rank === 1 && p.count > 0
+
+  const clamp = (lo: number, v: number, hi: number) => Math.max(lo, Math.min(hi, v))
+  const pad = clamp(6, Math.min(h, w / 1.7) * 0.1, 18)
+  const inner = Math.max(0, h - 2 * pad)
+  const gapY = clamp(3, inner * 0.05, 10)
+  const nameSize = clamp(10, inner * 0.14, 16)
+  const nameH = nameSize * 1.45                      // the rank pill is the taller of the pair
+  const barH = clamp(3, inner * 0.04, 7)
+  const capSize = clamp(9, inner * 0.09, 13)
+  const capH = capSize * 1.35
+  const countMin = 14
+
+  // Spend what is left after the name, most important first.
+  let avail = inner - nameH - gapY
+  const showRemBar = rem !== null && avail - (barH + gapY) >= countMin
+  if (showRemBar) avail -= barH + gapY
+  const showCaption = rem !== null && avail - (capH + gapY) >= countMin * 1.6
+  if (showCaption) avail -= capH + gapY
+  const showVolume = avail - (4 + gapY) >= countMin * 2.2
+  if (showVolume) avail -= 4 + gapY
+  const countSize = clamp(12, Math.min(avail, 64, w * 0.2), 64)
+
+  const tip = `#${rank} ${p.label} — ${nf.format(p.count)} identified${
+    rem !== null ? `, ${nf.format(rem)} ${removedWord(p.removalBasis)} (${Math.round(exact)}%)` : ''}`
+
+  /* ── Too short to stack a name over a count ────────────────────────────────
+     A very small window or a heavy zoom with many platforms. One line instead —
+     name left, count right, removal share as a hairline along the foot — so the
+     number is never the thing that gets clipped. */
+  if (inner - nameH - gapY < countMin) {
+    const size = clamp(10, inner * 0.55, 15)
+    return (
+      <div title={tip}
+        className={`relative min-w-0 min-h-0 overflow-hidden rounded-xl border backdrop-blur-sm flex items-center justify-between gap-2 ${
+          top ? 'border-[#FC934C]/50 bg-[#FC934C]/15' : 'border-[#14254A]/10 bg-white/85 shadow-sm dark:shadow-none dark:border-white/10 dark:bg-white/[0.05]'}`}
+        style={{ padding: `0 ${pad}px` }}>
+        <span className="font-semibold truncate text-[#14254A] dark:text-white/85" style={{ fontSize: size * 0.9 }}>{p.label}</span>
+        <span className="shrink-0 font-extrabold tabular-nums" style={{ fontSize: size }}>{nf.format(p.count)}</span>
+        {rem !== null && (
+          <span className="absolute left-0 bottom-0 h-[2px] bg-[#FC934C]" style={{ width: `${fill}%` }} />
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div title={tip}
+      className={`min-w-0 min-h-0 overflow-hidden rounded-2xl border backdrop-blur-sm flex flex-col justify-between ${
+        top ? 'border-[#FC934C]/50 bg-gradient-to-br from-[#FC934C]/15 to-white dark:from-[#FC934C]/20 dark:to-white/[0.04]'
+          : 'border-[#14254A]/10 bg-white/85 shadow-sm dark:shadow-none dark:border-white/10 dark:bg-white/[0.05]'}`}
+      style={{ padding: pad }}>
+      <div className="shrink-0 flex items-center justify-between gap-2 min-w-0" style={{ height: nameH }}>
+        <span className="font-semibold truncate text-[#14254A] dark:text-white/90 leading-tight" style={{ fontSize: nameSize }}>{p.label}</span>
+        <span className={`shrink-0 font-bold tabular-nums px-2 rounded-full leading-[1.6] ${
+          top ? 'bg-[#FC934C] text-[#0A1833]' : 'bg-[#14254A]/[0.07] text-[#14254A]/60 dark:bg-white/10 dark:text-white/60'}`}
+          style={{ fontSize: Math.max(9, nameSize * 0.7) }}>
+          #{rank}
+        </span>
+      </div>
+      <p className="shrink-0 font-extrabold tabular-nums tracking-tight leading-none truncate"
+        style={{ fontSize: countSize, height: countSize }}>
+        {nf.format(p.count)}
+      </p>
+      <div className="shrink-0 flex flex-col" style={{ gap: gapY }}>
+        {/* Volume against the busiest platform — the one comparison the
+            removal bar below cannot make. */}
+        {showVolume && (
+          <div className="h-1 rounded-full bg-[#14254A]/10 dark:bg-white/10 overflow-hidden" title="share of the busiest platform">
+            <div className="h-full rounded-full bg-[#14254A]/45 dark:bg-white/60 transition-[width] duration-500"
+              style={{ width: `${p.count > 0 ? Math.max(2, (p.count / peak) * 100) : 0}%` }} />
+          </div>
+        )}
+        {showRemBar && (
+          <div className="rounded-full bg-[#14254A]/10 dark:bg-white/15 overflow-hidden" style={{ height: barH }}>
+            <div className="h-full rounded-full bg-[#FC934C] transition-[width] duration-500"
+              style={{ width: `${fill}%` }} />
+          </div>
+        )}
+        {showCaption && (
+          <p className="tabular-nums text-[#14254A]/60 dark:text-white/60 truncate leading-tight" style={{ fontSize: capSize, height: capH }}>
+            <span className="text-[#D9661F] dark:text-[#FFB27F] font-semibold">{nf.format(rem ?? 0)}</span>
+            {' '}{removedWord(p.removalBasis)}
+            {p.count > 0 && <span className="text-[#14254A]/45 dark:text-white/40"> · {Math.round(exact)}%</span>}
+          </p>
+        )}
+      </div>
+    </div>
   )
 }

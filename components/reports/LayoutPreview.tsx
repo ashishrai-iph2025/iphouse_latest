@@ -35,7 +35,12 @@ export type PreviewSpan = 'full' | 'half' | 'third' | 'quarter'
  *  convert and neither can pass the wrong thing. */
 export interface PreviewPanel {
   key: string
-  kind: 'tile' | 'heading' | 'trend' | 'rate' | 'dim' | 'filter' | 'realtime'
+  /* Every kind the layout can hold. The preview only branches on four of
+     them and draws the rest as a plain block, but the union still has to be
+     complete: a caller's panel list is assigned to this type wholesale, so a
+     kind missing here is a type error at the call site rather than a panel
+     the wireframe quietly skips. */
+  kind: 'tile' | 'heading' | 'trend' | 'trendsplit' | 'rate' | 'dim' | 'filter' | 'realtime'
   name: string
   /** The reader's own label for it, where one has been set. */
   title?: string

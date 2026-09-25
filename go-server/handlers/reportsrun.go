@@ -142,6 +142,16 @@ func ReportsSections(w http.ResponseWriter, r *http.Request) {
 		   tile the layout offers is drawn whatever the figures say — an absent
 		   value is an em dash, not a hidden card. See withAutoClaimTiles. */
 		extras = withAutoClaimTiles(r.Context(), extras, specs, clientID)
+		/* And the six per-side tiles on a two-sided platform — Open Web's
+		   linking and host halves. Here for exactly the same reason as the line
+		   above: runPlatform assembles them from roleKPI, no spec declares them,
+		   and a metric missing from THIS list is drawn for nobody however
+		   faithfully it is computed. See withPerSideTiles. */
+		extras = withPerSideTiles(extras, p)
+		// Domains Suspended / Total Traffic Impacted — assembled in runPlatform,
+		// declared by no spec. See domainsuspension.go.
+		extras = withSuspensionTiles(extras, specs)
+		sort.Strings(extras)
 
 		entry := map[string]any{
 			"key": p.Key, "label": p.Label,
@@ -585,6 +595,9 @@ func runSpec(s reportSpec, q map[string]string, bg bool) map[string]any {
 	for _, name := range extraNames {
 		kpi[name] = numOf(kpiRow[name])
 	}
+	// The expressions already floor this per row; this catches a stored column
+	// that reached the tile some other way. See viewsSavedFloor.
+	floorViewsSaved(kpi)
 	if s.DelistedExpr != "" {
 		kpi["delisted"] = numOf(kpiRow["delisted"])
 	}
@@ -630,6 +643,11 @@ func runSpec(s reportSpec, q map[string]string, bg bool) map[string]any {
 			for _, name := range extraNames {
 				kpiPrev[name] = numOf(prevRow[name])
 			}
+			/* The comparison window gets the same floor as the current one.
+			   A delta is only readable if both sides are the same measure, and
+			   an unfloored previous figure against a floored current one would
+			   report a rise that is entirely the floor. */
+			floorViewsSaved(kpiPrev)
 			if s.DelistedExpr != "" {
 				kpiPrev["delisted"] = numOf(prevRow["delisted"])
 			}
