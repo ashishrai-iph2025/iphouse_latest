@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -253,12 +254,48 @@ func Get() *Client {
 				// Generous, because an aggregate over a client's slice of a
 				// 3M-row table is genuinely slow — but bounded, because a report
 				// page must not hold a portal worker open indefinitely.
-				Timeout: envDuration("REPORTS_API_TIMEOUT_SECONDS", 90*time.Second),
+				Timeout:       envDuration("REPORTS_API_TIMEOUT_SECONDS", 90*time.Second),
+				CheckRedirect: keepMethodOnRedirect,
 			},
 		}
 	})
 	return shared
 }
+
+/*
+keepMethodOnRedirect follows a redirect WITHOUT turning a POST into a GET.
+
+Go's client, like browsers, re-sends a 301/302-redirected POST as a GET. When
+something between the portal and the service redirects (a proxy moving http to
+https, a host rename), every GET still works and every POST arrives as a GET —
+which the service rightly answers 405. That was the staging failure on "Prepare
+now" / "Cache now". Every call this client makes carries its arguments in the
+URL and has no body, so repeating the original method at the new address is
+safe. The key and the priority travel with it; the new address is logged once,
+so the configured base URL can be pointed straight at it.
+*/
+func keepMethodOnRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 5 {
+		return fmt.Errorf("stopped after %d redirects", len(via))
+	}
+	orig := via[0]
+	if orig.Method != http.MethodGet && orig.Method != http.MethodHead && orig.ContentLength == 0 {
+		req.Method = orig.Method
+	}
+	for _, h := range []string{"X-API-Key", "X-Request-Priority"} {
+		if v := orig.Header.Get(h); v != "" {
+			req.Header.Set(h, v)
+		}
+	}
+	target := req.URL.Scheme + "://" + req.URL.Host
+	if _, seen := redirectsLogged.LoadOrStore(target, true); !seen {
+		log.Printf("[reports-api] %s redirects to %s — set the Reports API base URL to that address to skip the extra hop",
+			orig.URL.Scheme+"://"+orig.URL.Host, target)
+	}
+	return nil
+}
+
+var redirectsLogged sync.Map
 
 func envDuration(k string, def time.Duration) time.Duration {
 	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
