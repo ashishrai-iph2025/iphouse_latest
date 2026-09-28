@@ -313,6 +313,15 @@ func (c *Cache) writeFor(ctx context.Context, key, platform, clientID, from, to 
 	if ttl <= 0 || ttl > full {
 		ttl = full
 	}
+	/* A CLOSED window is final: a report on January does not change once
+	   January is over. Held to the retention above it was thrown away every day
+	   and rebuilt — so caching a year of months on demand, hours of warehouse
+	   time, bought one day. Closed windows are kept for closedWindowTTL instead;
+	   the freshness check on read (revalidate) still rebuilds one if the
+	   warehouse is corrected underneath it. Drill-downs keep their short life. */
+	if !isDrillKey(key) && windowClosed(to) && ttl < closedWindowTTL {
+		ttl = closedWindowTTL
+	}
 
 	if err := rdb.Set(ctx, key, rec, ttl).Err(); err != nil {
 		c.errors.Add(1)
@@ -380,6 +389,22 @@ func (c *Cache) List(ctx context.Context, limit int) ([]Entry, error) {
 // scope. The kind is carried in the key, so the two can be told apart without
 // reading the entry.
 func isDrillKey(key string) bool { return strings.HasPrefix(key, keyPrefix()+"d:") }
+
+// closedWindowTTL is how long a report on a window that has ENDED is kept —
+// see writeFor. Redis's own LRU limit still evicts under memory pressure.
+const closedWindowTTL = 30 * 24 * time.Hour
+
+// windowClosed reports whether a window ending on `to` (YYYY-MM-DD) is over:
+// it ended before yesterday, so no late-arriving row for its last day is still
+// expected. Unparseable or empty dates count as open.
+func windowClosed(to string) bool {
+	end, err := time.Parse("2006-01-02", strings.TrimSpace(to))
+	if err != nil {
+		return false
+	}
+	yesterday := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -1)
+	return end.Before(yesterday)
+}
 
 /*
 Purge removes every cached report. The index goes with it, so nothing is left
