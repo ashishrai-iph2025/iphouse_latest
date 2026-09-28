@@ -18,9 +18,10 @@ services:
 
   redis:
     image: redis:7-alpine
-    # The application's ONE Redis: the War Room dataset, the report cache (Sports
-    # and VOD), and — under the `reports_api:` prefix — Traffic and Torrent
-    # Analysis, plus the usage counts the top-clients auto-cache ranks by.
+    # The portal's Redis: the War Room dataset, the report cache (Sports and
+    # VOD), and the usage counts the top-clients auto-cache ranks by. Traffic and
+    # Torrent Analysis are cached by reports_api in ITS own Redis (reports_redis),
+    # on the reports_api server — the portal reads them through its endpoints.
     #
     # Capped with LRU eviction, and PERSISTED: append-only file, flushed every
     # second, on a named volume. Without it every rebuild of this stack (which
@@ -37,3 +38,9 @@ services:
 volumes:
   # Redis's append-only file — see the redis service above.
   redis-data:
+
+networks:
+  # Named explicitly so reports_api (its own compose project) can join it and
+  # reach this Redis as redis:6379 — whatever folder this project is deployed from.
+  default:
+    name: iphouse_latest_default
