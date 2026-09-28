@@ -2,11 +2,12 @@
 
 // Traffic Analysis and Torrent Analysis on the Cache & Redis tab.
 //
-// Both are computed by reports_api and cached in THIS portal's Redis — the same
-// one the report cache above uses — under their own key prefix. reports_api
-// owns those entries, so this panel reads and steers them through it
-// (handlers/admin/analyticscache.go). Same four questions as the panel above:
-// is it connected, is it doing any good, what is in it, how do I refresh it.
+// Both are computed by reports_api and cached in reports_api's OWN Redis
+// (reports_redis, on the reports API server) — not the portal's. The portal
+// never connects to it, so this panel reads and steers those entries through
+// the reports API (handlers/admin/analyticscache.go). Same four questions as
+// the portal's panel: is it connected, is it doing any good, what is in it,
+// how do I refresh it.
 
 import { useEffect, useMemo, useState } from 'react'
 import CachePeriodForm, { Progress, type PeriodRequest } from './cache/CachePeriodForm'
@@ -143,7 +144,7 @@ export default function AnalyticsCachePanel() {
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 className="text-lg font-bold text-[#14254A]">Traffic &amp; Torrent Analysis</h2>
         <p className="text-xs text-gray-500">
-          Computed by the reports API and cached in this same Redis, each under its own prefix — emptying one never touches the report cache above.
+          Computed by the reports API and cached in its own Redis, each under its own prefix — emptying one never touches the portal&rsquo;s report cache.
         </p>
         <button onClick={load} className="ml-auto text-xs text-[#14254A] hover:underline">Refresh</button>
       </div>

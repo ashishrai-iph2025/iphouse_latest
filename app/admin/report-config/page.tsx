@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import BackToConfiguration from '@/components/admin/BackToConfiguration'
 import ReportsApiConnectionPanel from '@/components/admin/ReportsApiConnectionPanel'
 import ReportCachePanel from '@/components/admin/ReportCachePanel'
-import CacheSections from '@/components/admin/cache/CacheSections'
+import CacheSections, { RedisGroup, ReportsApiRedisStatus } from '@/components/admin/cache/CacheSections'
 import AutoTopPanel from '@/components/admin/AutoTopPanel'
 import SportsPeriodPanel from '@/components/admin/SportsPeriodPanel'
 import ReportScopePanel from '@/components/admin/ReportScopePanel'
@@ -2979,7 +2979,23 @@ export default function ReportConfigPage() {
 
       {tab === 'connection' && <ReportsApiConnectionPanel />}
 
-      {tab === 'cache' && <><ReportCachePanel /><AutoTopPanel /><CacheSections /></>}
+      {tab === 'cache' && <>
+        {/* Two Redis, one per server — each group shows and steers only its own. */}
+        <RedisGroup n={1} title="Portal Redis — iphouse_Latest"
+          where="On the application server, beside the portal (redis:6379). The portal connects to it directly."
+          holds="Sports and VOD report cache, War Room data, and the usage counts behind “most-opened clients”.">
+          <ReportCachePanel />
+          <CacheSections keys={['sports', 'vod']} storageKey="cache-section-portal" />
+        </RedisGroup>
+        <RedisGroup n={2} title="Reports API Redis — reports_api"
+          where="On the reports API server (reports_redis), beside reports_api. The portal never connects to it — status, contents and caching go through the reports API."
+          holds="Traffic Analysis and Torrent Analysis."
+          status={<ReportsApiRedisStatus />}>
+          <CacheSections keys={['traffic', 'torrent']} storageKey="cache-section-reports" />
+        </RedisGroup>
+        {/* Spans both: it keeps the most-used clients ready in each Redis. */}
+        <div className="mt-8"><AutoTopPanel /></div>
+      </>}
 
       {tab === 'access' && (
         <div className="space-y-4">
