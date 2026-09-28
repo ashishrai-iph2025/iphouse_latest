@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -57,6 +58,7 @@ func main() {
 	   it stays here: it is data the portal needs present, re-asserted on every
 	   boot rather than recorded as done once. */
 	handlers.EnsureReportsAccess()
+	handlers.EnsureBIModules()
 
 	/* And the Calendar module, on the same terms and for the same reason: the
 	   programme calendar on the landing page is its own grant now, and the row
@@ -90,6 +92,8 @@ func main() {
 
 	handlers.StartReportCache()
 	admin.ApplyReportCacheSettings()
+	// The top-clients auto-cache's schedule (off until enabled on the tab).
+	go admin.RunAutoTop(context.Background())
 
 	/* The password-expiry sweep. Hourly and idempotent — see
 	   handlers/passwordexpiry.go — so a restart cannot make it miss a
@@ -178,6 +182,10 @@ func main() {
 	mux.Handle("POST /api/warroom", auth(handlers.WarRoom))
 	mux.Handle("POST /api/warroom/stream", auth(handlers.WarRoomStream))
 	mux.Handle("GET /api/warroom/assets", auth(handlers.WarRoomAssets))
+	// Panel order, size, titles and default chart type / Top-N — handlers/warroomlayout.go.
+	mux.Handle("GET /api/warroom/layout", auth(handlers.WarRoomLayout))
+	mux.Handle("PUT /api/warroom/layout", auth(handlers.WarRoomLayout))
+	mux.Handle("DELETE /api/warroom/layout", auth(handlers.WarRoomLayout))
 
 	/* The live discovery counts behind the Realtime card, for the War Room and
 	   for the sports reports. Behind `auth` and scoped to the caller's own
@@ -442,6 +450,20 @@ func main() {
 	   handlers/reportsassets.go. */
 	mux.Handle("GET /api/reports/assets", auth(handlers.ReportsAssets))
 
+	/* Traffic Analysis — SimilarWeb figures for a client's domains, passed
+	   through from reports_api's /v1/traffic/*. Staff-only: the clientId is the
+	   caller's choice. See handlers/trafficanalysis.go. The literal /clients
+	   route is more specific than {view}, so the mux prefers it. */
+	mux.Handle("GET /api/admin/traffic-analysis/clients", adminAuth(handlers.TrafficAnalysisClients))
+	mux.Handle("GET /api/admin/traffic-analysis/{view}", adminAuth(handlers.TrafficAnalysis))
+	/* Torrent Analysis — passed through from reports_api's /v1/torrent/*. See
+	   handlers/torrentanalysis.go. Staff-only, like Traffic Analysis. */
+	mux.Handle("GET /api/admin/torrent-analysis/{path...}", adminAuth(handlers.TorrentAnalysis))
+	/* The same two pages for client logins, under Business Intelligence: granted
+	   per login, client pinned to the login's own. See handlers/bianalytics.go. */
+	mux.Handle("GET /api/bi/traffic-analysis/{view}", auth(http.HandlerFunc(handlers.BITraffic)))
+	mux.Handle("GET /api/bi/torrent-analysis/{path...}", auth(http.HandlerFunc(handlers.BITorrent)))
+
 	/* The asset register. Signed-in routes, not Reports routes — the grant is
 	   its own (asset_user_access) and the handlers check it, so gating these on
 	   the Reports module here would be a second, quieter rule that disagrees. */
@@ -453,6 +475,9 @@ func main() {
 	// Reports module the handlers already check.
 	mux.Handle("GET /api/reports/viz-prefs", auth(handlers.ReportVizPrefsGet))
 	mux.Handle("PUT /api/reports/viz-prefs", auth(handlers.ReportVizPrefsSave))
+	// Top 10/15/20/25 kept per panel — see handlers/reporttopn.go.
+	mux.Handle("GET /api/reports/topn-prefs", auth(handlers.ReportTopNPrefsGet))
+	mux.Handle("PUT /api/reports/topn-prefs", auth(handlers.ReportTopNPrefsSave))
 	// Which warehouse client a portal client reads. Staff-only, and the reason
 	// the two above can be opened at all.
 	mux.Handle("GET /api/admin/report-client-map", cfg("report-config", handlers.ReportClientMapList))
@@ -575,6 +600,17 @@ func main() {
 	mux.Handle("POST /api/admin/report-cache/warm-client", cfg("report-config", admin.ReportCacheWarmClient))
 	mux.Handle("POST /api/admin/report-cache/purge", cfg("report-config", admin.ReportCachePurge))
 	mux.Handle("POST /api/admin/report-cache/sweep", cfg("report-config", admin.ReportCacheSweep))
+	/* Traffic / Torrent Analysis caches — reports_api's entries in this same
+	   Redis, shown on the Cache & Redis tab. See handlers/admin/analyticscache.go. */
+	mux.Handle("GET /api/admin/report-cache/analytics", cfg("report-config", admin.ReportCacheAnalytics))
+	mux.Handle("POST /api/admin/report-cache/analytics/{action}", cfg("report-config", admin.ReportCacheAnalyticsAction))
+	/* "Keep the most-used clients ready" — see handlers/admin/autotop.go. */
+	mux.Handle("GET /api/admin/report-cache/autotop", cfg("report-config", admin.ReportCacheAutoTop))
+	mux.Handle("PUT /api/admin/report-cache/autotop", cfg("report-config", admin.ReportCacheAutoTop))
+	mux.Handle("POST /api/admin/report-cache/autotop/run", cfg("report-config", admin.ReportCacheAutoTopRun))
+	/* Sports and VOD sections of the Cache & Redis tab — see handlers/admin/sectioncache.go. */
+	mux.Handle("GET /api/admin/report-cache/section", cfg("report-config", admin.ReportCacheSection))
+	mux.Handle("POST /api/admin/report-cache/section/warm", cfg("report-config", admin.ReportCacheSectionWarm))
 
 	mux.Handle("GET /api/admin/reports-api-config", cfg("report-config", admin.ReportsAPIConfig))
 	mux.Handle("POST /api/admin/reports-api-config", cfg("report-config", admin.ReportsAPIConfig))
@@ -595,6 +631,17 @@ func main() {
 	}
 	staticFS := http.FileServer(http.Dir(distDir))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		/* An /api/ path no route matched is an API miss, answered as JSON.
+		   It fell through to the SPA fallback below and came back as
+		   index.html with a 200, so a caller expecting data got a web page —
+		   and the report printed the JSON parser's "Unexpected token '<'"
+		   instead of anything a reader could act on. */
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"ok":false,"error":"Not found"}`))
+			return
+		}
 		/*
 			── CACHING, AND THE BUG IT CAUSED ──────────────────────────────
 

@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -87,7 +88,10 @@ func New(addr string) Store {
 		return newMemStore()
 	}
 	rdb := redis.NewClient(&redis.Options{
-		Addr:         addr,
+		Addr: addr,
+		// The application's Redis requires one when it is reached from another
+		// server (staging: reports_api on its own EC2); empty otherwise.
+		Password:     os.Getenv("REDIS_PASSWORD"),
 		DialTimeout:  2 * time.Second,
 		ReadTimeout:  3 * time.Second,
 		WriteTimeout: 3 * time.Second,

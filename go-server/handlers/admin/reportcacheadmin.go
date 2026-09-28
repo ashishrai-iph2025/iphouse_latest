@@ -198,6 +198,11 @@ func loadCacheSettings() cacheSettings {
 	if s.Addr == "" {
 		s.Addr = strings.TrimSpace(os.Getenv("REDIS_ADDR"))
 	}
+	// Same fallback for the password, so a Redis secured by REDIS_PASSWORD in
+	// the environment works without also typing it into the Cache & Redis tab.
+	if s.Password == "" {
+		s.Password = os.Getenv("REDIS_PASSWORD")
+	}
 	return s
 }
 

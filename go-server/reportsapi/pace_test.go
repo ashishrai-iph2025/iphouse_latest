@@ -93,7 +93,7 @@ func TestSetBudgetTakesEffect(t *testing.T) {
 // The portal's ceiling has to sit under the service's own, or the two windows
 // drifting against each other puts a burst over the line.
 func TestCeilingIsUnderTheServiceLimit(t *testing.T) {
-	const serviceDefault = 600 // reports_api RATE_LIMIT_PER_MINUTE
+	const serviceDefault = 6000 // reports_api RATE_LIMIT_PER_MINUTE
 	// The DEFAULT, not the live value: an operator who has raised the service's
 	// own limit is expected to raise this to match, and the test must not tell
 	// them they are wrong for doing the thing the setting is for.

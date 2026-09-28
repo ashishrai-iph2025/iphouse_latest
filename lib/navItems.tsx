@@ -222,6 +222,21 @@ export const NAV_ITEMS: NavItem[] = [
       </svg>
     ),
   },
+  {
+    // Traffic Analysis and Torrent Analysis, each granted per login. The server
+    // narrows this tab's dropdown to the pages the login holds, and adds the tab
+    // when only a page was granted — see go-server/handlers/bianalytics.go. No
+    // code fallback for the dropdown: an ungranted page must never appear.
+    label:    'Business Intelligence',
+    href:     '/business-intelligence',
+    matches:  ['/business-intelligence'],
+    pageName: 'BusinessIntelligence',
+    icon: (
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 3v18h18M7 15l4-4 3 3 5-6"/>
+      </svg>
+    ),
+  },
 ]
 
 // Live display label for a nav/dropdown item: the current module name from the
@@ -303,7 +318,8 @@ which is a worse failure than being told it is unavailable.
 report-vod is the same page as Reports, reading the same endpoints, so the
 same reasoning applies without needing to be re-checked separately.
 */
-export const API_INDEPENDENT_PAGES = ['data-sharing', 'Reports', 'report-vod', 'welcome']
+// Business Intelligence reads reports_api only (bianalytics.go), like Reports.
+export const API_INDEPENDENT_PAGES = ['data-sharing', 'Reports', 'report-vod', 'welcome', 'BusinessIntelligence']
 
 export function isApiIndependentItem(item: NavItem): boolean {
   return API_INDEPENDENT_PAGES.includes(item.pageName)

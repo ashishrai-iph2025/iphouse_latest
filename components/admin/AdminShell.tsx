@@ -46,6 +46,8 @@ const navGroups: NavGroup[] = [
     label: 'Reporting',
     items: [
       { href: '/admin/reports', icon: '📈', label: 'Reports' },
+      { href: '/admin/traffic-analysis', icon: '🌐', label: 'Traffic Analysis' },
+      { href: '/admin/torrent-analysis', icon: '🧲', label: 'Torrent Analysis' },
     ],
   },
   {

@@ -71,7 +71,21 @@ rather than an observed outcome. The card stacks them in one bar, so the words
 beside the bar are the only place that difference survives.
 */
 func TestRemovalBasisSeparatesNoticesFromDeadURLs(t *testing.T) {
-	notice := removalBasis("d.InfringingRemovalStatus = 'Approved'")
+	notice := removalBasis("(d.InfringingRemovalStatus IS NOT NULL AND d.InfringingRemovalStatus <> 'Rejected')")
+	if notice != "delisting notice approved or pending" {
+		t.Errorf("the pending-inclusive Open Web predicate reads as %q", notice)
+	}
+	/* The current rule includes host takedowns, so its words must not carry
+	   "delist" or "de-index" — the card turns either into a "de-indexed" label. */
+	both := removalBasis("((d.InfringingRemovalStatus IS NOT NULL AND d.InfringingRemovalStatus <> 'Rejected') " +
+		"OR g.DelistingListReportedAt IS NOT NULL OR b.DelistingListReportedAt IS NOT NULL)")
+	if both == "" || strings.Contains(strings.ToLower(both), "delist") || strings.Contains(strings.ToLower(both), "de-index") {
+		t.Errorf("the current Open Web predicate reads as %q", both)
+	}
+	// The older, Approved-only spelling, from a service not yet updated.
+	if old := removalBasis("d.InfringingRemovalStatus = 'Approved'"); old != "approved delisting notice" {
+		t.Errorf("the Approved-only predicate reads as %q", old)
+	}
 	dead := removalBasis("t.RemovalStatus = 'Dead'")
 	if notice == dead {
 		t.Fatalf("both predicates described as %q", notice)

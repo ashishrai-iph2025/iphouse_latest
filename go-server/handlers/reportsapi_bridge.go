@@ -2239,6 +2239,18 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			extraFromRows2 = countDistinctPerGroup(distinctColOf(d.ExtraExpr2))
 		}
 
+		/* "Top 10 Linking Websites" is measured on DE-INDEXING: a linking URL is
+		   dropped from search results, not taken down. Carried as its own field
+		   beside `removed` rather than in place of it, so the one panel that
+		   draws it (the report page reads it on byDomain only) changes and
+		   nothing else that folds these rows — the summary — does. */
+		deindexKey := ""
+		if d.Key == dimLinkingWebsites && s.Role == "linking" {
+			if m, ok := apiMeasureFor("delisted", ds); ok {
+				deindexKey = m
+			}
+		}
+
 		out := make([]map[string]any, 0, len(rows))
 		for _, r := range rows {
 			row := map[string]any{
@@ -2251,6 +2263,9 @@ func runSpecViaAPI(s reportSpec, q map[string]string, bg bool) map[string]any {
 			}
 			if removedKey != "" {
 				row["removed"] = numOf(r[removedKey])
+			}
+			if deindexKey != "" {
+				row["deindexed"] = numOf(r[deindexKey])
 			}
 			/* The service's answer where it gave one, the row walk where it did
 			   not. A zero is treated as "did not answer": a provider with no

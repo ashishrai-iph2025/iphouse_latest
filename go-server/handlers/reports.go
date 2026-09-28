@@ -5,10 +5,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ip-house/iphouse-api/db"
+	"github.com/ip-house/iphouse-api/reportcache"
 	"github.com/ip-house/iphouse-api/reportsapi"
 )
 
@@ -409,6 +411,9 @@ func ReportsData(w http.ResponseWriter, r *http.Request) {
 		Fail(w, 422, "A client is required")
 		return
 	}
+	// Counted once per person per client per 10 minutes — the ranking the
+	// "top clients" auto-cache keeps ready. See reportcache/usage.go.
+	reportcache.Get().NoteUse("reports", clientID, strconv.FormatInt(claims.LoginID, 10))
 	/*
 		The RESOLVED client, written back over whatever the request asked for.
 

@@ -114,6 +114,16 @@ func removalBasis(when string) string {
 	switch {
 	case w == "":
 		return ""
+	/* Open Web's current rule spans BOTH halves' enforcement: a link delisted
+	   (an outcome other than NULL or Rejected, or a submission to Google or
+	   Bing) and a host takedown. Worded without "de-index", because the card
+	   turns that word into its "de-indexed" label, and a figure that includes
+	   host takedowns is not only de-indexing. The older spellings keep their own
+	   descriptions for a service that has not been updated. */
+	case strings.Contains(w, "infringingremovalstatus") && strings.Contains(w, "delistinglistreportedat"):
+		return "link taken off search results or host took the content down"
+	case strings.Contains(w, "infringingremovalstatus") && strings.Contains(w, "rejected"):
+		return "delisting notice approved or pending"
 	case strings.Contains(w, "delisting"), strings.Contains(w, "approved"):
 		return "approved delisting notice"
 	case strings.Contains(w, "dead"):

@@ -539,6 +539,15 @@ func (p panelDef) asMap() map[string]any {
 	if p.Limit > 0 && p.Limit != p.DefaultLimit {
 		out["label"] = topNLabel(p.Label, p.Limit)
 	}
+	// The configured size itself, for the page's Top-N picker (reporttopn.go):
+	// it is what the panel opens at when the reader has kept nothing.
+	if p.Kind == panelDim {
+		if n := p.Limit; n > 0 {
+			out["limit"] = n
+		} else if p.DefaultLimit > 0 {
+			out["limit"] = p.DefaultLimit
+		}
+	}
 	// The rename is applied HERE, so the report page needs no second field:
 	// whatever reads `label` gets the admin's title where one is set.
 	if p.Title != "" {
@@ -1189,11 +1198,18 @@ func sectionPanels(platformKey, clientID string, dims []map[string]any, roles, t
 		defaultPanels(platformKey, dims, roles, tiles, actions, delisting,
 			mergesReports(platformKey), hasRealtime(platformKey)))
 	out := make([]map[string]any, 0, len(panels))
+	readerTop := readerTopPlatform(platformKey)
 	for _, p := range panels {
 		if p.Hidden {
 			continue
 		}
-		out = append(out, p.asMap())
+		m := p.asMap()
+		// The page offers the Top-N picker exactly where this is set — the
+		// Sports platforms' top-N lists, built at 25 (reporttopn.go).
+		if _, sized := m["limit"]; readerTop && sized {
+			m["readerTop"] = true
+		}
+		out = append(out, m)
 	}
 	return out
 }

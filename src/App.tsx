@@ -76,6 +76,8 @@ const AssetAccessPage      = lazy(() => import('@/app/admin/asset-access/page'))
 const AssetRegisterAccessPage = lazy(() => import('@/app/admin/asset-register/page'))
 const WarRoomAssetsPage    = lazy(() => import('@/app/admin/war-room-assets/page'))
 const PlatformBriefPage    = lazy(() => import('@/app/admin/platform-brief/page'))
+const TrafficAnalysisPage  = lazy(() => import('@/app/admin/traffic-analysis/page'))
+const TorrentAnalysisPage  = lazy(() => import('@/app/admin/torrent-analysis/page'))
 const DatabaseBackupPage   = lazy(() => import('@/app/admin/database-backup/page'))
 const AwsCredentialsPage   = lazy(() => import('@/app/admin/aws-credentials/page'))
 const SecurityPolicyPage   = lazy(() => import('@/app/admin/security-policy/page'))
@@ -389,7 +391,19 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
         }
         // Match on the stable pageName (not the module name), so renaming a
         // module in /admin/modules never revokes access.
-        const allowedPages = (d.allowedModules as { pageName: string }[]).map(m => m.pageName)
+        let allowedPages = (d.allowedModules as { pageName: string }[]).map(m => m.pageName)
+        /* Business Intelligence is granted PAGE by page: holding the tab is not
+           holding every page under it. A page under it counts as granted only
+           when the server put it in this login's dropdown (bianalytics.go) —
+           folded into the one verdict below rather than given a verdict of its
+           own. */
+        if (item.pageName === 'BusinessIntelligence' && pathname !== '/business-intelligence') {
+          const mod = (d.allowedModules as { pageName: string; dropdown?: { href: string }[] }[])
+            .find(m => m.pageName === item.pageName)
+          if (!mod?.dropdown?.some(x => pathname === x.href || pathname.startsWith(x.href + '/'))) {
+            allowedPages = allowedPages.filter(pg => pg !== item.pageName)
+          }
+        }
         settle({ allowed: allowedPages.includes(item.pageName), label: item.label, reason: 'grant' })
       })
       .catch(() => {
@@ -417,6 +431,28 @@ function ClientModuleGuard({ children }: { children: ReactNode }) {
     </div>
   )
   return <>{children}</>
+}
+
+/* /business-intelligence itself has no page: it opens the first page this
+   login holds under the tab. */
+function BusinessIntelligenceIndex() {
+  const [to, setTo] = useState<string | null | undefined>(undefined)
+  useEffect(() => {
+    fetch('/api/user/nav', { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => {
+        const bi = (d?.allowedModules || []).find((m: any) => m.pageName === 'BusinessIntelligence')
+        setTo(bi?.dropdown?.[0]?.href ?? null)
+      })
+      .catch(() => setTo(null))
+  }, [])
+  if (to === undefined) return <PageLoader />
+  if (to) return <Navigate to={to} replace />
+  return (
+    <div style={{ padding: 32, fontSize: 14, color: '#64748b' }}>
+      No Business Intelligence page is assigned to your account yet. Ask your administrator to grant Traffic Analysis or Torrent Analysis.
+    </div>
+  )
 }
 
 // ── Admin permission guard (admin routes) ──────────────────────────────────────
@@ -700,6 +736,9 @@ export default function App() {
           <Route path="/switch-account"           element={<SwitchAccountPage />} />
           <Route path="/ip-tracking"              element={<IpTrackingPage />} />
           <Route path="/data-sharing"             element={<DataSharingPage />} />
+          <Route path="/business-intelligence"    element={<BusinessIntelligenceIndex />} />
+          <Route path="/business-intelligence/traffic-analysis" element={<TrafficAnalysisPage client />} />
+          <Route path="/business-intelligence/torrent-analysis" element={<TorrentAnalysisPage client />} />
           <Route path="/account-access"           element={<AccountAccessPage />} />
           <Route path="/notifications"            element={<NotificationsPage />} />
           <Route path="/notifications/:id"        element={<NotificationDetailRoute />} />
@@ -738,6 +777,8 @@ export default function App() {
           <Route path="/admin/asset-register"             element={<AssetRegisterAccessPage />} />
           <Route path="/admin/war-room-assets"            element={<WarRoomAssetsPage />} />
           <Route path="/admin/platform-brief"             element={<PlatformBriefPage />} />
+          <Route path="/admin/traffic-analysis"           element={<TrafficAnalysisPage />} />
+          <Route path="/admin/torrent-analysis"           element={<TorrentAnalysisPage />} />
           <Route path="/admin/database-backup"            element={<DatabaseBackupPage />} />
           <Route path="/admin/aws-credentials"            element={<AwsCredentialsPage />} />
           <Route path="/admin/security-policy"            element={<SecurityPolicyPage />} />

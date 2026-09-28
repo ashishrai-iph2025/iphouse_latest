@@ -318,8 +318,8 @@ func ReportsAPIConfig(w http.ResponseWriter, r *http.Request) {
 	workers does nothing for it — they all wait on the same window.
 */
 const (
-	defaultRateLimit = 480 // the portal's ceiling, under the service's 600
-	defaultBGShare   = 300 // of which a background pass may use this many
+	defaultRateLimit = 5400 // the portal's ceiling, under the service's 6000
+	defaultBGShare   = 900  // of which a background pass may use this many
 )
 
 /*
@@ -362,6 +362,12 @@ func ApplyReportsAPIBudget() {
 		if v := int(intVal(row["bg_share"])); v > 0 {
 			bg = v
 		}
+	}
+	/* The OLD defaults, saved before the service's limit was raised, are read
+	   as "never chosen": at 480 a minute pacing alone held one report build to
+	   half a minute. A value anyone deliberately set to something else stands. */
+	if rate == 480 && bg == 300 {
+		rate, bg = defaultRateLimit, defaultBGShare
 	}
 	rate, bg = clampBudget(rate, bg)
 	reportsapi.SetBudget(rate, bg)

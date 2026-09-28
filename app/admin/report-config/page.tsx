@@ -17,6 +17,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import BackToConfiguration from '@/components/admin/BackToConfiguration'
 import ReportsApiConnectionPanel from '@/components/admin/ReportsApiConnectionPanel'
 import ReportCachePanel from '@/components/admin/ReportCachePanel'
+import CacheSections from '@/components/admin/cache/CacheSections'
+import AutoTopPanel from '@/components/admin/AutoTopPanel'
 import SportsPeriodPanel from '@/components/admin/SportsPeriodPanel'
 import ReportScopePanel from '@/components/admin/ReportScopePanel'
 import ReportAppearancePanel from '@/components/admin/ReportAppearancePanel'
@@ -2977,7 +2979,7 @@ export default function ReportConfigPage() {
 
       {tab === 'connection' && <ReportsApiConnectionPanel />}
 
-      {tab === 'cache' && <ReportCachePanel />}
+      {tab === 'cache' && <><ReportCachePanel /><AutoTopPanel /><CacheSections /></>}
 
       {tab === 'access' && (
         <div className="space-y-4">

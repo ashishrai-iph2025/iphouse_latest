@@ -778,7 +778,7 @@ export default function WarRoomPage({ area = 'War Room', admin: adminProp = fals
           </p>
         </div>
       )}
-      {report && !loading && <WarRoomReport report={report} rows={rows} admin={admin} />}
+      {report && !loading && <WarRoomReport report={report} rows={rows} admin={admin} layoutClientId={admin ? clientId : ''} />}
 
       </div>{/* end dashboard view */}
 

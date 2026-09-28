@@ -231,6 +231,8 @@ func UserNav(w http.ResponseWriter, r *http.Request) {
 	}
 
 	modules := navEntries(granted, byName, dropByParent)
+	// Business Intelligence: its dropdown narrowed to the pages this login holds.
+	modules = applyBIDropdown(modules, dropByParent)
 
 	// Live API-token availability. The session's apiAccess claim is frozen at
 	// select-login time, so a transient Markscan failure there would lock the

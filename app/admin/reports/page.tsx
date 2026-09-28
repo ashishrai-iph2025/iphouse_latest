@@ -15,7 +15,7 @@
 // report is keyed on a warehouse ClientId supplied by the caller, and there is
 // no portal-login → warehouse-client mapping yet.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ResponsiveContainer, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   LineChart, Line, LabelList, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -108,7 +108,59 @@ function useIsDark(): boolean {
 
 /** The one message that means "sign in again", kept in one place so every fetch
     classifies a 401/403 the same way. */
-const AUTH_MSG = 'The reports API rejected this request as unauthenticated'
+const AUTH_MSG = 'Your session has expired or you no longer have access to this report. Please sign in again.'
+
+/**
+ * What a reader is told when the report could not be fetched.
+ *
+ * NEVER the raw error. What reached the page before this was the JSON parser's
+ * own complaint — `Unexpected token '<', "<!DOCTYPE "... is not valid JSON` —
+ * which is what happens when a proxy or a restarting server answers with an HTML
+ * error page instead of the report. True, and useless to anyone reading a
+ * report: it names our plumbing and says nothing about what to do. The detail
+ * still goes to the console, where whoever debugs it will look.
+ *
+ * Keyed on what the reader can act on: wait and retry (the service was busy or
+ * restarting), check the connection (the request never left), or ask for access.
+ */
+function reportErrorMessage(status: number | null, detail?: string): string {
+  if (status === null) {
+    return 'We couldn’t reach the IP House server. Check your internet connection and try again.'
+  }
+  if (status === 401 || status === 403) return AUTH_MSG
+  if (status === 404) return 'This report isn’t available right now. Please try again, or pick another report from the navigation.'
+  if (status === 408 || status === 504) {
+    return 'The report took too long to prepare. Try a shorter date range, or try again in a moment.'
+  }
+  if (status >= 500 || !detail) {
+    return 'The reporting service is busy or restarting and couldn’t return this report. Please try again in a moment.'
+  }
+  return 'This report couldn’t be prepared for the filters selected. Try changing the date range or clearing a filter.'
+}
+
+/** A failed report load: the reader's sentence, with the raw cause kept apart. */
+class ReportLoadError extends Error {
+  readerMessage: string
+  constructor(readerMessage: string, detail: string) {
+    super(detail)
+    this.readerMessage = readerMessage
+  }
+}
+
+/**
+ * Reads a report response as JSON, or throws a ReportLoadError a reader can be
+ * shown. Reads the body as TEXT first, so an HTML error page is recognised as
+ * one instead of surfacing as a parse error.
+ */
+async function readReportJSON(res: Response): Promise<any> {
+  const text = await res.text()
+  try {
+    return JSON.parse(text)
+  } catch {
+    const detail = `HTTP ${res.status} — expected JSON, got ${text.slice(0, 120).replace(/\s+/g, ' ')}`
+    throw new ReportLoadError(reportErrorMessage(res.status >= 400 ? res.status : 502), detail)
+  }
+}
 
 /**
  * Split a platform's name into its subject and its qualifier:
@@ -322,6 +374,13 @@ interface SectionDim {
       server names it because only the server knows which panels have it; see
       dimension.APIExtra in go-server/handlers/reportspecs.go. */
   extraLabel?: string
+  /** The configured size of a top-N list (Report Configuration's row count,
+      10 unless changed). Present only on open-ended lists; on the Sports report
+      it is what the reader's Top-N picker opens at. See reporttopn.go. */
+  limit?: number
+  /** Set by the server on the lists whose size the reader picks (the Sports
+      report's, built at 25). */
+  readerTop?: boolean
 }
 
 /* The page is a twelve-column grid, so a row holds one panel, two, three or
@@ -361,6 +420,10 @@ interface SectionPanel {
   role?: string    // trend only: which source it draws
   metric?: string  // tile only: the kpi key it shows
   span?: 'full' | 'half' | 'third' | 'quarter'
+  /** Top-N size — see SectionDim.limit. */
+  limit?: number
+  /** Whether the reader may pick the size — see SectionDim.readerTop. */
+  readerTop?: boolean
   /** Admin-written note from Report Configuration, shown behind an ⓘ icon on
       the card. `label` already carries any rename the admin made there. */
   desc?: string
@@ -1503,6 +1566,22 @@ function trendSpec(form: ChartForm, data: any[], series: {
   }
 }
 
+/* WHAT A PANEL'S SECOND SERIES IS CALLED.
+
+   "Removed" nearly everywhere. "Top 10 Linking Websites" is the exception: a
+   linking URL is dropped from search results, not taken down, so that panel
+   draws its de-indexed count and names it so (see deindexWord below and
+   go-server/handlers/reportsapi_bridge.go). Provided around one panel's chart,
+   so every shape it can be switched to says the same word. */
+const REMOVED_WORDS = { name: 'Removed', rate: 'Removal rate' }
+const DEINDEX_WORDS = { name: 'De-indexed', rate: 'De-indexing rate' }
+const SecondNameCtx = createContext(REMOVED_WORDS)
+
+// The same renaming for the table twin and the download of that panel.
+function deindexHead(t: PanelTable): PanelTable {
+  return { ...t, head: t.head.map(h => h === 'Removed' ? DEINDEX_WORDS.name : h === 'Removal rate' ? DEINDEX_WORDS.rate : h) }
+}
+
 function Legend({ items }: { items: { label: string; color: string }[] }) {
   return (
     <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-1 pt-2">
@@ -1800,6 +1879,144 @@ function VizPicker({ options, value, fallback, saved, onPick, onSetDefault }: {
                   {busy === '__clear__' ? 'Forgetting…' : 'Forget my chart type for this panel'}
                 </button>
               )}
+            </div>
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
+/* ── TOP-N PICKER ─────────────────────────────────────────────────────────────
+
+   How many rows a top-N list shows — 10, 15, 20 or 25 — on the Sports report.
+   The report already carries 25 (go-server/handlers/reporttopn.go), so a pick
+   redraws at once, and only this chart. Any reader can pick a size for the
+   visit; setting the DEFAULT — what the panel opens at for everyone on the
+   client — is offered only to those who may shape the client's report: staff,
+   the Client Admin, or a login with report layout (Arrange) access. */
+const TOP_CHOICES = [10, 15, 20, 25]
+
+function TopNPicker({ value, fallback, saved, canSetDefault, onPick, onSetDefault }: {
+  value: number
+  /** Whether this login may set the client's default size. */
+  canSetDefault: boolean
+  /** Report Configuration's size for this panel. */
+  fallback: number
+  /** The client's default size for this panel, 0 when none is set. */
+  saved: number
+  onPick: (n: number | null) => void
+  onSetDefault: (n: number | null) => Promise<string | null>
+}) {
+  const [open, setOpen] = useState(false)
+  const [rect, setRect] = useState<DOMRect | null>(null)
+  const [busy, setBusy] = useState<number | null>(null)
+  const [saveErr, setSaveErr] = useState<string | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    setRect(btnRef.current?.getBoundingClientRect() ?? null)
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (btnRef.current?.contains(t) || menuRef.current?.contains(t)) return
+      setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  // A configured size outside the menu (5, 50) is offered too, so the panel can
+  // always get back to it.
+  const choices = [...new Set([...TOP_CHOICES, fallback])].sort((a, b) => a - b)
+  const resting = saved || fallback
+  const changed = value !== resting
+
+  const keep = async (n: number | null, busyId: number) => {
+    setBusy(busyId); setSaveErr(null)
+    const err = await onSetDefault(n)
+    setBusy(null)
+    if (err) { setSaveErr(err); return }
+    setOpen(false)
+  }
+
+  return (
+    <>
+      <button ref={btnRef} type="button" onClick={() => setOpen(o => !o)}
+        aria-haspopup="menu" aria-expanded={open} title="How many rows to show"
+        className={`h-6 px-1.5 inline-flex items-center gap-0.5 rounded-md border text-[10px] font-bold tabular-nums transition-colors ${
+          changed
+            ? 'border-[#14254A] text-[#14254A] dark:border-white/40 dark:text-white'
+            : 'border-gray-200 text-gray-500 hover:text-[#14254A] hover:border-gray-300 dark:border-white/15 dark:text-white/60 dark:hover:text-white'
+        }`}>
+        Top {value}
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6 9l6 6 6-6" />
+        </svg>
+      </button>
+
+      {open && rect && createPortal(
+        <div ref={menuRef} role="menu"
+          className="fixed z-[9999] w-[220px] rounded-xl border shadow-2xl overflow-hidden py-1
+            bg-white border-gray-200 dark:bg-[#1a2d55] dark:border-white/15"
+          style={{
+            top: Math.min(rect.bottom + 6, Math.max(8, window.innerHeight - 300)),
+            left: Math.max(8, Math.min(rect.right - 220, window.innerWidth - 228)),
+          }}>
+          <p className="px-3 pt-1.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Show top</p>
+          <p className="px-3 pb-1.5 text-[10px] leading-snug text-gray-400">
+            {canSetDefault ? 'Pick one to view it now, or set the default everyone on this client opens at.'
+              : 'Pick how many rows this chart shows.'}
+          </p>
+          {choices.map(n => {
+            const on = n === value
+            const isSaved = saved === n
+            const isDefault = n === resting
+            return (
+              <div key={n} className={`group flex items-stretch transition-colors ${
+                on ? 'bg-[#14254A]/[0.06] dark:bg-white/10' : 'hover:bg-gray-50 dark:hover:bg-white/5'
+              }`}>
+                <button type="button" role="menuitem"
+                  onClick={() => { onPick(n === resting ? null : n); setOpen(false) }}
+                  className="flex-1 min-w-0 text-left px-3 py-1.5">
+                  <span className="flex items-center gap-1.5">
+                    <span className={`text-xs ${on ? 'font-bold text-[#14254A] dark:text-white' : 'text-gray-600 dark:text-gray-300'}`}>
+                      Top {n}
+                    </span>
+                    {isDefault && <span className={`text-[9px] font-bold uppercase tracking-wide ${isSaved ? 'text-[#FC934C]' : 'text-gray-400'}`}>default</span>}
+                    {on && <span className="ml-auto text-[#FC934C] font-bold">✓</span>}
+                  </span>
+                </button>
+                {canSetDefault && <button type="button" disabled={busy !== null}
+                  title={isSaved ? 'Go back to the configured size as the default' : 'Make this the size everyone on this client opens at'}
+                  onClick={() => keep(isSaved ? null : n, n)}
+                  className={`shrink-0 self-center mr-2 px-1.5 py-1 rounded-md text-[9px] font-bold
+                    uppercase tracking-wide border transition-colors disabled:opacity-40 ${
+                    isSaved
+                      ? 'border-[#FC934C]/40 text-[#FC934C] hover:bg-[#FC934C]/10'
+                      : 'border-transparent text-gray-300 group-hover:border-gray-200 group-hover:text-gray-500 dark:text-white/25 dark:group-hover:border-white/20 dark:group-hover:text-white/60'
+                  }`}>
+                  {busy === n ? '…' : isSaved ? 'Clear' : 'Set default'}
+                </button>}
+              </div>
+            )
+          })}
+          {saveErr && (
+            <p className="px-3 py-1.5 text-[10px] leading-snug text-red-500 border-t border-gray-100 dark:border-white/10">{saveErr}</p>
+          )}
+          {changed && (
+            <div className="border-t border-gray-100 dark:border-white/10 mt-1 pt-1">
+              <button type="button" onClick={() => { onPick(null); setOpen(false) }}
+                className="w-full text-left px-3 py-1.5 text-[11px] font-semibold text-gray-400 hover:text-[#FC934C] transition-colors">
+                Back to the default (Top {resting})
+              </button>
             </div>
           )}
         </div>,
@@ -2875,7 +3092,7 @@ function SegmentBars({ rows, m, activeVal = '', onPick, limit = 10 }: {
           )
         })}
       </div>
-      <Legend items={[{ label: 'Identified', color: m.ident }, { label: 'Removed', color: m.removed }]} />
+      <Legend items={[{ label: 'Identified', color: m.ident }, { label: useContext(SecondNameCtx).name, color: m.removed }]} />
     </>
   )
 }
@@ -3032,7 +3249,7 @@ function StackedBars({ rows, m, onPick, activeVal = '', limit = 12 }: {
         })}
       </div>
       <Legend items={[
-        { label: 'Removed', color: m.removed },
+        { label: useContext(SecondNameCtx).name, color: m.removed },
         { label: 'Active', color: m.identSoft },
       ]} />
     </>
@@ -3115,8 +3332,9 @@ function RankTable({ rows, onPick, activeVal = '', limit = 12, mirrors = false,
   const data = rows.slice(0, limit)
   const total = data.reduce((a, r) => a + (Number(r.urls) || 0), 0)
   if (data.length === 0) return <div className="text-sm text-gray-400 py-3">No data.</div>
-  const took = removedHead || 'Removed'
-  const rate = removedHead ? removedHead + ' rate' : 'Removal rate'
+  const words = useContext(SecondNameCtx)
+  const took = removedHead || words.name
+  const rate = removedHead ? removedHead + ' rate' : words.rate
   const head = mirrors
     ? ['#', nameHead, 'Identified', took, rate, 'Mirror domains', 'Share']
     : ['#', nameHead, 'Identified', took, rate, 'Share']
@@ -4026,7 +4244,7 @@ export function HBarChart({ rows, m, onPick, activeVal = '', limit = 10, extraLa
               <Cell key={d.value_} opacity={hasActive && activeVal !== d.value_ && activeVal !== d.label ? 0.4 : 1} />
             ))}
           </Bar>
-          <Bar dataKey="removed" name="Removed" fill={m.removed} radius={[0, 3, 3, 0]}
+          <Bar dataKey="removed" name={useContext(SecondNameCtx).name} fill={m.removed} radius={[0, 3, 3, 0]}
             maxBarSize={10} isAnimationActive={false} cursor={onPick ? 'pointer' : 'default'} onClick={pickFrom}>
             {/* Removal carries its figure too. One labelled series above an
                 unlabelled one reads as the second having no value rather than as
@@ -4164,7 +4382,7 @@ function ColumnChart({ rows, m, onPick, activeVal = '', limit = 10 }: {
               )}
               {data.map(d => <Cell key={d.value_} opacity={dim(d)} />)}
             </Bar>
-            <Bar dataKey="removed" name="Removed" fill={m.removed} radius={[4, 4, 0, 0]}
+            <Bar dataKey="removed" name={useContext(SecondNameCtx).name} fill={m.removed} radius={[4, 4, 0, 0]}
               barSize={barSize} isAnimationActive={false} cursor={onPick ? 'pointer' : 'default'} onClick={pickFrom}>
               {/* Both columns of a pair or neither — see roomForLabels. One
                   labelled column beside an unlabelled one reads as the second
@@ -4178,7 +4396,7 @@ function ColumnChart({ rows, m, onPick, activeVal = '', limit = 10 }: {
           </BarChart>
         </ResponsiveContainer>
       </div>
-      <Legend items={[{ label: 'Identified', color: m.ident }, { label: 'Removed', color: m.removed }]} />
+      <Legend items={[{ label: 'Identified', color: m.ident }, { label: useContext(SecondNameCtx).name, color: m.removed }]} />
     </>
   )
 }
@@ -4547,7 +4765,7 @@ function SeasonColumns({ rows, m, onPick, activeVal = '' }: {
       <div style={{ paddingLeft: AXIS_W }}>
         <Legend items={[
           { label: 'Identified', color: m.ident },
-          { label: 'Removed', color: m.removed },
+          { label: useContext(SecondNameCtx).name, color: m.removed },
         ]} />
       </div>
       {scrolls && (
@@ -4716,7 +4934,7 @@ export function RepeatOffenders({ rows, m, onPick, activeVal = '', limit = 10 }:
       <Legend items={[
         { label: 'Re-Uploaded', color: BRAND_GOLD },
         { label: 'URLs identified', color: m.ident },
-        { label: 'Removed', color: m.removed },
+        { label: useContext(SecondNameCtx).name, color: m.removed },
       ]} />
     </>
   )
@@ -4885,12 +5103,25 @@ function clearLabel(label: string): string {
 }
 
 /** In-card message — used for every "nothing to draw yet" state. */
-function Notice({ cardTitle, title, body }: { cardTitle: string; title: string; body: string }) {
+function Notice({ cardTitle, title, body, onRetry }: {
+  cardTitle: string; title: string; body: string
+  /** Offered where trying again can help — a failed load, not an empty one. */
+  onRetry?: () => void
+}) {
   return (
     <Card title={cardTitle}>
       <div className="px-5 py-12 text-center">
         <p className="font-bold text-[#14254A] dark:text-white mb-1.5">{title}</p>
         <p className="text-sm max-w-md mx-auto leading-relaxed text-gray-500 dark:text-white/45">{body}</p>
+        {onRetry && (
+          <button type="button" onClick={onRetry}
+            className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold
+              bg-[#14254A] text-white hover:bg-[#1d3363] dark:bg-white/10 dark:hover:bg-white/15 transition-colors">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}
+              strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" /></svg>
+            Try again
+          </button>
+        )}
       </div>
     </Card>
   )
@@ -4970,6 +5201,9 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
   const [loading,  setLoading]  = useState(false)
   const [err,      setErr]      = useState('')
   const [unavailable, setUnavailable] = useState('')
+  // Bumped by "Try again" to re-run the report fetch with the same filters.
+  const [reloadKey, setReloadKey] = useState(0)
+  const retryReport = useCallback(() => { setErr(''); setReloadKey(k => k + 1) }, [])
   // 401/403 is a session problem, not a warehouse problem — kept apart so the
   // page can tell you to sign in again instead of blaming the database config.
   const [authError, setAuthError] = useState('')
@@ -5097,6 +5331,20 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
     })
   }, [])
 
+  /* Top-N sizes, the same two layers as the shapes: topView for now, topDefault
+     kept on the server per login. See go-server/handlers/reporttopn.go. */
+  const [topView, setTopView] = useState<Record<string, number>>({})
+  const [topDefault, setTopDefault] = useState<Record<string, number>>({})
+  const [canSetTopDefault, setCanSetTopDefault] = useState(false)
+  const setTop = useCallback((panelKey: string, n: number | null) => {
+    setTopView(prev => {
+      const next = { ...prev }
+      if (n === null) delete next[panelKey]
+      else next[panelKey] = n
+      return next
+    })
+  }, [])
+
   /** The shape a panel should be drawn as, strongest layer first. */
   const vizFor = useCallback(
     (panelKey: string, configured: string) =>
@@ -5136,6 +5384,33 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
       return 'Could not reach the server'
     }
   }, [vizDefault, setViz])
+
+  const saveTopDefault = useCallback(async (panelKey: string, n: number | null): Promise<string | null> => {
+    const before = topDefault
+    setTopDefault(prev => {
+      const next = { ...prev }
+      if (n === null) delete next[panelKey]
+      else next[panelKey] = n
+      return next
+    })
+    setTop(panelKey, null)
+    try {
+      const r = await fetch('/api/reports/topn-prefs', {
+        method: 'PUT', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: filters.clientId || '', panelKey, topN: n ?? 0 }),
+      })
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}))
+        if (mounted.current) setTopDefault(before)
+        return d?.error || 'Could not save this default'
+      }
+      return null
+    } catch {
+      if (mounted.current) setTopDefault(before)
+      return 'Could not reach the server'
+    }
+  }, [topDefault, setTop, filters.clientId])
 
   const isDark  = useIsDark()
 
@@ -5181,6 +5456,21 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
      Failure is silent on purpose: a reading preference that cannot be read is
      not worth an error banner, and every panel still renders in the shape the
      layout configures. */
+  /* The client's default sizes, re-read when the client changes — they belong
+     to the client, not to the reader. */
+  useEffect(() => {
+    const p = new URLSearchParams()
+    if (filters.clientId) p.set('clientId', filters.clientId)
+    fetch(`/api/reports/topn-prefs?${p}`, { credentials: 'include' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (!mounted.current) return
+        setTopDefault(d?.prefs || {})
+        setCanSetTopDefault(!!d?.canSetDefault)
+      })
+      .catch(() => { /* configured sizes stand */ })
+  }, [filters.clientId])
+
   useEffect(() => {
     fetch('/api/reports/viz-prefs', { credentials: 'include' })
       .then(r => (r.ok ? r.json() : null))
@@ -5683,21 +5973,43 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
           if (filters[key]) p.set(key, filters[key])
         }
         if (vod) p.set('scope', 'vod')
-        const res  = await fetch(`/api/reports/data?${p}`, { credentials: 'include' })
-        const json = await res.json()
+        let res: Response
+        try {
+          res = await fetch(`/api/reports/data?${p}`, { credentials: 'include' })
+        } catch (e: any) {
+          // The request never got an answer — offline, DNS, the server down.
+          throw new ReportLoadError(reportErrorMessage(null), String(e?.message ?? e))
+        }
+        // Access first: an expired session can answer with a login PAGE, and
+        // reading that as a report would report a parse error instead.
+        if (res.status === 401 || res.status === 403) {
+          if (active) setAuthError(AUTH_MSG)
+          return
+        }
+        const json = await readReportJSON(res)
         if (!active) return
         if (json.available === false) { setUnavailable(json.error || 'Reports database unavailable'); return }
-        if (res.status === 401 || res.status === 403) { setAuthError(AUTH_MSG); return }
         if (json.ok) { setData(json); setErr(''); setUnavailable(''); setAuthError('') }
-        else setErr(json.error || 'Query failed')
+        else {
+          const detail = String(json.error || `HTTP ${res.status}`)
+          console.error('[reports] report failed:', detail)
+          setErr(reportErrorMessage(res.ok ? 200 : res.status, detail))
+        }
       } catch (e: any) {
-        if (active) setErr(e.message)
+        if (!active) return
+        if (e instanceof ReportLoadError) {
+          console.error('[reports] report failed:', e.message)
+          setErr(e.readerMessage)
+        } else {
+          console.error('[reports] report failed:', e)
+          setErr(reportErrorMessage(502))
+        }
       } finally {
         if (active) { setLoading(false); setPanelBusy(false) }
       }
     }, 350)
     return () => { active = false; clearTimeout(t) }
-  }, [filters, section, activeSection])
+  }, [filters, section, activeSection, reloadKey])
 
   const setF = useCallback((k: string) => (v: string) =>
     setFilters(f => ({ ...f, [k]: v })), [])
@@ -6417,7 +6729,22 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
       The whole-report export already reads the unfiltered rows for the same
       reason — see dimTableData's other caller.
     */
-    const rowsAll = orderRows(dim.key, (data?.breakdowns?.[dim.key] || []) as any[])
+    /* The reader's Top-N, on the Sports report's open-ended lists. The report
+       carries up to 25 rows (reporttopn.go); the first N by volume are drawn
+       AND exported — the download is the list the reader chose to look at. */
+    const topKey = `${section}:${dim.key}`
+    const topOn = !!dim.readerTop && (dim.limit ?? 0) > 0
+    const topFallback = dim.limit ?? 10
+    const topN = topOn ? (topView[topKey] || topDefault[topKey] || topFallback) : 0
+    /* "Top 10 Linking Websites" is measured on de-indexing — its rows carry the
+       de-indexed count beside the removal one, and the platform report (not the
+       summary, which folds these rows into a panel of its own) draws that. */
+    const deix = dim.key === 'byDomain' && section !== 'summary'
+      && ((data?.breakdowns?.[dim.key] || []) as any[]).some(r => r.deindexed !== undefined)
+    const rawRows = (((data?.breakdowns?.[dim.key] || []) as any[])
+      .map(r => (deix ? { ...r, removed: Number(r.deindexed) || 0 } : r)))
+    const rowsAll = orderRows(dim.key, topOn ? rawRows.slice(0, topN) : rawRows)
+    const dimTitle = topOn ? dim.label.replace(/\b(top\s+)\d+\b/i, `$1${topN}`) : dim.label
     const rows = rowsAll.filter(r => !isPlaceholderRow(r))
     const param = DIM_FILTER[dim.key]
     const filterable = !!param && !!activeSection?.filters.includes(param)
@@ -6444,31 +6771,36 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
     /* Built once. The toggle below draws it and the download hands it over —
        and a panel showing its chart as a ranked TABLE still has rows worth
        exporting, which is why this is not inside the conditional under it. */
-    const td = dimTableData(dim.key, dim.label, viz, rows, dim.extraLabel)
-    const tdExport = dimTableData(dim.key, dim.label, viz, rowsAll, dim.extraLabel)
+    const tdRaw = dimTableData(dim.key, dimTitle, viz, rows, dim.extraLabel)
+    const tdExportRaw = dimTableData(dim.key, dimTitle, viz, rowsAll, dim.extraLabel)
+    const td = deix ? deindexHead(tdRaw) : tdRaw
+    const tdExport = deix ? deindexHead(tdExportRaw) : tdExportRaw
 
     /* This file's own rendering of the panel. Always built, because it is what
        the card shows on the built-in engine AND what every other engine falls
        back to — for a shape it does not claim, and for a library that will not
        load. Building the element is cheap; React only renders the branch that
        is used. */
+    /* The chart components each stop at a size of their own (10 or 12); a
+       reader-sized list tells them its size, or 15 would still draw 10. */
+    const lim = topOn ? { limit: topN } : {}
     const builtIn = (
       <>
         {viz === 'donut'   && <Donut rows={rows} m={m} onPick={pick} activeVal={active} />}
         {viz === 'share'   && <Donut rows={rows} m={m} onPick={pick} activeVal={active} ramp="ordinal" />}
-        {viz === 'stacked' && <StackedBars rows={rows} m={m} onPick={pick} activeVal={active} />}
-        {viz === 'hbar'    && <HBarChart rows={rows} m={m} onPick={pick} activeVal={active}
+        {viz === 'stacked' && <StackedBars rows={rows} {...lim} m={m} onPick={pick} activeVal={active} />}
+        {viz === 'hbar'    && <HBarChart rows={rows} {...lim} m={m} onPick={pick} activeVal={active}
           extraLabel={dim.extraLabel} />}
         {viz === 'column'  && (FULL_SET_DIMS.has(dim.key)
           ? <SeasonColumns rows={rows} m={m} onPick={pick} activeVal={active} />
-          : <ColumnChart rows={rows} m={m} onPick={pick} activeVal={active} />)}
+          : <ColumnChart rows={rows} {...lim} m={m} onPick={pick} activeVal={active} />)}
         {viz === 'repeat'  && (
           /* Dimmed, not replaced. The ranking on screen is the previous
              platform's and is about to change — saying so is honest — but it is
              still a real answer, and swapping it for a skeleton would cost the
              reader their place for the length of one request. */
           <div className={panelBusy ? 'opacity-50 transition-opacity' : 'transition-opacity'}>
-            <RepeatOffenders rows={rows} m={m} onPick={pick} activeVal={active} />
+            <RepeatOffenders rows={rows} {...lim} m={m} onPick={pick} activeVal={active} />
           </div>
         )}
         {/* Named from COUNT_PANELS, which knows all four by key. A panel the
@@ -6477,9 +6809,9 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
             see the note there. */}
         {viz === 'mirror'  && (() => {
           const c = COUNT_PANELS[dim.key]
-          return <MirrorBars rows={rows} m={m} onPick={pick} activeVal={active}
+          return <MirrorBars rows={rows} {...lim} m={m} onPick={pick} activeVal={active}
             nameHead={c?.nameHead ?? 'Name'}
-            removedName={c?.removedName ?? 'Removed'}
+            removedName={c?.removedName ?? (deix ? DEINDEX_WORDS.name : 'Removed')}
             showRemoved={c?.showRemoved ?? true}
             /* The fallback for a panel Report Configuration put on this shape
                without COUNT_PANELS knowing about it. `list` is named on the
@@ -6488,17 +6820,17 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
             counts={c?.counts ?? [{ key: 'extra', name: dim.extraLabel || 'Count',
               list: 'extraDomains' }]} />
         })()}
-        {viz === 'table'   && <RankTable rows={rows} onPick={pick} activeVal={active}
+        {viz === 'table'   && <RankTable rows={rows} {...lim} onPick={pick} activeVal={active}
           mirrors={ROOT_ALL_DIMS.has(dim.key)}
           removedHead={ROOT_ALL_DIMS.has(dim.key) ? rootSide(dim.key).name : undefined}
           nameHead={ROOT_ALL_DIMS.has(dim.key) ? rootSide(dim.key).head : 'Name'} />}
-        {viz === 'value'   && <ValueBars rows={rows} m={m} onPick={pick} activeVal={active} />}
-        {viz === 'ordinal' && <ValueBars rows={rows} m={m} onPick={pick} activeVal={active} ordered />}
+        {viz === 'value'   && <ValueBars rows={rows} {...lim} m={m} onPick={pick} activeVal={active} />}
+        {viz === 'ordinal' && <ValueBars rows={rows} {...lim} m={m} onPick={pick} activeVal={active} ordered />}
         {viz === 'map'     && <WorldMap rows={rows} m={m} onPick={pick} activeVal={active} />}
-        {viz === 'heat'    && <HeatGrid rows={rows} m={m} onPick={pick} activeVal={active} />}
+        {viz === 'heat'    && <HeatGrid rows={rows} {...lim} m={m} onPick={pick} activeVal={active} />}
         {!['donut', 'share', 'stacked', 'table', 'heat', 'map', 'hbar', 'column',
            'value', 'ordinal', 'repeat', 'mirror'].includes(viz) && (
-          <SegmentBars rows={rows} m={m} activeVal={active} onPick={pick} />
+          <SegmentBars rows={rows} {...lim} m={m} activeVal={active} onPick={pick} />
         )}
       </>
     )
@@ -6508,7 +6840,7 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
     const form = DIM_FORM[viz]
 
     return (
-      <Card key={dim.key} title={dim.label} info={dim.desc}
+      <Card key={dim.key} title={dimTitle} info={dim.desc}
         exportTable={tdExport} exportSubtitle={exportScope} exportFooter={EXPORT_FOOTER}
         action={<div className="flex items-center gap-1.5">
           {/* THE PLATFORM, on the card it narrows.
@@ -6538,6 +6870,12 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
                 options={repeatPlatformOpts}
                 onChange={v => setF(REPEAT_PLATFORM_PARAM)(v)} />
             </>
+          )}
+          {topOn && (
+            <TopNPicker value={topN} fallback={topFallback} saved={topDefault[topKey] || 0}
+              canSetDefault={canSetTopDefault}
+              onPick={n => setTop(topKey, n)}
+              onSetDefault={n => saveTopDefault(topKey, n)} />
           )}
           <VizPicker options={options} value={viz} fallback={configured}
             saved={vizDefault[vizKey]}
@@ -6569,16 +6907,23 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
             file says "No data." in the card; an engine handed no rows draws an
             empty plot with an axis on it, which reads as a chart that failed
             rather than as a window with nothing in it. */}
+        <SecondNameCtx.Provider value={deix ? DEINDEX_WORDS : REMOVED_WORDS}>
         {form && rows.length > 0
           ? <EngineChart engine={engine} fallback={builtIn}
-              spec={dimSpec(form, rows, {
-                m, dark: isDark, height: dimHeight(form, rows.length),
-                onPick: pick, activeVal: active,
-                // `share` and `ordinal` are the two ordered breakdowns: bucket
-                // sequences, coloured by a one-hue ramp in their own order.
-                ordered: viz === 'share' || viz === 'ordinal',
-              })} />
+              spec={(() => {
+                const spec = dimSpec(form, rows, {
+                  m, dark: isDark, height: dimHeight(form, rows.length), ...lim,
+                  onPick: pick, activeVal: active,
+                  // `share` and `ordinal` are the two ordered breakdowns: bucket
+                  // sequences, coloured by a one-hue ramp in their own order.
+                  ordered: viz === 'share' || viz === 'ordinal',
+                })
+                return deix
+                  ? { ...spec, series: spec.series.map(x => x.name === 'Removed' ? { ...x, name: DEINDEX_WORDS.name } : x) }
+                  : spec
+              })()} />
           : builtIn}
+        </SecondNameCtx.Provider>
       </Card>
     )
   }
@@ -6837,7 +7182,7 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
          bundle catches up is a great deal better than a plausible empty one
          that a reader will report as broken data. */
       case 'dim':
-        return renderDim({ key: p.key, label: p.label ?? p.key, viz: p.viz, desc: p.desc }, spanClass)
+        return renderDim({ key: p.key, label: p.label ?? p.key, viz: p.viz, desc: p.desc, limit: p.limit, readerTop: p.readerTop }, spanClass)
 
       default:
         return null
@@ -7522,6 +7867,7 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
               cardTitle={activeSection.label}
               title={err ? 'The report could not be loaded' : 'No data yet'}
               body={err || 'Adjust the filters on the right to load a result set.'}
+              onRetry={err ? retryReport : undefined}
             />
           ) : (
             <>
@@ -7657,10 +8003,16 @@ export default function ReportsPage({ scoped = false, vod = false }: { scoped?: 
             </div>
           )}
 
-          {err && (
+          {/* Only when a REFRESH failed with the last good report still on screen.
+              With no report at all, the card above already says so — the banner
+              repeated the same sentence a second time underneath it. */}
+          {err && data && (
             <div className="rounded-xl px-4 py-3 text-sm border bg-red-50 border-red-200 text-red-700
-              dark:bg-red-500/10 dark:border-red-400/25 dark:text-red-300">
-              <strong>Error:</strong> {err}
+              dark:bg-red-500/10 dark:border-red-400/25 dark:text-red-300
+              flex flex-wrap items-center justify-between gap-3">
+              <span><strong>Couldn&rsquo;t refresh the report.</strong> {err} The figures shown are from the last successful load.</span>
+              <button type="button" onClick={retryReport}
+                className="shrink-0 font-semibold underline underline-offset-2 hover:no-underline">Try again</button>
             </div>
           )}
           {/* A sentence, and nothing folded away beneath it.

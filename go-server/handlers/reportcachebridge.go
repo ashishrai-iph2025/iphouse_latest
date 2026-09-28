@@ -48,6 +48,11 @@ func platformShape(p platformDef, clientID string) string {
 	dims := sectionDimensions(p)
 	for _, d := range dims {
 		parts = append(parts, strFromAny(d["key"])+":"+strFromAny(d["viz"]))
+		// Linking Websites now carries its de-indexed count (reportsapi_bridge.go);
+		// a report cached before that has no such field, so it is a new key.
+		if strFromAny(d["key"]) == dimLinkingWebsites {
+			parts = append(parts, "deindexed")
+		}
 	}
 	/* The configured top-N is part of the shape, not part of the filter.
 
@@ -66,6 +71,11 @@ func platformShape(p platformDef, clientID string) string {
 	sort.Strings(keys)
 	for _, k := range keys {
 		parts = append(parts, k+"="+strconv.Itoa(limits[k]))
+	}
+	// Built at the reader's maximum (reporttopn.go): a different answer from
+	// the configured-size one, so a different key — never a stale 10-row entry.
+	if readerTopPlatform(p.Key) {
+		parts = append(parts, "readerTop="+strconv.Itoa(readerTopMax))
 	}
 	/* And the values this client has asked not to be reported on — in the shape
 	   for the identical reason the row limits above are.

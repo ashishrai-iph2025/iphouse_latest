@@ -2266,7 +2266,9 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 		for i := range specs {
 			for j := range specs[i].Dimensions {
 				if n, ok := limits[specs[i].Dimensions[j].Key]; ok && n > 0 {
-					specs[i].Dimensions[j].Limit = n
+					// Sports panels are built at the most a reader can pick;
+					// the page draws the size chosen — see reporttopn.go.
+					specs[i].Dimensions[j].Limit = readerTopFetch(p.Key, n)
 				}
 			}
 		}
@@ -2563,9 +2565,11 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	   roleKPI linking + host, so the swap cannot disturb any other platform's
 	   contribution. `pending` and `removalPct` below are derived from the result,
 	   so both follow without being touched here. */
+	liveRemoved := false
 	if sawOpenWebTable {
 		if live, ok := openWebLiveRemoved(q["clientId"], q["assetId"], q["from"], q["to"]); ok {
 			removed = max64(0, removed-openWebETLNow+live)
+			liveRemoved = true
 		}
 	}
 
@@ -2580,7 +2584,16 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	   configured to read both, the recomposition is what survives, and it is the
 	   one built from the sides rather than from a total. */
 	if v, ok := openWebRemovedFromDelisting(roleKPI, platformRoles); ok {
-		removed = v
+		/* THE LIVE FIGURE WINS where it was read. It used to be overwritten
+		   here, so the report's Removed and the realtime card's Open Web removed
+		   were two different numbers for one window — the card ~19% below on
+		   DAZN. The realtime count now spans the same three sources this
+		   recomposition does (a delisting outcome or an engine submission on the
+		   link, a takedown on the host) and reads the live tables, so where it
+		   answered it is the figure; this remains the fallback when it did not. */
+		if !liveRemoved {
+			removed = v
+		}
 		/* The trend has to move with the tile. It is what the removal-rate chart
 		   is drawn from, so leaving it summed would put this figure on a card
 		   above a line computed from a different one. */
@@ -2665,10 +2678,12 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 		pIdent, pRemoved := kpiPrev["identified"], kpiPrev["removed"]
 		// The same swap on the preceding window, so the change arrow compares two
 		// figures of one definition. See isOpenWebSportsTable.
+		livePrev := false
 		if sawOpenWebTable {
 			if live, ok := openWebLiveRemoved(q["clientId"], q["assetId"], prevFrom, prevTo); ok {
 				pRemoved = max64(0, pRemoved-openWebETLPrev+live)
 				kpiPrevOut["removed"] = pRemoved
+				livePrev = true
 			}
 		}
 		/* And the same recomposition, off the comparison window's own per-side
@@ -2676,7 +2691,8 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 		   summed previous would report the difference between two DEFINITIONS
 		   as a change in enforcement, on the one number a reader takes at a
 		   glance. See openWebRemovedFromDelisting. */
-		if v, ok := openWebRemovedFromDelisting(roleKPIPrev, platformRoles); ok {
+		// Same rule as the current window: the live figure, where it answered.
+		if v, ok := openWebRemovedFromDelisting(roleKPIPrev, platformRoles); ok && !livePrev {
 			pRemoved = v
 			kpiPrevOut["removed"] = pRemoved
 		}
@@ -2884,6 +2900,9 @@ func runPlatform(p platformDef, q map[string]string, bg bool) map[string]any {
 	merged["available"] = true
 	merged["type"] = p.Key
 	merged["label"] = p.Label
+	/* A configured (non-sports) summary: each tile the sections also report is
+	   their sum rather than what its one table says. See summarykpis.go. */
+	applySummaryKPIsFromSections(p, q, bg, kpiOut, kpiPrevOut)
 	merged["kpi"] = kpiOut
 	if kpiPrevOut != nil {
 		merged["kpiPrev"] = kpiPrevOut

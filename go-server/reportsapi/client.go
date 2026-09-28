@@ -328,7 +328,21 @@ func (c *Client) GetJSON(ctx context.Context, path string, q url.Values, out any
 	return c.get(ctx, path, q, out)
 }
 
+/*
+PostJSON is one POST against the service, decoded into `out` — for the few
+admin actions that change something (the analytics caches' Clear and Prepare).
+The parameters travel in the query string like every other call here; the body
+is empty.
+*/
+func (c *Client) PostJSON(ctx context.Context, path string, q url.Values, out any) error {
+	return c.send(ctx, http.MethodPost, path, q, out)
+}
+
 func (c *Client) get(ctx context.Context, path string, q url.Values, out any) error {
+	return c.send(ctx, http.MethodGet, path, q, out)
+}
+
+func (c *Client) send(ctx context.Context, method, path string, q url.Values, out any) error {
 	base, key := current()
 	if base == "" {
 		return fmt.Errorf("no reports API base URL is configured")
@@ -344,13 +358,14 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 	if len(q) > 0 {
 		u += "?" + q.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	req, err := http.NewRequestWithContext(ctx, method, u, nil)
 	if err != nil {
 		return err
 	}
 	if key != "" {
 		req.Header.Set("X-API-Key", key)
 	}
+	markPriority(ctx, req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("reports API unreachable: %w", err)
@@ -369,13 +384,14 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 				if err := budget.take(ctx); err != nil {
 					return err
 				}
-				req2, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+				req2, err := http.NewRequestWithContext(ctx, method, u, nil)
 				if err != nil {
 					return err
 				}
 				if key != "" {
 					req2.Header.Set("X-API-Key", key)
 				}
+				markPriority(ctx, req2)
 				if resp, err = c.http.Do(req2); err != nil {
 					return fmt.Errorf("reports API unreachable: %w", err)
 				}
@@ -388,7 +404,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		// The service answers errors as JSON with a readable `error`; surface
 		// that rather than a bare status, because it usually says exactly what
 		// is wrong ("ClientId is required", "Unknown dimension: foo").

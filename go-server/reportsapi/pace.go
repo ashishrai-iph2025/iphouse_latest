@@ -2,6 +2,7 @@ package reportsapi
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -58,8 +59,12 @@ just before a window boundary cannot cross it.
 	free for the pages people are actually reading.
 */
 const (
-	defaultPerMinute  = 480
-	defaultBackground = 300
+	// Raised with the service's own limits (RATE_LIMIT_PER_MINUTE=6000): a
+	// report is ~250 calls, and at 480 a minute pacing ALONE held one build to
+	// 30 seconds. Background stays modest; the service also caps how many
+	// background calls run at once.
+	defaultPerMinute  = 5400
+	defaultBackground = 900
 )
 
 var (
@@ -150,6 +155,17 @@ func Background(ctx context.Context) context.Context {
 func isBackground(ctx context.Context) bool {
 	v, _ := ctx.Value(bgKey).(bool)
 	return v
+}
+
+/*
+markPriority tells the service which line a call belongs in. Background calls
+(cache-building) are held to a few database connections there (reports_api
+guard.go), so a person opening a report never waits behind a caching pass.
+*/
+func markPriority(ctx context.Context, req *http.Request) {
+	if isBackground(ctx) {
+		req.Header.Set("X-Request-Priority", "background")
+	}
 }
 
 type pacer struct {

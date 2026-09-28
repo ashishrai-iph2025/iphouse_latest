@@ -112,6 +112,10 @@ function Shell({ children }: { children: React.ReactNode }) {
     <div className="flex flex-col bg-[#eef2f7] dark:bg-[#0f1f3d] layout-container" style={{ height: '100dvh' }}>
       <ImpersonationBanner />
       <ClientNavbar />
+      {/* Under the header and outside the scrolling body, as in the sidebar
+          layout above — this layout had no banner at all, so an expired or
+          expiring password was only ever announced with the sidebar on. */}
+      <PasswordExpiryBanner />
       <main className="flex-1 flex flex-col min-h-0 overflow-y-auto">
         {fullWidth ? (
           children

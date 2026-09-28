@@ -18,7 +18,22 @@ services:
 
   redis:
     image: redis:7-alpine
-    # Pure cache: capped memory + LRU eviction, no disk persistence — the War Room
-    # dataset rebuilds itself from MarkScan via the startDate/updatedSince flow.
-    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru", "--appendonly", "no"]
+    # The application's ONE Redis: the War Room dataset, the report cache (Sports
+    # and VOD), and — under the `reports_api:` prefix — Traffic and Torrent
+    # Analysis, plus the usage counts the top-clients auto-cache ranks by.
+    #
+    # Capped with LRU eviction, and PERSISTED: append-only file, flushed every
+    # second, on a named volume. Without it every rebuild of this stack (which
+    # recreates this container) emptied all of the above at once — including a
+    # torrent search that takes minutes to rebuild and the usage history, which
+    # cannot be rebuilt at all. 512 MB matches what the Cache & Redis tab sets;
+    # the tab can still change it at run time.
+    command: ["redis-server", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru",
+              "--appendonly", "yes", "--appendfsync", "everysec", "--save", ""]
+    volumes:
+      - redis-data:/data
     restart: unless-stopped
+
+volumes:
+  # Redis's append-only file — see the redis service above.
+  redis-data:

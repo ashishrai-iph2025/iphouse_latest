@@ -608,7 +608,7 @@ func summarySection(platforms []platformDef, clientID string) (map[string]any, b
 		// trend against a hosting one — so it takes the single merged trend.
 		// The summary merges several platforms into one set of totals, so it has
 		// no per-side action trend to draw — see actionsForPlatform.
-		"panels": sectionPanels(summaryKey, clientID, dims, nil, tiles, nil, nil),
+		"panels": summaryTopPanels(platforms, sectionPanels(summaryKey, clientID, dims, nil, tiles, nil, nil)),
 		// What the summary is actually adding up, so the page can say so rather
 		// than leaving the reader to guess the scope of a total.
 		"platforms": labels,
@@ -932,8 +932,8 @@ func runSummary(platforms []platformDef, q map[string]string) map[string]any {
 		sort.Slice(rows, func(i, j int) bool { return numOf(rows[i]["urls"]) > numOf(rows[j]["urls"]) })
 		// Closed sets keep every value; open-ended ones are a top-N list and say
 		// so in their title.
-		if len(rows) > 15 && !summaryClosedSet[key] {
-			rows = rows[:15]
+		if cut := summaryTopCut(platforms); len(rows) > cut && !summaryClosedSet[key] {
+			rows = rows[:cut]
 		}
 		/* Turnaround is read along its axis, not by volume — and it is a closed
 		   set, so the cut above never applies to it and re-ordering here cannot
@@ -1173,4 +1173,47 @@ func asStrings(v any) []string {
 		return out
 	}
 	return nil
+}
+
+/* ── Reader-sized lists on the Sports summary (reporttopn.go) ─────────────── */
+
+// summaryAllSports reports whether a summary adds up Sports platforms only —
+// the Sports report's summary, as opposed to the VOD one.
+func summaryAllSports(platforms []platformDef) bool {
+	if len(platforms) == 0 {
+		return false
+	}
+	for _, p := range platforms {
+		if !readerTopPlatform(p.Key) {
+			return false
+		}
+	}
+	return true
+}
+
+// summaryTopCut is how many rows an open-ended summary list keeps: the
+// reader's maximum on the Sports summary, the long-standing 15 elsewhere.
+func summaryTopCut(platforms []platformDef) int {
+	if summaryAllSports(platforms) {
+		return readerTopMax
+	}
+	return 15
+}
+
+// summaryTopPanels gives the Sports summary's open-ended lists a size for the
+// page's Top-N picker. They have no configured one of their own — the summary
+// is not configured per panel — so they open at the default.
+func summaryTopPanels(platforms []platformDef, panels []map[string]any) []map[string]any {
+	if !summaryAllSports(platforms) {
+		return panels
+	}
+	for _, p := range panels {
+		if strFromAny(p["kind"]) == panelDim && !summaryClosedSet[strFromAny(p["key"])] {
+			if _, has := p["limit"]; !has {
+				p["limit"] = readerTopDefault
+			}
+			p["readerTop"] = true
+		}
+	}
+	return panels
 }

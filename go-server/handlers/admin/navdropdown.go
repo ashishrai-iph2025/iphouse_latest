@@ -23,8 +23,11 @@ var allowedNavRoutes = map[string]bool{
 	"/download-request": true,
 	"/ip-tracking":      true,
 	"/data-sharing":     true,
-	"/profile":          true,
-	"/switch-account":   true,
+	// Business Intelligence pages — see handlers/bianalytics.go.
+	"/business-intelligence/traffic-analysis": true,
+	"/business-intelligence/torrent-analysis": true,
+	"/profile":        true,
+	"/switch-account": true,
 }
 
 // GET/POST/PUT/DELETE /api/admin/nav-dropdown
@@ -151,6 +154,8 @@ func routeOptions() []map[string]string {
 		{"label": "Download Request", "href": "/download-request"},
 		{"label": "IP Tracking", "href": "/ip-tracking"},
 		{"label": "Data Sharing", "href": "/data-sharing"},
+		{"label": "Traffic Analysis", "href": "/business-intelligence/traffic-analysis"},
+		{"label": "Torrent Analysis", "href": "/business-intelligence/torrent-analysis"},
 		{"label": "Profile", "href": "/profile"},
 		{"label": "Switch Account", "href": "/switch-account"},
 	}

@@ -13,6 +13,10 @@ import {
 } from '@/lib/warroom'
 import { downloadCsv, type CsvColumn } from '@/lib/exportCsv'
 import { downloadWorkbook } from '@/lib/xlsx'
+import {
+  PanelFrame, ArrangeDrawer, CatChart, SegBars, CountChart, SeriesChart, WrCard, resolvePanels,
+  type ResolvedPanel, type WrLayout, type WrPanelConf, type WrViz,
+} from '@/components/shared/warroom/kit'
 
 const NAVY   = '#14254A'
 const ORANGE = '#FC934C'
@@ -154,8 +158,67 @@ const UGC_LABELS: Record<string, string> = {
 /* ═══════════════════════════════════════════════════════════════════════════
    Root component
 ═══════════════════════════════════════════════════════════════════════════ */
-export default function WarRoomReport({ report, rows, admin = false }: { report: Report; rows: WarRoomRow[]; admin?: boolean }) {
+export default function WarRoomReport({ report, rows, admin = false, layoutClientId = '' }: {
+  report: Report; rows: WarRoomRow[]; admin?: boolean
+  /** Staff: the client (portal userId) whose layout applies; '' = the shared default. */
+  layoutClientId?: string
+}) {
   const [filters, setFilters] = useState<WarRoomFilters>({})
+
+  /* ── LAYOUT ────────────────────────────────────────────────────────────────
+     Which panels, in what order, how wide, under what title — the client's
+     saved layout over the registry (components/shared/warroom/kit.tsx,
+     go-server/handlers/warroomlayout.go). A chart type or Top-N picked on a
+     card is `vizView` / `topView`: this visit, this card. */
+  const [layout, setLayout] = useState<WrLayout | null>(null)
+  const [layoutMeta, setLayoutMeta] = useState({ canEdit: false, canEditDefault: false, source: 'none' })
+  const [arrangeOpen, setArrangeOpen] = useState(false)
+  const [vizView, setVizView] = useState<Record<string, WrViz>>({})
+  const [topView, setTopView] = useState<Record<string, number>>({})
+  const loadLayout = () => {
+    const q = layoutClientId ? `?clientId=${encodeURIComponent(layoutClientId)}` : ''
+    return fetch(`/api/warroom/layout${q}`, { credentials: 'include' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (!d) return
+        setLayout(d.layout ?? null)
+        setLayoutMeta({ canEdit: !!d.canEdit, canEditDefault: !!d.canEditDefault, source: d.source || 'none' })
+      })
+      .catch(() => { /* the built-in layout stands */ })
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadLayout() }, [layoutClientId])
+  const panels = useMemo(() => resolvePanels(layout), [layout])
+
+  const saveLayout = async (conf: WrPanelConf[], scope: 'client' | 'default'): Promise<string | null> => {
+    try {
+      const r = await fetch('/api/warroom/layout', {
+        method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: layoutClientId, scope, panels: conf }),
+      })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok || !d?.success) return d?.error || `Could not save the layout (HTTP ${r.status})`
+      setVizView({}); setTopView({})
+      await loadLayout()
+      return null
+    } catch { return 'Could not reach the server' }
+  }
+  const resetLayout = async (): Promise<string | null> => {
+    const q = layoutClientId ? `clientId=${encodeURIComponent(layoutClientId)}` : 'scope=default'
+    const r = await fetch(`/api/warroom/layout?${q}`, { method: 'DELETE', credentials: 'include' })
+    if (!r.ok) { const d = await r.json().catch(() => ({})); return d?.error || 'Could not reset' }
+    setVizView({}); setTopView({})
+    await loadLayout()
+    return null
+  }
+  // "Set default" from a card's own menu: that one panel, saved into the layout
+  // this reader is looking at (their client's; the shared default for staff
+  // with no client picked).
+  const setPanelDefault = (key: string, patch: { viz?: WrViz; limit?: number }) => {
+    const conf = panels.map(pn => (pn.key === key ? { ...pn.conf, key, ...patch } : { ...pn.conf, key: pn.key }))
+    const scope = layoutMeta.canEditDefault && !layoutClientId ? 'default' : 'client'
+    return saveLayout(conf, scope)
+  }
   // Whether the per-platform strip has been opened. The All Platforms tab is
   // what opens it — see platformsOpen, which also forces it visible while a
   // platform is selected, since an active selection off screen is a report
@@ -645,103 +708,219 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
 
   const isUgcSelected = activePlatform === 'ugc and other social media'
   const isOpenWeb     = activePlatform === 'internet'
-  // Platforms whose extra sections (UGC breakdown / Open Web intelligence)
-  // already dominate the center column render the shared blocks below at full
-  // page width instead of squeezing them beside the KPI sidebar.
-  const fullWidthBlocks = isUgcSelected || isOpenWeb
 
-  /* Date-wise trend. Defined once, rendered full-width for Open Web (its
-     intelligence cards already dominate the center column), inside the center
-     column for everything else. */
-  const trendBlock = (
-    <div className={isOpenWeb ? 'mt-3' : ''}>
-      <Label info={admin && <InfoTip text={LOGIC.trend} />}
-        action={<ExportButton label="Date-wise trend" rows={b.byDate ?? []} columns={[
-          { key: 'date', label: 'Date' },
-          { key: 'identified', label: 'Identified' },
-          { key: 'removed', label: 'Removed' },
-        ]} />}>
-        Date-wise trend — identified vs removed
-      </Label>
-      <Card className="p-4 mt-1">
-        <TrendChart data={b.byDate ?? []} />
-      </Card>
-    </div>
+  /* ── PANEL BODIES ──────────────────────────────────────────────────────────
+     One entry per panel in the registry. null = not on screen for this
+     selection (Open Web panels off Open Web, and so on). Each is drawn in the
+     chart type and Top-N the frame hands it. */
+  const inspectDot = (dim: FilterDim, title: string) => (
+    <span role="button" tabIndex={0} title="See the IDs with nothing in this field — excluded from the bars"
+      onClick={() => openInspect(dim, title)}
+      onKeyDown={e => { if (e.key === 'Enter') openInspect(dim, title) }}
+      className="w-3.5 h-3.5 grid place-items-center rounded-full text-gray-300 hover:text-[#14254A] hover:bg-[#14254A]/10 transition-colors">
+      <svg width="10" height="10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+        <circle cx="12" cy="12" r="9" /><path strokeLinecap="round" d="M12 8h.01M12 11v5" />
+      </svg>
+    </span>
   )
+  const segBody = (data: Segment[] | null | undefined, dim: FilterDim, logic: string, title: string, viz: WrViz | undefined, n: number) => {
+    const all = data ?? []
+    const shown = all.slice(0, n)
+    const active = (filters as any)[dim] as string | undefined
+    return {
+      node: !viz || viz === 'bars'
+        ? <SegBars rows={shown} active={active} onSelect={k => toggle(dim, k)} />
+        : <CatChart viz={viz} rows={shown} active={active} onSelect={k => toggle(dim, k)} />,
+      csv: <ExportButton label={title} columns={SEGMENT_EXPORT_COLS} rows={all} />,
+      info: admin ? <><InfoTip text={logic} />{dim !== 'searchEngine' && inspectDot(dim, title)}</> : undefined,
+    }
+  }
 
-  /* Funnel and donuts. Equal-height rows (items-stretch) so every card in a row
-     shares the same height and width — plain row-major grid, no masonry reflow,
-     so nothing zigzags. Same two-slot treatment as the trend block.
-
-     "Current status" used to sit between them and was removed: it restated the
-     funnel beside it — removed, pending and active are the funnel's own stages
-     — so the row spent a quarter of its width saying the same thing twice, in a
-     less readable form. The column count drops with it, which is what lets the
-     three that remain grow instead of leaving a gap. */
-  const funnelStatusRow = (
-    <div className={`grid grid-cols-1 gap-3 items-stretch ${
-      activePlatform === 'internet' ? 'md:grid-cols-2' : 'md:grid-cols-3'} ${fullWidthBlocks ? 'mt-3' : ''}`}>
-
-      <div className="flex flex-col">
-        <Label info={admin && <InfoTip text={LOGIC.hostVideo} />}
-          action={<ExportButton label="Host URLs and Media Files" rows={urlDonutExportRows} columns={[
-            { key: 'state', label: 'State' }, { key: 'value', label: 'URLs' },
-          ]} />}>
-          Host URLs / Media Files
-        </Label>
-        <DonutCard className="flex-1"
-          title="Host URLs / Media Files" icon={<IconLink />}
-          removed={rem.urlRemoved} pending={rem.urlPending} tone="navy"
-        />
-      </div>
-      {activePlatform !== 'internet' && (
-        <div className="flex flex-col">
-          <Label info={admin && <InfoTip text={LOGIC.channelsProfiles} />}
-            action={<ExportButton label="Channels and profiles" rows={channelDonutExportRows} columns={[
-              { key: 'state', label: 'Metric' }, { key: 'value', label: 'Value' },
-            ]} />}>
-            Channels / profiles
-          </Label>
-          <DonutCard className="flex-1"
-            title="Channels / profiles" icon={<IconUser />}
-            removed={rem.channelsRemoved} pending={rem.channelsActive} tone="orange"
-            removedLabel="dead" pendingLabel="active"
-            extras={[
-              { label: 'Distinct channels',    value: nf(rem.channelsTotal) },
-              { label: 'Subscribers impacted', value: nf(rem.subscribersImpacted) },
-            ]}
-          />
-        </div>
-      )}
-
-      {/* The removal-rate ring, moved here out of the KPI rail.
-
-          Two things were wrong with it there. It made the rail taller than the
-          column beside it, and the rail is sticky and `items-start` — so on the
-          All Platforms tab the page ended with a large empty region to the left
-          of the ring, which is the gap in the layout rather than a spacing bug.
-          And it is the same KIND of thing as the cards in this row: a summary
-          of how enforcement ended, not a headline count. It belongs with them. */}
-      <div className="flex flex-col">
-        <Label info={admin && <InfoTip text={LOGIC.removalRate} />}>Removal rate</Label>
-        <Card className="mt-1 flex-1 p-4 flex flex-col items-center justify-center">
-          <div className="w-[88px] h-[88px] rounded-full grid place-items-center"
-            style={{ background: `conic-gradient(${ORANGE} ${removalRate}%, #f1f4f8 0)` }}>
-            <div className="w-[62px] h-[62px] rounded-full bg-white dark:bg-[#1a2d55] grid place-items-center">
-              <span className="text-lg font-extrabold" style={{ color: ORANGE }}>{removalRate}%</span>
+  const bodyFor = (pn: ResolvedPanel, viz: WrViz | undefined, n: number): { node: ReactNode; csv?: ReactNode; info?: ReactNode } | null => {
+    switch (pn.key) {
+      case 'kpis':
+        return {
+          info: admin ? <InfoTip text={LOGIC.headlineKpi} /> : undefined,
+          csv: <ExportButton label="Headline KPIs" columns={KPI_EXPORT_COLS} rows={kpiExportRows} />,
+          node: (
+            <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))' }}>
+              <Kpi label="Identification" value={nf(s.identified)} foot="URLs identified" tone="navy" icon={<IconShield />} info={admin && <InfoTip text={LOGIC.kpiIdentification} />} />
+              <Kpi label="Enforced" value={nf(s.enforced)} foot="notices sent" icon={<IconSend />} info={admin && <InfoTip text={LOGIC.kpiEnforced} />} />
+              <Kpi label="Removal" value={nf(s.removed)} foot={`${removalRate}% removal rate`} tone="orange" icon={<IconTrash />} info={admin && <InfoTip text={LOGIC.kpiRemoval} />} />
+              <Kpi label="Pending removal" value={nf(f.pending)} foot="identified, not yet removed" icon={<IconClock />} info={admin && <InfoTip text={LOGIC.kpiPending} />} />
+              {!isOpenWeb && <Kpi label="Views" value={compact(s.views)} foot="total views reached" icon={<IconEye />} info={admin && <InfoTip text={LOGIC.kpiViews} />} />}
+              {!isOpenWeb && <Kpi label="Engagement" value={compact(s.engagement)} foot="likes + comments" icon={<IconHeart />} info={admin && <InfoTip text={LOGIC.kpiEngagement} />} />}
             </div>
-          </div>
-          <div className="text-[11px] text-gray-400 mt-2 text-center">of identified removed</div>
-        </Card>
-      </div>
-    </div>
-  )
+          ),
+        }
+      case 'openWebStats':
+        if (!isOpenWeb || !openWeb) return null
+        return {
+          info: admin ? <InfoTip text={LOGIC.openWebStats} /> : undefined,
+          csv: <ExportButton label="Open Web hosts and linking URLs" columns={KPI_EXPORT_COLS} rows={[
+            { metric: 'Distinct host URLs', value: openWeb.distinctSourceUrls },
+            { metric: 'Distinct linking URLs', value: openWeb.distinctInfringingUrls },
+            { metric: 'Distinct host domains', value: openWeb.distinctSourceDomains },
+            { metric: 'Distinct linking domains', value: openWeb.distinctInfringingDomains },
+            { metric: 'Identification', value: openWeb.identification },
+            { metric: 'Total rows', value: openWeb.total },
+          ]} />,
+          node: (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+              <OwStat label="Distinct host URLs" value={nf(openWeb.distinctSourceUrls)} foot={`identification: ${nf(openWeb.identification)}`} tone="navy" />
+              <OwStat label="Distinct linking URLs" value={nf(openWeb.distinctInfringingUrls)} foot={`${nf(openWeb.total)} total rows`} tone="orange" />
+              <OwStat label="Distinct host domains" value={nf(openWeb.distinctSourceDomains)} foot="unique host domains" tone="navy" />
+              <OwStat label="Distinct linking domains" value={nf(openWeb.distinctInfringingDomains)} foot="unique linking domains" tone="orange" />
+            </div>
+          ),
+        }
+      case 'newDomains':
+        if (!isOpenWeb || !openWeb) return null
+        return {
+          info: admin ? <InfoTip text={LOGIC.newDomains} /> : undefined,
+          csv: <ExportButton label="Newly identified domains" rows={openWeb.newDomainsByDate} columns={[
+            { key: 'date', label: 'Date' }, { key: 'count', label: 'New domains' },
+          ]} />,
+          node: !viz || viz === 'column'
+            ? <WrCard className="p-4 flex-1"><NewDomainsChart data={openWeb.newDomainsByDate} /></WrCard>
+            : <SeriesChart viz={viz} data={openWeb.newDomainsByDate} series={[{ key: 'count', name: 'New domains', color: NAVY }]} />,
+        }
+      case 'searchEngine':
+        if (!isOpenWeb || !openWeb) return null
+        return segBody(openWeb.bySearchEngine, 'searchEngine', LOGIC.searchEngine, pn.title, viz, n)
+      case 'ugcPlatforms':
+        if (!isUgcSelected || !ugcBreakdown.length) return null
+        return {
+          info: admin ? <InfoTip text={LOGIC.ugcPlatforms} /> : undefined,
+          csv: <ExportButton label="UGC platforms" rows={ugcBreakdown} columns={[
+            { key: 'label', label: 'Platform' }, { key: 'identified', label: 'Identified' },
+            { key: 'removed', label: 'Removed' }, { key: 'rate', label: 'Removal %' },
+          ]} />,
+          node: !viz || viz === 'combo'
+            ? <WrCard className="p-4 flex-1"><UgcPlatformChart data={ugcBreakdown} active={filters.subPlatform} onSelect={k => toggle('subPlatform', k)} /></WrCard>
+            : <CatChart viz={viz} rows={ugcBreakdown} active={filters.subPlatform} onSelect={k => toggle('subPlatform', k)} />,
+        }
+      case 'trend':
+        return {
+          info: admin ? <InfoTip text={LOGIC.trend} /> : undefined,
+          csv: <ExportButton label="Date-wise trend" rows={b.byDate ?? []} columns={[
+            { key: 'date', label: 'Date' }, { key: 'identified', label: 'Identified' }, { key: 'removed', label: 'Removed' },
+          ]} />,
+          node: !viz || viz === 'area'
+            ? <WrCard className="p-4 flex-1"><TrendChart data={b.byDate ?? []} /></WrCard>
+            : <SeriesChart viz={viz} data={b.byDate ?? []} series={[
+                { key: 'identified', name: 'Identification', color: NAVY }, { key: 'removed', name: 'Removed', color: ORANGE }]} />,
+        }
+      case 'assetCompare':
+        if (!multiAsset || !assetCompare.length) return null
+        return {
+          info: admin ? <InfoTip text={LOGIC.assetCompare} /> : undefined,
+          csv: <ExportButton label="Asset comparison" rows={assetCompare} columns={[
+            { key: 'asset', label: 'Asset' }, { key: 'identified', label: 'Identified' },
+            { key: 'removed', label: 'Removed' }, { key: 'rate', label: 'Removal %' },
+          ]} />,
+          node: !viz || viz === 'column'
+            ? <WrCard className="p-4 flex-1"><AssetCompareChart data={assetCompare} /></WrCard>
+            : <CatChart viz={viz} rows={assetCompare.map(a => ({ key: a.asset, label: a.asset, identified: a.identified, removed: a.removed }))} />,
+        }
+      case 'hostDonut':
+        return {
+          info: admin ? <InfoTip text={LOGIC.hostVideo} /> : undefined,
+          csv: <ExportButton label="Host URLs and Media Files" rows={urlDonutExportRows} columns={[
+            { key: 'state', label: 'State' }, { key: 'value', label: 'URLs' },
+          ]} />,
+          node: <DonutCard className="flex-1" title={pn.title} icon={<IconLink />} removed={rem.urlRemoved} pending={rem.urlPending} tone="navy" />,
+        }
+      case 'channelsDonut':
+        if (isOpenWeb) return null
+        return {
+          info: admin ? <InfoTip text={LOGIC.channelsProfiles} /> : undefined,
+          csv: <ExportButton label="Channels and profiles" rows={channelDonutExportRows} columns={[
+            { key: 'state', label: 'Metric' }, { key: 'value', label: 'Value' },
+          ]} />,
+          node: (
+            <DonutCard className="flex-1" title={pn.title} icon={<IconUser />}
+              removed={rem.channelsRemoved} pending={rem.channelsActive} tone="orange" removedLabel="dead" pendingLabel="active"
+              extras={[
+                { label: 'Distinct channels', value: nf(rem.channelsTotal) },
+                { label: 'Subscribers impacted', value: nf(rem.subscribersImpacted) },
+              ]} />
+          ),
+        }
+      case 'removalRate':
+        return {
+          info: admin ? <InfoTip text={LOGIC.removalRate} /> : undefined,
+          node: (
+            <Card className="flex-1 p-4 flex flex-col items-center justify-center">
+              <div className="w-[88px] h-[88px] rounded-full grid place-items-center"
+                style={{ background: `conic-gradient(${ORANGE} ${removalRate}%, #f1f4f8 0)` }}>
+                <div className="w-[62px] h-[62px] rounded-full bg-white dark:bg-[#1a2d55] grid place-items-center">
+                  <span className="text-lg font-extrabold" style={{ color: ORANGE }}>{removalRate}%</span>
+                </div>
+              </div>
+              <div className="text-[11px] text-gray-400 mt-2 text-center">of identified removed</div>
+            </Card>
+          ),
+        }
+      case 'tatUrlEnf':
+      case 'tatEnfRem': {
+        const urlEnf = pn.key === 'tatUrlEnf'
+        const data = urlEnf ? tatUrlToEnforcement : tatEnforcementToRemoval
+        const dim = urlEnf ? 'tatUrlEnf' : 'tatEnfRem'
+        const active = urlEnf ? filters.tatUrlEnf : filters.tatEnfRem
+        return {
+          info: admin ? <InfoTip text={urlEnf ? LOGIC.tatUrlEnf : LOGIC.tatEnfRem} /> : undefined,
+          csv: <ExportButton label={urlEnf ? 'TAT URL to Enforcement' : 'TAT Enforcement to Removal'} columns={TAT_EXPORT_COLS} rows={data} />,
+          node: !viz || viz === 'hbar'
+            ? <TatBucketCard buckets={data} active={active} onSelect={l => toggle(dim, l)} />
+            : <CountChart viz={viz} rows={data} active={active} onSelect={l => toggle(dim, l)} />,
+        }
+      }
+      case 'repeatOffenders':
+        if (!repeatOffenders.length) return null
+        return {
+          info: admin ? <InfoTip text={LOGIC.repeatOffenders} /> : undefined,
+          csv: <ExportButton label="Repeat offenders" rows={repeatOffenders} columns={[
+            { key: 'url', label: 'Channel / profile' }, { key: 'identified', label: 'Identified' },
+            { key: 'removed', label: 'Removed' }, { key: 'reuploads', label: 'Re-uploads after takedown' },
+            { key: 'profileStatus', label: 'Profile status' },
+          ]} />,
+          node: viz === 'table' ? (
+            <WrCard className="p-2 flex-1 overflow-auto max-h-[480px]">
+              <table className="w-full text-xs">
+                <thead><tr className="text-[10px] uppercase tracking-wider text-gray-400 border-b border-gray-100">
+                  <th className="text-left py-2 px-2">Channel / profile</th><th className="text-right py-2 px-2">Identified</th>
+                  <th className="text-right py-2 px-2">Removed</th><th className="text-right py-2 px-2">Re-uploads</th><th className="text-left py-2 px-2">Profile status</th>
+                </tr></thead>
+                <tbody>{repeatOffenders.slice(0, n).map(d => (
+                  <tr key={d.key} onClick={() => toggle('offender', d.key)}
+                    className={`border-b border-gray-50 cursor-pointer hover:bg-[#14254A]/5 ${d.key === filters.offender ? 'bg-[#14254A]/5' : ''}`}>
+                    <td className="py-1.5 px-2 text-gray-600 truncate max-w-[360px]" title={d.url}>{d.url}</td>
+                    <td className="py-1.5 px-2 text-right font-bold" style={{ color: NAVY_TEXT }}>{nf(d.identified)}</td>
+                    <td className="py-1.5 px-2 text-right font-bold" style={{ color: ORANGE_TEXT }}>{nf(d.removed)}</td>
+                    <td className="py-1.5 px-2 text-right">{nf(d.reuploads)}</td>
+                    <td className="py-1.5 px-2 text-gray-500">{d.profileStatus}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </WrCard>
+          ) : <RepeatOffendersCard data={repeatOffenders} active={filters.offender} onSelect={k => toggle('offender', k)} limit={n} />,
+        }
+      case 'byReason':   return segBody(b.byReason, 'reason', LOGIC.breakdownReason, pn.title, viz, n)
+      case 'byQuality':  return segBody(b.byQuality, 'quality', LOGIC.breakdownQuality, pn.title, viz, n)
+      case 'byLanguage': return segBody(b.byLanguage, 'language', LOGIC.breakdownLanguage, pn.title, viz, n)
+      case 'byCountry':
+        if (activePlatform === 'telegram') return null
+        return segBody(b.byCountry, 'country', LOGIC.breakdownCountry, pn.title, viz, n)
+    }
+    return null
+  }
 
   return (
     <div className="fade-in w-full">
 
-      {/* Active filter chips */}
-      {hasFilter && (
+      {/* Active filter chips, and — for those who may shape the report — Arrange */}
+      {(hasFilter || layoutMeta.canEdit) && (
         <div className="flex flex-wrap items-center gap-2 mb-4 text-xs">
           {activeChips.map(k => (
             <button key={k} onClick={() => toggle(k as any, filters[k as keyof WarRoomFilters]!)}
@@ -750,24 +929,26 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
               {DIM_LABEL[k] ?? k}: <strong>{chipValue(k, filters[k as keyof WarRoomFilters]!)}</strong> ✕
             </button>
           ))}
-          <button onClick={() => setFilters({})}
-            className="px-2.5 py-1 rounded-full font-semibold border border-gray-200 text-gray-500 hover:bg-gray-50">
-            Clear all
-          </button>
+          {hasFilter && (
+            <button onClick={() => setFilters({})}
+              className="px-2.5 py-1 rounded-full font-semibold border border-gray-200 text-gray-500 hover:bg-gray-50">
+              Clear all
+            </button>
+          )}
+          {layoutMeta.canEdit && (
+            <button onClick={() => setArrangeOpen(true)} title="Order, show or hide, size, titles and default chart types"
+              className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-[#14254A] font-semibold hover:border-[#14254A] dark:bg-[#1a2d55] dark:text-white dark:border-white/15">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" />
+                <rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" />
+              </svg>
+              Arrange
+            </button>
+          )}
         </div>
       )}
 
-      {/* ── 2-section layout: Headline KPIs pinned right, everything else
-             (including the platform picker trigger) uses the full remaining
-             width instead of losing a fixed column to a pinned platform list. ── */}
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_210px] gap-4 items-start">
-
-        {/* ── CENTER: auto-arranged content ─────────────────────────────────── */}
-        <div className="min-w-0 w-full flex flex-col gap-3">
-
-          {/* Platform row — every platform as a pill in one horizontally
-              scrollable row, so nothing is hidden behind a click and the
-              cards below still get the full page width. */}
+      {/* Platform strip — the report's scope, always first. */}
           <div>
             <Label info={admin && <InfoTip text={LOGIC.platformPicker} />}
               action={
@@ -890,172 +1071,33 @@ export default function WarRoomReport({ report, rows, admin = false }: { report:
             </div>
           </div>
 
-          {/* Open Web intelligence — only when the Open Web platform is selected */}
-          {activePlatform === 'internet' && openWeb && (
-            <div>
-              <Label info={admin && <InfoTip text={LOGIC.openWebStats} />}
-                action={<ExportButton label="Open Web hosts and linking URLs" rows={[
-                  { metric: 'Distinct host URLs',     value: openWeb.distinctSourceUrls },
-                  { metric: 'Distinct linking URLs',  value: openWeb.distinctInfringingUrls },
-                  { metric: 'Distinct host domains',  value: openWeb.distinctSourceDomains },
-                  { metric: 'Distinct linking domains', value: openWeb.distinctInfringingDomains },
-                  { metric: 'Identification',         value: openWeb.identification },
-                  { metric: 'Total rows',             value: openWeb.total },
-                ]} columns={KPI_EXPORT_COLS} />}>
-                Open Web — hosts &amp; linking URLs
-              </Label>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mt-3">
-                <OwStat label="Distinct host URLs"       value={nf(openWeb.distinctSourceUrls)}        foot={`identification: ${nf(openWeb.identification)}`} tone="navy" />
-                <OwStat label="Distinct linking URLs"    value={nf(openWeb.distinctInfringingUrls)}    foot={`${nf(openWeb.total)} total rows`} tone="orange" />
-                <OwStat label="Distinct host domains"    value={nf(openWeb.distinctSourceDomains)}     foot="unique host domains" tone="navy" />
-                <OwStat label="Distinct linking domains" value={nf(openWeb.distinctInfringingDomains)} foot="unique linking domains" tone="orange" />
-              </div>
-
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 mt-3">
-                <div className="flex flex-col">
-                  <Label info={admin && <InfoTip text={LOGIC.newDomains} />}
-                    action={<ExportButton label="Newly identified domains" rows={openWeb.newDomainsByDate} columns={[
-                      { key: 'date', label: 'Date' }, { key: 'count', label: 'New domains' },
-                    ]} />}>
-                    Date-wise newly identified domains
-                  </Label>
-                  <Card className="p-4 flex-1 mt-1">
-                    <NewDomainsChart data={openWeb.newDomainsByDate} />
-                  </Card>
-                </div>
-                <div className="flex flex-col">
-                  <Label info={admin && <InfoTip text={LOGIC.searchEngine} />}>Linking URLs by search engine</Label>
-                  <div className="mt-1 flex-1 flex flex-col">
-                    <SegmentBars className="flex-1" title="Search engine" data={openWeb.bySearchEngine}
-                      dim="searchEngine" active={filters.searchEngine} onSelect={toggle}
-                      exportLabel="Linking URLs by search engine" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* UGC platform breakdown — only when UGC & Other is selected */}
-          {activePlatform === 'ugc and other social media' && ugcBreakdown.length > 0 && (
-            <div>
-              <Label info={admin && <InfoTip text={LOGIC.ugcPlatforms} />}
-                action={<ExportButton label="UGC platforms" rows={ugcBreakdown} columns={[
-                  { key: 'label', label: 'Platform' }, { key: 'identified', label: 'Identified' },
-                  { key: 'removed', label: 'Removed' }, { key: 'rate', label: 'Removal %' },
-                ]} />}>
-                UGC platforms — identification, removal &amp; removal % · click a bar to filter
-              </Label>
-              <Card className="p-4 mt-1">
-                <UgcPlatformChart data={ugcBreakdown} active={filters.subPlatform}
-                  onSelect={k => toggle('subPlatform', k)} />
-              </Card>
-            </div>
-          )}
-
-          {/* Trend chart center slot — full-width below when Open Web is selected */}
-          {!isOpenWeb && trendBlock}
-
-          {/* Asset comparison — only when multiple assets are selected */}
-          {multiAsset && assetCompare.length > 0 && (
-            <div>
-              <Label info={admin && <InfoTip text={LOGIC.assetCompare} />}
-                action={<ExportButton label="Asset comparison" rows={assetCompare} columns={[
-                  { key: 'asset', label: 'Asset' }, { key: 'identified', label: 'Identified' },
-                  { key: 'removed', label: 'Removed' }, { key: 'rate', label: 'Removal %' },
-                ]} />}>
-                Asset comparison — identification vs removal
-              </Label>
-              <Card className="p-4 mt-1">
-                <AssetCompareChart data={assetCompare} />
-              </Card>
-            </div>
-          )}
-
-          {/* Funnel/status/donuts center slot — UGC & Other and Open Web render
-              the same row full-width below instead. */}
-          {!fullWidthBlocks && funnelStatusRow}
-        </div>
-
-        {/* ── RIGHT: Headline KPIs ──────────────────────────────────────────── */}
-        <div className="w-full flex flex-col gap-3 xl:sticky xl:top-4 xl:self-start">
-          {/* Single home for the top-line numbers. The old "At a glance" grid
-              repeated Identification/Enforced/Removed/Views verbatim, so its
-              two unique metrics (pending removal, engagement) were folded in
-              here and the duplicate card retired. */}
-          <Label info={admin && <InfoTip text={LOGIC.headlineKpi} />}
-            action={<ExportButton label="Headline KPIs" columns={KPI_EXPORT_COLS} rows={kpiExportRows} />}>
-            Headline KPIs{ap ? ` — ${ap.label}` : ''}
-          </Label>
-          <Kpi label="Identification" value={nf(s.identified)}      foot="URLs identified"      tone="navy"   icon={<IconShield />} info={admin && <InfoTip text={LOGIC.kpiIdentification} />} />
-          <Kpi label="Enforced"       value={nf(s.enforced)}        foot="notices sent"         icon={<IconSend />} info={admin && <InfoTip text={LOGIC.kpiEnforced} />} />
-          <Kpi label="Removal"        value={nf(s.removed)}         foot={`${removalRate}% removal rate`} tone="orange" icon={<IconTrash />} info={admin && <InfoTip text={LOGIC.kpiRemoval} />} />
-          <Kpi label="Pending removal" value={nf(f.pending)}        foot="identified, not yet removed" icon={<IconClock />} info={admin && <InfoTip text={LOGIC.kpiPending} />} />
-          {activePlatform !== 'internet' && (
-            <>
-              <Kpi label="Views" value={compact(s.views)} foot="total views reached" icon={<IconEye />} info={admin && <InfoTip text={LOGIC.kpiViews} />} />
-              <Kpi label="Engagement" value={compact(s.engagement)} foot="likes + comments" icon={<IconHeart />} info={admin && <InfoTip text={LOGIC.kpiEngagement} />} />
-            </>
-          )}
-
-        </div>
-
+      {/* ── The panels, as the layout arranges them ─────────────────────────── */}
+      <div className="grid grid-cols-12 gap-3 items-stretch mt-3">
+        {panels.filter(pn => !pn.hidden).map(pn => {
+          const viz = vizView[pn.key] ?? pn.viz
+          const n = topView[pn.key] ?? pn.limit
+          const body = bodyFor(pn, viz, n)
+          if (!body) return null
+          const shown = pn.key === 'kpis' && ap ? { ...pn, title: `${pn.title} — ${ap.label}` } : pn
+          return (
+            <PanelFrame key={pn.key} panel={shown} adminInfo={body.info} csv={body.csv}
+              viz={viz} onViz={v => setVizView(m => { const x = { ...m }; if (v === null) delete x[pn.key]; else x[pn.key] = v; return x })}
+              topN={n} onTopN={v => setTopView(m => { const x = { ...m }; if (v === null) delete x[pn.key]; else x[pn.key] = v; return x })}
+              canSetDefault={layoutMeta.canEdit}
+              onSetDefault={patch => setPanelDefault(pn.key, patch)}>
+              {body.node}
+            </PanelFrame>
+          )
+        })}
       </div>
 
-      {/* Full-width slots — Open Web gets the trend chart here too; UGC & Other
-          and Open Web both get the funnel/status/donuts row. */}
-      {isOpenWeb && trendBlock}
-      {fullWidthBlocks && funnelStatusRow}
-
-      {/* ── FULL WIDTH: TAT buckets — spans the whole page width, not just the
-             center column between the sidebars. ─────────────────────────────── */}
-      <div className="mt-3 grid grid-cols-1 xl:grid-cols-2 gap-3 items-stretch">
-        <div className="flex flex-col">
-          <Label info={admin && <InfoTip text={LOGIC.tatUrlEnf} />}
-            action={<ExportButton label="TAT URL to Enforcement" columns={TAT_EXPORT_COLS} rows={tatUrlToEnforcement} />}>
-            TAT: URL → Enforcement
-          </Label>
-          <TatBucketCard buckets={tatUrlToEnforcement}
-            active={filters.tatUrlEnf}
-            onSelect={l => toggle('tatUrlEnf', l)} />
-        </div>
-        <div className="flex flex-col">
-          <Label info={admin && <InfoTip text={LOGIC.tatEnfRem} />}
-            action={<ExportButton label="TAT Enforcement to Removal" columns={TAT_EXPORT_COLS} rows={tatEnforcementToRemoval} />}>
-            TAT: Enforcement → Removal
-          </Label>
-          <TatBucketCard buckets={tatEnforcementToRemoval}
-            active={filters.tatEnfRem}
-            onSelect={l => toggle('tatEnfRem', l)} />
-        </div>
-      </div>
-
-      {/* ── FULL WIDTH: repeat offenders — profiles that re-uploaded after a
-             takedown. Hidden when nothing qualifies (e.g. Open Web, which has
-             no profile concept). ───────────────────────────────────────────── */}
-      {repeatOffenders.length > 0 && (
-        <div className="mt-3">
-          <Label info={admin && <InfoTip text={LOGIC.repeatOffenders} />}
-            action={<ExportButton label="Repeat offenders" rows={repeatOffenders} columns={[
-              { key: 'url', label: 'Channel / profile' }, { key: 'identified', label: 'Identified' },
-              { key: 'removed', label: 'Removed' }, { key: 'reuploads', label: 'Re-uploads after takedown' },
-              { key: 'profileStatus', label: 'Profile status' },
-            ]} />}>
-            Repeat offenders — profiles re-uploading after removal · click a row to filter
-          </Label>
-          <RepeatOffendersCard data={repeatOffenders} active={filters.offender}
-            onSelect={k => toggle('offender', k)} />
-        </div>
+      {arrangeOpen && (
+        <ArrangeDrawer layout={layout} onClose={() => setArrangeOpen(false)}
+          onSave={saveLayout}
+          onReset={layoutMeta.canEditDefault ? resetLayout : undefined}
+          canEditDefault={layoutMeta.canEditDefault}
+          hasClient={!layoutMeta.canEditDefault || !!layoutClientId} />
       )}
-
-      {/* ── FULL WIDTH: breakdown bars ──────────────────────────────────────── */}
-      <div className="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 items-stretch">
-        <SegmentBars title="Infringement type" data={b.byReason} dim="reason" active={filters.reason} onSelect={toggle} onInspect={admin ? openInspect : undefined} info={admin && <InfoTip text={LOGIC.breakdownReason} />} />
-        <SegmentBars title="Quality of print"  data={b.byQuality}  dim="quality"  active={filters.quality}  onSelect={toggle} onInspect={admin ? openInspect : undefined} info={admin && <InfoTip text={LOGIC.breakdownQuality} />} />
-        <SegmentBars title="Language"           data={b.byLanguage} dim="language" active={filters.language} onSelect={toggle} onInspect={admin ? openInspect : undefined} info={admin && <InfoTip text={LOGIC.breakdownLanguage} />} />
-        {activePlatform !== 'telegram' && (
-          <SegmentBars title="Country" data={b.byCountry} dim="country" active={filters.country} onSelect={toggle} onInspect={admin ? openInspect : undefined} info={admin && <InfoTip text={LOGIC.breakdownCountry} />} />
-        )}
-      </div>
 
       {/* ── "Unknown" inspector modal — the MarkScan IDs whose field is blank ── */}
       {inspect && (
@@ -1260,12 +1302,13 @@ function UgcPlatformChart({ data, active, onSelect }: {
 /* ── Repeat offenders — profiles that re-uploaded after a takedown.
       Rows are clickable and cross-filter the whole report by that profile;
       clicking the active row again clears the filter. ─────────────────── */
-function RepeatOffendersCard({ data, active, onSelect }: {
+function RepeatOffendersCard({ data, active, onSelect, limit = 10 }: {
   data: { key: string; url: string; identified: number; removed: number; reuploads: number; profileStatus: string }[]
   active?: string
   onSelect: (key: string) => void
+  limit?: number
 }) {
-  const top = data.slice(0, 12)
+  const top = data.slice(0, limit)
   const max = Math.max(1, ...top.map(d => d.identified))
   const totIdentified = data.reduce((n, d) => n + d.identified, 0)
   const totRemoved    = data.reduce((n, d) => n + d.removed, 0)
@@ -1278,7 +1321,7 @@ function RepeatOffendersCard({ data, active, onSelect }: {
   }
   const isLink = (u: string) => /^https?:\/\//i.test(u)
   return (
-    <Card className="p-4 mt-1">
+    <Card className="p-4 flex-1">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 mb-3 text-[11px] text-gray-500">
         <span><b style={{ color: NAVY_TEXT }}>{nf(data.length)}</b> repeat offender{data.length === 1 ? '' : 's'}</span>
         <span><b style={{ color: NAVY_TEXT }}>{nf(totIdentified)}</b> URL identifications</span>
@@ -1525,72 +1568,6 @@ function TatBucketCard({ buckets, active, onSelect }: {
           )
         })}
       </div>
-    </Card>
-  )
-}
-
-function SegmentBars({ title, data, dim, active, onSelect, onInspect, info, className = '', exportLabel }: {
-  title: string; data: Segment[] | null; dim: FilterDim
-  active?: string; onSelect: (dim: FilterDim, key: string) => void
-  onInspect?: (dim: FilterDim, title: string) => void; info?: ReactNode; className?: string
-  exportLabel?: string
-}) {
-  const segs     = data ?? []
-  const max      = Math.max(1, ...segs.map(s => s.identified))
-  const hasActive = !!active
-  return (
-    <Card className={`p-4 ${className}`}>
-      <div className="flex items-center gap-1.5 text-sm font-bold text-[#14254A] mb-3">
-        {title}
-        {info}
-        {hasActive && (
-          <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full"
-            style={{ background: '#FC934C22', color: ORANGE_TEXT }}>filtered</span>
-        )}
-        <span className="ml-auto flex items-center gap-1">
-          {onInspect && (
-            <span role="button" tabIndex={0} title="See the IDs with nothing in this field — excluded from the bars above"
-              onClick={() => onInspect(dim, title)}
-              onKeyDown={e => { if (e.key === 'Enter') onInspect(dim, title) }}
-              className="flex-shrink-0 w-4 h-4 grid place-items-center rounded-full text-gray-400 hover:text-[#14254A] hover:bg-[#14254A]/10 transition-colors">
-              <svg width="10" height="10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <circle cx="12" cy="12" r="9" /><path strokeLinecap="round" d="M12 8h.01M12 11v5" />
-              </svg>
-            </span>
-          )}
-          <ExportButton label={exportLabel ?? title} columns={SEGMENT_EXPORT_COLS} rows={segs} />
-        </span>
-      </div>
-      {segs.length === 0 ? (
-        <div className="text-sm text-gray-400 py-3">No data.</div>
-      ) : (
-        <div className="flex flex-col gap-2">
-          {segs.slice(0, 10).map(sg => {
-            const isActive = sg.key === active
-            const dimmed   = hasActive && !isActive
-            return (
-              <button key={sg.key} onClick={() => onSelect(dim, sg.key)}
-                className={`grid items-center gap-2.5 rounded-lg px-1.5 py-1 text-left transition-all hover:bg-[#14254A]/5 dark:hover:bg-white/5 ${
-                  isActive ? 'bg-[#14254A]/5 ring-1 ring-[#14254A]/40 dark:bg-white/5 dark:ring-white/20' : ''} ${dimmed ? 'opacity-40' : ''}`}
-                style={{ gridTemplateColumns: '96px 1fr auto' }}>
-                <span className="text-xs text-gray-600 truncate" title={sg.label}>{sg.label}</span>
-                <span className="flex flex-col gap-1">
-                  <span className="h-1.5 rounded" style={{ width: `${(sg.identified / max) * 100}%`, minWidth: 2, background: NAVY }} />
-                  <span className="h-1.5 rounded" style={{ width: `${(sg.removed    / max) * 100}%`, minWidth: 2, background: ORANGE }} />
-                </span>
-                <span className="flex flex-col items-end text-[11px] font-bold leading-tight min-w-[42px]">
-                  <span style={{ color: NAVY_TEXT }}>{nf(sg.identified)}</span>
-                  <span style={{ color: ORANGE_TEXT }}>{nf(sg.removed)}</span>
-                </span>
-              </button>
-            )
-          })}
-          <div className="flex gap-4 mt-1 text-[11px] text-gray-400">
-            <span className="flex items-center gap-1"><i className="inline-block w-2 h-2 rounded-sm" style={{ background: NAVY }} />Identification</span>
-            <span className="flex items-center gap-1"><i className="inline-block w-2 h-2 rounded-sm" style={{ background: ORANGE }} />Removed</span>
-          </div>
-        </div>
-      )}
     </Card>
   )
 }
