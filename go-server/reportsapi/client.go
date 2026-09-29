@@ -256,10 +256,29 @@ func Get() *Client {
 				// page must not hold a portal worker open indefinitely.
 				Timeout:       envDuration("REPORTS_API_TIMEOUT_SECONDS", 90*time.Second),
 				CheckRedirect: keepMethodOnRedirect,
+				Transport:     reusingTransport(),
 			},
 		}
 	})
 	return shared
+}
+
+/*
+reusingTransport keeps connections to the reports API open for reuse.
+
+Go's default transport keeps only TWO idle connections per host. A report sends
+up to ~24 calls at once, so all but two of every burst opened a fresh
+connection — and to https://api-reports… across the internet that is a TCP
+and TLS handshake per call, hundreds per report. Keeping enough idle
+connections for a burst makes almost every call reuse one already open.
+Everything else (proxy settings, TLS, HTTP/2) is the default transport's.
+*/
+func reusingTransport() http.RoundTripper {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConns = 128
+	t.MaxIdleConnsPerHost = 64
+	t.IdleConnTimeout = 90 * time.Second
+	return t
 }
 
 /*
