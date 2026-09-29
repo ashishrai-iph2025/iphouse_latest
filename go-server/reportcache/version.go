@@ -184,6 +184,7 @@ func (c *Cache) Sweep(ctx context.Context, apply bool) (int, error) {
 		return 0, fmt.Errorf("cache is not connected")
 	}
 	keep := keyPrefix()
+	prev := previousPrefix()
 	var (
 		cursor uint64
 		found  int
@@ -206,7 +207,10 @@ func (c *Cache) Sweep(ctx context.Context, apply bool) (int, error) {
 			return found, err
 		}
 		for _, k := range keys {
-			if strings.HasPrefix(k, keep) {
+			/* The previous build's entries are kept too: they are what a
+			   report is carried over from until the new build has rebuilt it —
+			   see carryover.go. And the build registry itself. */
+			if strings.HasPrefix(k, keep) || (prev != "" && strings.HasPrefix(k, prev)) || k == enginesKey {
 				continue
 			}
 			found++

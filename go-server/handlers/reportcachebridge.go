@@ -151,6 +151,27 @@ func cachedPlatformReport(p platformDef, q map[string]string, bg, force bool) ma
 		}
 	}
 
+	/* Not cached by THIS build — but maybe by the one before it. After a deploy
+	   that answer is served at once and rebuilt with the new code straight away
+	   (carryOver), so a deploy no longer means every report is cold. Live
+	   readers only: the warmer and forced rebuilds exist to produce new entries,
+	   and a drill-down is cheap and short-lived. */
+	if cacheable && !drill && !bg && !force && c.Enabled() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		payload, at, ok := c.ReadCarried(ctx, key)
+		cancel()
+		if ok {
+			var out map[string]any
+			if json.Unmarshal(payload, &out) == nil {
+				out["cached"] = true
+				out["cachedAt"] = at.UTC().Format(time.RFC3339)
+				out["carriedOver"] = true
+				carryOver(p, q, key)
+				return out
+			}
+		}
+	}
+
 	/* A reader wanted this and it was not there. Recorded with its scope, so the
 	   admin screen can say WHICH windows are being missed rather than only that
 	   some are — see reportcache.NoteMiss.
@@ -186,12 +207,13 @@ func cachedPlatformReport(p platformDef, q map[string]string, bg, force bool) ma
 			   decide whether the entry still describes reality — without it,
 			   "has anything changed" has nothing to change FROM.
 
-			   Live builds only, and plain scopes only. The background pass
-			   builds thousands of these and keeps its own marks; a drill-down is
-			   never revalidated, so a mark for one would be written and never
-			   read. */
-			if !bg && !drill {
-				markBuilt(p.Key, q)
+			   Background builds too, now: a mark is also what extends an
+			   entry's life (see markBuilt), so a month cached on demand is kept
+			   while it stays right rather than expiring the next day. One cheap
+			   aggregate per table, against the fifty-odd calls the build cost.
+			   Plain scopes only: a drill-down is never revalidated. */
+			if !drill {
+				markBuilt(p.Key, q, key)
 			}
 		}
 	}
@@ -280,18 +302,51 @@ func freshWindow(q map[string]string) string {
 }
 
 // markBuilt records what the warehouse looked like when a report was built, so
-// a later read has something to compare against.
-func markBuilt(platform string, q map[string]string) {
+// a later read has something to compare against — and, since the freshness
+// check can vouch for the entry, keeps it for reportcache.ConfirmedTTL rather
+// than the short retention it was written with.
+func markBuilt(platform string, q map[string]string, key string) {
 	if recheckEvery.Load() <= 0 {
 		return
 	}
+	scope := map[string]string{"clientId": q["clientId"], "from": q["from"], "to": q["to"]}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		client, from, to := q["clientId"], q["from"], q["to"]
+		client, from, to := scope["clientId"], scope["from"], scope["to"]
 		if fp, ok := probeFreshness(ctx, platform, client, from, to); ok && fp != "" {
-			reportcache.Get().SetFingerprint(ctx, platform, client, freshWindow(q), fp)
+			c := reportcache.Get()
+			c.SetFingerprint(ctx, platform, client, freshWindow(scope), fp)
+			c.Extend(ctx, key, reportcache.ConfirmedTTL)
 		}
+	}()
+}
+
+/*
+carryOver rebuilds, with this build's code, a report that was just served from
+the PREVIOUS build's entry. Once per key at a time — ten readers opening the same
+carried report queue one rebuild between them.
+*/
+func carryOver(p platformDef, q map[string]string, key string) {
+	recheckMu.Lock()
+	if rebuilding[key] {
+		recheckMu.Unlock()
+		return
+	}
+	rebuilding[key] = true
+	recheckMu.Unlock()
+
+	scope := make(map[string]string, len(q))
+	for k, v := range q {
+		scope[k] = v
+	}
+	go func() {
+		defer func() {
+			recheckMu.Lock()
+			delete(rebuilding, key)
+			recheckMu.Unlock()
+		}()
+		rebuildNow(p, scope)
 	}()
 }
 
@@ -357,17 +412,18 @@ func revalidate(p platformDef, q map[string]string, key string) {
 		win := freshWindow(scope)
 		prev, had := reportcache.Get().Fingerprint(ctx, p.Key, client, win)
 		if !had {
-			/* Nothing to compare against — this entry was built by the
-			   background pass, which files its marks under its own window names.
-			   Record what the warehouse looks like now and decide at the next
-			   check. Rebuilding here instead would recompute every warmed report
-			   the first time anybody opened it, which is precisely the work the
-			   pass had already done. */
+			/* Nothing to compare against — this entry was built before marks
+			   were kept for background builds. Record what the warehouse looks
+			   like now and decide at the next check. Rebuilding here instead
+			   would recompute every warmed report the first time anybody opened
+			   it, which is precisely the work the pass had already done. */
 			reportcache.Get().SetFingerprint(ctx, p.Key, client, win, fp)
 			return
 		}
 		if prev == fp {
-			return // the entry still describes the warehouse
+			// The entry still describes the warehouse — so keep it longer.
+			reportcache.Get().Extend(ctx, key, reportcache.ConfirmedTTL)
+			return
 		}
 		rebuildNow(p, scope)
 	}()
@@ -386,11 +442,10 @@ func rebuildNow(p platformDef, q map[string]string) {
 			p.Key, q["clientId"])
 		return
 	}
-	log.Printf("[report-cache] refreshed %s/%s %s→%s in %s — the warehouse had changed",
+	log.Printf("[report-cache] rebuilt %s/%s %s→%s in %s",
 		p.Key, q["clientId"], q["from"], q["to"], time.Since(started).Round(time.Millisecond))
-	// The mark moves with the entry. Left at the old value, every later check
-	// would see a difference and rebuild again, forever.
-	markBuilt(p.Key, q)
+	// The mark moves with the entry: cachedPlatformReport records it after
+	// every build, background ones included, so nothing more is needed here.
 }
 
 /*
@@ -478,7 +533,45 @@ func warmTargets() ([]string, []string) {
 			clients = append(clients, v)
 		}
 	}
-	return platforms, clients
+	return platforms, usedClients(clients)
+}
+
+// How far back "someone opened this client's reports" reaches for the warmer.
+const warmUsageDays = 30
+
+/*
+usedClients narrows the warmer to the clients whose reports someone actually
+opened in the last warmUsageDays — the usage counts the portal already keeps
+(reportcache.NoteUse). Warming every mapped client built thousands of reports
+nobody reads; the ones people do open are kept anyway once built (see
+reportcache/carryover.go), so the pass only has to keep the used set fresh.
+
+Falls back to every mapped client when no usage has been recorded yet (a fresh
+Redis, or usage tracking just switched on), so a new install still warms.
+*/
+func usedClients(mapped []string) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	top, err := reportcache.Get().TopClients(ctx, warmUsageDays, []string{"reports"}, 100000)
+	if err != nil || len(top) == 0 {
+		return mapped
+	}
+	used := make(map[string]bool, len(top))
+	for _, u := range top {
+		used[strings.ToUpper(strings.TrimSpace(u.ClientID))] = true
+	}
+	out := make([]string, 0, len(used))
+	for _, c := range mapped {
+		if used[strings.ToUpper(strings.TrimSpace(c))] {
+			out = append(out, c)
+		}
+	}
+	if len(out) == 0 {
+		return mapped
+	}
+	log.Printf("[report-warmer] warming %d of %d mapped client(s) — those opened in the last %d days",
+		len(out), len(mapped), warmUsageDays)
+	return out
 }
 
 /*
